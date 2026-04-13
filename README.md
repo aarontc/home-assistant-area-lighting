@@ -1,8 +1,31 @@
+[![GitLab CI](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/badges/main/pipeline.svg)](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/pipelines)
+[![GitHub Actions](https://github.com/aaron/home-assistant-area-lighting/actions/workflows/ci.yml/badge.svg)](https://github.com/aaron/home-assistant-area-lighting/actions)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+
 # Area Lighting
 
 `area_lighting` is a Home Assistant custom component for managing lights on a per-area basis.
 Its purpose is to replace large collections of ad hoc automations, scripts, scenes, helpers, and
 device-specific logic with one consistent behavioral model.
+
+## Getting Started
+
+### Installation via HACS
+
+1. Open HACS in your Home Assistant instance.
+2. Go to **Integrations** → **⋮** (top-right menu) → **Custom repositories**.
+3. Add the repository URL:
+   ```
+   https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting
+   ```
+4. Select **Integration** as the category and click **Add**.
+5. Search for **Area Lighting** in HACS and click **Install**.
+6. Restart Home Assistant.
+
+### Manual Installation
+
+Copy the `custom_components/area_lighting` directory into your Home Assistant
+`config/custom_components/` directory and restart.
 
 The component is event-driven. It reacts to four categories of inputs:
 
