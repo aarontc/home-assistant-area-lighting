@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dagger/dagger-for-github@v8
+        with:
+          verb: call
+          args: all
+
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dagger/dagger-for-github@v8
+        with:
+          verb: call
+          args: test-latest
