@@ -20,9 +20,9 @@ import os
 import sys
 from pathlib import Path
 
-_COMPONENT_DIR = Path(__file__).resolve().parent          # custom_components/area_lighting
-_CUSTOM_COMPONENTS_DIR = _COMPONENT_DIR.parent             # custom_components
-_REPO_ROOT = _CUSTOM_COMPONENTS_DIR.parent                 # repo root
+_COMPONENT_DIR = Path(__file__).resolve().parent  # custom_components/area_lighting
+_CUSTOM_COMPONENTS_DIR = _COMPONENT_DIR.parent  # custom_components
+_REPO_ROOT = _CUSTOM_COMPONENTS_DIR.parent  # repo root
 
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -36,7 +36,7 @@ def _ensure_component_symlink_in_testing_config() -> None:
     Idempotent: a correct existing symlink is left alone.
     """
     try:
-        import pytest_homeassistant_custom_component as phcc  # noqa: WPS433
+        import pytest_homeassistant_custom_component as phcc
     except ImportError:
         # Plugin not installed → pure-unit tests still run, integration
         # tests will fail loudly with their own error.

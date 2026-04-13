@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -46,9 +46,9 @@ async def test_deadline_utc_none_when_inactive():
 async def test_deadline_utc_set_on_start():
     hass = _FakeHass()
     handle = TimerHandle(hass, "t", 60.0, _noop)
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     handle.start()
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
     assert handle.deadline_utc is not None
     expected_min = before + timedelta(seconds=60)
     expected_max = after + timedelta(seconds=60)
@@ -60,7 +60,7 @@ async def test_deadline_utc_set_on_start():
 async def test_start_with_duration_override():
     hass = _FakeHass()
     handle = TimerHandle(hass, "t", 60.0, _noop)
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     handle.start(duration=30.0)
     assert handle.deadline_utc is not None
     expected = before + timedelta(seconds=30)
@@ -81,7 +81,7 @@ async def test_cancel_clears_deadline():
 async def test_restore_future_deadline_arms_timer():
     hass = _FakeHass()
     handle = TimerHandle(hass, "t", 60.0, _noop)
-    future = datetime.now(timezone.utc) + timedelta(seconds=45)
+    future = datetime.now(UTC) + timedelta(seconds=45)
     handle.restore(future)
     assert handle.is_active
     assert handle.deadline_utc is not None
@@ -97,7 +97,7 @@ async def test_restore_past_deadline_fires_immediately():
 
     hass = _FakeHass()
     handle = TimerHandle(hass, "t", 60.0, cb)
-    past = datetime.now(timezone.utc) - timedelta(seconds=5)
+    past = datetime.now(UTC) - timedelta(seconds=5)
     handle.restore(past)
     await hass.drain()
     assert fired.is_set()

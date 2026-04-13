@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import pytest
-
-from homeassistant.const import STATE_ON, STATE_OFF
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -76,9 +75,7 @@ def _config_without_occupancy() -> dict:
 
 
 @pytest.mark.integration
-async def test_no_occupancy_sensors_always_off(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_no_occupancy_sensors_always_off(hass: HomeAssistant, helper_entities) -> None:
     hass.states.async_set("light.shed_main", "off")
     hass.states.async_set("binary_sensor.shed_motion_1", "off")
     await _setup(hass, _config_without_occupancy())
@@ -89,9 +86,7 @@ async def test_no_occupancy_sensors_always_off(
 
 
 @pytest.mark.integration
-async def test_occupancy_sensor_on_sets_occupied(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_occupancy_sensor_on_sets_occupied(hass: HomeAssistant, helper_entities) -> None:
     hass.states.async_set("light.office_overhead", "off")
     hass.states.async_set("binary_sensor.office_occupancy_1", "off")
     hass.states.async_set("binary_sensor.office_motion_1", "off")
@@ -150,9 +145,7 @@ async def test_occupancy_timer_expires_clears_occupied(
 
 
 @pytest.mark.integration
-async def test_multiple_sensors_one_still_on(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_multiple_sensors_one_still_on(hass: HomeAssistant, helper_entities) -> None:
     cfg = _config_with_occupancy()
     cfg["area_lighting"]["areas"][0]["occupancy_light_sensor_ids"].append(
         "binary_sensor.office_occupancy_2"

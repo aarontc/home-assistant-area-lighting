@@ -6,7 +6,6 @@ from custom_components.area_lighting.cluster_dispatch import (
     select_dispatch_commands,
 )
 
-
 # ── Baseline: no clusters → one command per light ───────────────────────
 
 
@@ -40,7 +39,9 @@ def test_cluster_exactly_covers_cohort():
     assert len(commands) == 1
     assert commands[0][0] == "light.all"
     assert commands[0][1] == {
-        "state": "on", "brightness": 220, "color_temp_kelvin": 5000,
+        "state": "on",
+        "brightness": 220,
+        "color_temp_kelvin": 5000,
     }
 
 
@@ -57,8 +58,10 @@ def test_two_cohorts_use_two_clusters():
         "light.right_white": {"state": "off"},
     }
     clusters = [
-        ("light.all", ["light.left_color", "light.right_color",
-                       "light.left_white", "light.right_white"]),
+        (
+            "light.all",
+            ["light.left_color", "light.right_color", "light.left_white", "light.right_white"],
+        ),
         ("light.color", ["light.left_color", "light.right_color"]),
         ("light.white", ["light.left_white", "light.right_white"]),
     ]
@@ -138,10 +141,7 @@ def test_large_cluster_then_smaller_cluster_combined():
     """Cohort has 5 lights. A 4-member cluster and a 2-member cluster
     are both present; algorithm picks the 4-member first, then has
     1 leftover that the 2-member can't fit."""
-    entities = {
-        f"light.{x}": {"state": "on", "brightness": 50}
-        for x in ("a", "b", "c", "d", "e")
-    }
+    entities = {f"light.{x}": {"state": "on", "brightness": 50} for x in ("a", "b", "c", "d", "e")}
     clusters = [
         ("light.pair", ["light.a", "light.b"]),
         ("light.quad", ["light.a", "light.b", "light.c", "light.d"]),
@@ -196,20 +196,29 @@ def test_list_attributes_partition_correctly():
 
 # Shared cluster spec matching area_lighting.yaml
 _UB_CLUSTERS = [
-    ("light.hz_upstairs_bath_vanity_all", [
-        "light.upstairs_bathroom_vanity_left",
-        "light.upstairs_bathroom_vanity_left_w",
-        "light.upstairs_bathroom_vanity_right",
-        "light.upstairs_bathroom_vanity_right_w",
-    ]),
-    ("light.hz_upstairs_bath_vanity_color", [
-        "light.upstairs_bathroom_vanity_left",
-        "light.upstairs_bathroom_vanity_right",
-    ]),
-    ("light.hz_upstairs_bath_vanity_white", [
-        "light.upstairs_bathroom_vanity_left_w",
-        "light.upstairs_bathroom_vanity_right_w",
-    ]),
+    (
+        "light.hz_upstairs_bath_vanity_all",
+        [
+            "light.upstairs_bathroom_vanity_left",
+            "light.upstairs_bathroom_vanity_left_w",
+            "light.upstairs_bathroom_vanity_right",
+            "light.upstairs_bathroom_vanity_right_w",
+        ],
+    ),
+    (
+        "light.hz_upstairs_bath_vanity_color",
+        [
+            "light.upstairs_bathroom_vanity_left",
+            "light.upstairs_bathroom_vanity_right",
+        ],
+    ),
+    (
+        "light.hz_upstairs_bath_vanity_white",
+        [
+            "light.upstairs_bathroom_vanity_left_w",
+            "light.upstairs_bathroom_vanity_right_w",
+        ],
+    ),
 ]
 
 
@@ -218,16 +227,24 @@ def test_upstairs_bathroom_daylight_all_four_same_state():
     color_temp_kelvin 5000. With the 'all' cluster, should be 1 command."""
     entities = {
         "light.upstairs_bathroom_vanity_left": {
-            "state": "on", "brightness": 220, "color_temp_kelvin": 5000,
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
         },
         "light.upstairs_bathroom_vanity_left_w": {
-            "state": "on", "brightness": 220, "color_temp_kelvin": 5000,
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
         },
         "light.upstairs_bathroom_vanity_right": {
-            "state": "on", "brightness": 220, "color_temp_kelvin": 5000,
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
         },
         "light.upstairs_bathroom_vanity_right_w": {
-            "state": "on", "brightness": 220, "color_temp_kelvin": 5000,
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
         },
     }
     commands = select_dispatch_commands(entities, _UB_CLUSTERS)
@@ -240,11 +257,15 @@ def test_upstairs_bathroom_night_color_on_white_off():
     → color cluster turn_on + white cluster turn_off = 2 commands total."""
     entities = {
         "light.upstairs_bathroom_vanity_left": {
-            "state": "on", "brightness": 64, "hs_color": [0, 100],
+            "state": "on",
+            "brightness": 64,
+            "hs_color": [0, 100],
         },
         "light.upstairs_bathroom_vanity_left_w": {"state": "off"},
         "light.upstairs_bathroom_vanity_right": {
-            "state": "on", "brightness": 64, "hs_color": [0, 100],
+            "state": "on",
+            "brightness": 64,
+            "hs_color": [0, 100],
         },
         "light.upstairs_bathroom_vanity_right_w": {"state": "off"},
     }
@@ -270,10 +291,26 @@ def test_upstairs_bathroom_night_color_on_white_off():
 def test_upstairs_bathroom_daylight_1_turn_on():
     """Daylight: all 4 lights → same on-state → 1 turn_on to the 'all' cluster."""
     entities = {
-        "light.upstairs_bathroom_vanity_left":   {"state": "on", "brightness": 220, "color_temp_kelvin": 5000},
-        "light.upstairs_bathroom_vanity_left_w":  {"state": "on", "brightness": 220, "color_temp_kelvin": 5000},
-        "light.upstairs_bathroom_vanity_right":   {"state": "on", "brightness": 220, "color_temp_kelvin": 5000},
-        "light.upstairs_bathroom_vanity_right_w": {"state": "on", "brightness": 220, "color_temp_kelvin": 5000},
+        "light.upstairs_bathroom_vanity_left": {
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
+        },
+        "light.upstairs_bathroom_vanity_left_w": {
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
+        },
+        "light.upstairs_bathroom_vanity_right": {
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
+        },
+        "light.upstairs_bathroom_vanity_right_w": {
+            "state": "on",
+            "brightness": 220,
+            "color_temp_kelvin": 5000,
+        },
     }
     commands = select_dispatch_commands(entities, _UB_CLUSTERS)
     assert len(commands) == 1
@@ -286,9 +323,9 @@ def test_upstairs_bathroom_daylight_1_turn_on():
 def test_upstairs_bathroom_off_1_turn_off():
     """Off: all 4 lights → same off-state → 1 turn_off to the 'all' cluster."""
     entities = {
-        "light.upstairs_bathroom_vanity_left":   {"state": "off"},
-        "light.upstairs_bathroom_vanity_left_w":  {"state": "off"},
-        "light.upstairs_bathroom_vanity_right":   {"state": "off"},
+        "light.upstairs_bathroom_vanity_left": {"state": "off"},
+        "light.upstairs_bathroom_vanity_left_w": {"state": "off"},
+        "light.upstairs_bathroom_vanity_right": {"state": "off"},
         "light.upstairs_bathroom_vanity_right_w": {"state": "off"},
     }
     commands = select_dispatch_commands(entities, _UB_CLUSTERS)
@@ -301,9 +338,17 @@ def test_upstairs_bathroom_night_2_commands():
     """Night: 2 color on (red) + 2 white off → color cluster turn_on +
     white cluster turn_off = exactly 2 commands."""
     entities = {
-        "light.upstairs_bathroom_vanity_left":   {"state": "on", "brightness": 64, "hs_color": [0, 100]},
-        "light.upstairs_bathroom_vanity_left_w":  {"state": "off"},
-        "light.upstairs_bathroom_vanity_right":   {"state": "on", "brightness": 64, "hs_color": [0, 100]},
+        "light.upstairs_bathroom_vanity_left": {
+            "state": "on",
+            "brightness": 64,
+            "hs_color": [0, 100],
+        },
+        "light.upstairs_bathroom_vanity_left_w": {"state": "off"},
+        "light.upstairs_bathroom_vanity_right": {
+            "state": "on",
+            "brightness": 64,
+            "hs_color": [0, 100],
+        },
         "light.upstairs_bathroom_vanity_right_w": {"state": "off"},
     }
     commands = select_dispatch_commands(entities, _UB_CLUSTERS)

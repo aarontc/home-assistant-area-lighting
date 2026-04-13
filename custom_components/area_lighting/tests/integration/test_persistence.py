@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -44,7 +43,7 @@ async def test_past_due_motion_timer_fires_on_restore(
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     ctrl._state.transition_to_scene("daylight", ActivationSource.MOTION)
 
-    past = datetime.now(timezone.utc) - timedelta(seconds=30)
+    past = datetime.now(UTC) - timedelta(seconds=30)
     saved = ctrl.state_dict()
     saved["timer_deadlines"] = {
         "motion_off": past.isoformat(),
@@ -69,7 +68,7 @@ async def test_future_motion_timer_deadline_rearms_on_restore(
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     ctrl._state.transition_to_scene("daylight", ActivationSource.MOTION)
 
-    future = datetime.now(timezone.utc) + timedelta(seconds=300)
+    future = datetime.now(UTC) + timedelta(seconds=300)
     saved = ctrl.state_dict()
     saved["timer_deadlines"] = {
         "motion_off": future.isoformat(),
@@ -94,7 +93,7 @@ async def test_restore_in_manual_with_past_due_occupancy_turns_off(
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     ctrl._state.transition_to_manual()
 
-    past = datetime.now(timezone.utc) - timedelta(seconds=60)
+    past = datetime.now(UTC) - timedelta(seconds=60)
     saved = ctrl.state_dict()
     saved["timer_deadlines"] = {
         "motion_off": None,

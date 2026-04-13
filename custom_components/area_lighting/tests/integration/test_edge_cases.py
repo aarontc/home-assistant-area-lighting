@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.area_lighting.area_state import ActivationSource, LightingState
+from custom_components.area_lighting.area_state import ActivationSource
 
 
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:
@@ -165,6 +164,7 @@ async def test_persistence_full_round_trip(
     saved = ctrl.state_dict()
 
     from custom_components.area_lighting.controller import AreaLightingController
+
     fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
     fresh.load_persisted_state(saved)
     assert fresh._state.scene_slug == "christmas"
@@ -188,6 +188,7 @@ async def test_persistence_dimmed_round_trip(
     saved = ctrl.state_dict()
 
     from custom_components.area_lighting.controller import AreaLightingController
+
     fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
     fresh.load_persisted_state(saved)
     assert fresh._state.dimmed is True
@@ -318,7 +319,8 @@ async def test_circadian_to_evening_when_sun_below(
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     hass.states.async_set(
-        "input_boolean.lighting_circadian_daylight_lights_enabled", "off",
+        "input_boolean.lighting_circadian_daylight_lights_enabled",
+        "off",
     )
     await ctrl.lighting_on()
     await ctrl.lighting_on()
@@ -332,7 +334,8 @@ async def test_circadian_to_daylight_when_sun_above(
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     hass.states.async_set(
-        "input_boolean.lighting_circadian_daylight_lights_enabled", "on",
+        "input_boolean.lighting_circadian_daylight_lights_enabled",
+        "on",
     )
     await ctrl.lighting_on()
     await ctrl.lighting_on()

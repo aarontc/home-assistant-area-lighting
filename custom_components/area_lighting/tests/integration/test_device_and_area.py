@@ -13,13 +13,10 @@ Tracked as a stretch goal.
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
-
-from custom_components.area_lighting.const import DOMAIN
 
 
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:
@@ -80,6 +77,4 @@ async def test_ha_area_auto_created_if_missing(
 
     area_reg = ar.async_get(hass)
     ha_area = area_reg.async_get_area_by_name("Network Room")
-    assert ha_area is not None, (
-        "expected setup to create the HA area 'Network Room'"
-    )
+    assert ha_area is not None, "expected setup to create the HA area 'Network Room'"

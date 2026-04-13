@@ -15,7 +15,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -55,9 +54,7 @@ async def test_brightness_change_in_circadian_does_not_mark_manual(
     )
     await hass.async_block_till_done()
 
-    assert ctrl._state.is_circadian, (
-        f"expected still circadian, got {ctrl._state.state}"
-    )
+    assert ctrl._state.is_circadian, f"expected still circadian, got {ctrl._state.state}"
     assert not ctrl._state.is_manual
 
 
@@ -97,13 +94,9 @@ async def test_manual_detection_still_works_in_scene_state(
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
 
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
     await hass.async_block_till_done()
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 40}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 40})
     await hass.async_block_till_done()
 
     assert ctrl._state.is_manual

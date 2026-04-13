@@ -111,9 +111,12 @@ def determine_on_action(
     """
     # 1. Motion-triggered + lights already on → no-op
     #    Exception: motion_override_ambient when in ambient scene
-    if triggered_by_motion and current_scene != "off":
-        if current_scene != "ambient" or not motion_override_ambient:
-            return SceneAction.noop()
+    if (
+        triggered_by_motion
+        and current_scene != "off"
+        and (current_scene != "ambient" or not motion_override_ambient)
+    ):
+        return SceneAction.noop()
 
     # 2. If dimmed, restore current scene
     if dimmed:
@@ -206,8 +209,12 @@ def determine_off_fade_action(
     Same logic as off but the controller will apply a transition duration.
     """
     return determine_off_action(
-        current_scene, source, ambient_zone_enabled, area_ambience_enabled,
-        holiday_mode, ambient_scene_mode,
+        current_scene,
+        source,
+        ambient_zone_enabled,
+        area_ambience_enabled,
+        holiday_mode,
+        ambient_scene_mode,
     )
 
 

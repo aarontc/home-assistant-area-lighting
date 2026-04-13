@@ -72,9 +72,7 @@ def select_dispatch_commands(
     # Pre-normalize cluster members to sets for fast subset checks.
     # Skip clusters with no members (they're individual lights, not clusters).
     normalized_clusters: list[tuple[str, set[str]]] = [
-        (cid, set(members))
-        for cid, members in clusters
-        if members
+        (cid, set(members)) for cid, members in clusters if members
     ]
 
     # Group entities by their target state.
@@ -97,9 +95,7 @@ def select_dispatch_commands(
 
         # Sort candidate clusters by descending member count so we
         # consume the largest batch available first.
-        candidates = sorted(
-            normalized_clusters, key=lambda c: -len(c[1])
-        )
+        candidates = sorted(normalized_clusters, key=lambda c: -len(c[1]))
 
         for cluster_id, cluster_members in candidates:
             if cluster_members <= remaining:
@@ -109,7 +105,6 @@ def select_dispatch_commands(
 
         # Whatever's left gets individual commands. Sort for deterministic
         # ordering so tests are reproducible.
-        for entity_id in sorted(remaining):
-            commands.append((entity_id, state_dict))
+        commands.extend((entity_id, state_dict) for entity_id in sorted(remaining))
 
     return commands

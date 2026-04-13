@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -45,9 +44,7 @@ async def test_snapshot_motion_timer_remaining_when_active(
     remaining = snap["motion_timer_remaining_seconds"]
     assert remaining is not None
     # Default motion off timer is 8 min = 480s; allow small slack
-    assert 478 <= remaining <= 481, (
-        f"expected ~480s remaining, got {remaining}"
-    )
+    assert 478 <= remaining <= 481, f"expected ~480s remaining, got {remaining}"
     # Not night mode → night timer should still be inactive
     assert snap["motion_night_timer_remaining_seconds"] is None
 
@@ -103,9 +100,8 @@ async def test_diagnostic_state_text_shows_remaining(
     # Should show an integer-ish number of seconds (not just None)
     # The format is "  motion_timer_remaining_seconds: 480" (approx)
     import re
-    match = re.search(
-        r"motion_timer_remaining_seconds:\s*(\d+(?:\.\d+)?)", text
-    )
+
+    match = re.search(r"motion_timer_remaining_seconds:\s*(\d+(?:\.\d+)?)", text)
     assert match, f"expected a numeric value in state_text, got: {text}"
     val = float(match.group(1))
     assert 478 <= val <= 481

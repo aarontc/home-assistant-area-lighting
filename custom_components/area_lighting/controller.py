@@ -11,24 +11,19 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .area_state import (
-    AMBIENT_LIKE_SCENES,
     ActivationSource,
     AreaState,
-    LightingState,
 )
 from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
     BRIGHTNESS_STEP_DEFAULT,
-    BRIGHTNESS_STEP_PCT,
     CIRCADIAN_DAYLIGHT_ENABLED_ENTITY,
     DOMAIN,
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
     HOLIDAY_SCENES,
     SCENE_CIRCADIAN,
-    SCENE_NIGHT,
-    SCENE_OFF,
     SCENE_OFF_INTERNAL,
 )
 from .models import AreaConfig, AreaLightingConfig, SceneConfig
@@ -102,16 +97,22 @@ class AreaLightingController:
         )
 
         self._motion_timer = TimerHandle(
-            hass, f"{area.id}_motion_off",
-            self._motion_off_duration_seconds, self._on_motion_timer,
+            hass,
+            f"{area.id}_motion_off",
+            self._motion_off_duration_seconds,
+            self._on_motion_timer,
         )
         self._motion_night_timer = TimerHandle(
-            hass, f"{area.id}_motion_night_off",
-            self._motion_night_off_duration_seconds, self._on_motion_timer,
+            hass,
+            f"{area.id}_motion_night_off",
+            self._motion_night_off_duration_seconds,
+            self._on_motion_timer,
         )
         self._occupancy_timer = TimerHandle(
-            hass, f"{area.id}_occupancy_off",
-            self._occupancy_off_duration_seconds, self._on_occupancy_timer,
+            hass,
+            f"{area.id}_occupancy_off",
+            self._occupancy_off_duration_seconds,
+            self._on_occupancy_timer,
         )
 
         # Linked motion state: tracks which remote scenes were activated
@@ -166,9 +167,7 @@ class AreaLightingController:
                 data["motion_night_off_duration_seconds"]
             )
         if "occupancy_off_duration_seconds" in data:
-            self._occupancy_off_duration_seconds = float(
-                data["occupancy_off_duration_seconds"]
-            )
+            self._occupancy_off_duration_seconds = float(data["occupancy_off_duration_seconds"])
         if "occupancy_night_off_duration_seconds" in data:
             self._occupancy_night_off_duration_seconds = float(
                 data["occupancy_night_off_duration_seconds"]
@@ -196,15 +195,18 @@ class AreaLightingController:
             "timer_deadlines": {
                 "motion_off": (
                     self._motion_timer.deadline_utc.isoformat()
-                    if self._motion_timer.deadline_utc else None
+                    if self._motion_timer.deadline_utc
+                    else None
                 ),
                 "motion_night_off": (
                     self._motion_night_timer.deadline_utc.isoformat()
-                    if self._motion_night_timer.deadline_utc else None
+                    if self._motion_night_timer.deadline_utc
+                    else None
                 ),
                 "occupancy_off": (
                     self._occupancy_timer.deadline_utc.isoformat()
-                    if self._occupancy_timer.deadline_utc else None
+                    if self._occupancy_timer.deadline_utc
+                    else None
                 ),
             },
         }
@@ -234,7 +236,9 @@ class AreaLightingController:
                 if deadline is None:
                     _LOGGER.warning(
                         "Area %s: could not parse timer deadline %r for %s",
-                        self.area.id, iso, key,
+                        self.area.id,
+                        iso,
+                        key,
                     )
                     continue
                 timer.restore(deadline)
@@ -292,9 +296,7 @@ class AreaLightingController:
             "motion_timer_active": self._motion_timer.is_active,
             "motion_night_timer_active": self._motion_night_timer.is_active,
             "occupancy_timer_active": self._occupancy_timer.is_active,
-            "motion_timer_remaining_seconds": self._timer_remaining_seconds(
-                self._motion_timer
-            ),
+            "motion_timer_remaining_seconds": self._timer_remaining_seconds(self._motion_timer),
             "motion_night_timer_remaining_seconds": self._timer_remaining_seconds(
                 self._motion_night_timer
             ),
@@ -309,9 +311,7 @@ class AreaLightingController:
         storage = self.hass.data.get(DOMAIN, {}).get("state_storage")
         if storage is None:
             return
-        self.hass.async_create_task(
-            storage.async_save_area_state(self.area.id, self.state_dict())
-        )
+        self.hass.async_create_task(storage.async_save_area_state(self.area.id, self.state_dict()))
 
     # ── Backwards-compat properties for entity platforms ───────────────
 
@@ -320,7 +320,7 @@ class AreaLightingController:
         """True if any occupancy sensor is active or the occupancy timer is running."""
         if self._occupancy_timer.is_active:
             return True
-        for sid in (self.area.occupancy_light_sensor_ids or []):
+        for sid in self.area.occupancy_light_sensor_ids or []:
             state = self.hass.states.get(sid)
             if state is not None and state.state == "on":
                 return True
@@ -530,7 +530,8 @@ class AreaLightingController:
         self._notify_state_change()
 
     async def _activate_circadian(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Activate circadian mode."""
         self._state.transition_to_circadian(source)
@@ -551,9 +552,7 @@ class AreaLightingController:
                 continue
             brightness_pct = switch_state.attributes.get("brightness")
             colortemp_state = self.hass.states.get("sensor.circadian_values")
-            colortemp = (
-                colortemp_state.attributes.get("colortemp") if colortemp_state else None
-            )
+            colortemp = colortemp_state.attributes.get("colortemp") if colortemp_state else None
 
             data: dict[str, Any] = {"entity_id": light.id}
             if brightness_pct is not None:
@@ -565,7 +564,9 @@ class AreaLightingController:
             await asyncio.gather(*tasks)
 
     async def _apply_scene_data(
-        self, scene_slug: str, transition: float | None = None,
+        self,
+        scene_slug: str,
+        transition: float | None = None,
     ) -> None:
         """Apply light states for a visual scene from snapshot or config.
 
@@ -591,19 +592,18 @@ class AreaLightingController:
             # Filter to light.* entities only (legacy templater scene
             # files sometimes include input_boolean flags too).
             light_entities = {
-                eid: state for eid, state in entities.items()
-                if eid.startswith("light.")
+                eid: state for eid, state in entities.items() if eid.startswith("light.")
             }
             cluster_specs = [
-                (l.id, list(l.members))
-                for l in self.area.light_clusters
-                if l.is_cluster
+                (lc.id, list(lc.members)) for lc in self.area.light_clusters if lc.is_cluster
             ]
             commands = select_dispatch_commands(light_entities, cluster_specs)
-            await asyncio.gather(*[
-                self._apply_light_state(entity_id, state_data, transition)
-                for entity_id, state_data in commands
-            ])
+            await asyncio.gather(
+                *[
+                    self._apply_light_state(entity_id, state_data, transition)
+                    for entity_id, state_data in commands
+                ]
+            )
         else:
             # No snapshot → fall back to role-based on/off, no batching
             tasks: list = []
@@ -619,7 +619,10 @@ class AreaLightingController:
                 await asyncio.gather(*tasks)
 
     async def _apply_light_state(
-        self, entity_id: str, state_data: dict, transition: float | None = None,
+        self,
+        entity_id: str,
+        state_data: dict,
+        transition: float | None = None,
     ) -> None:
         target_state = state_data.get("state", "off")
         svc_data: dict[str, Any] = {"entity_id": entity_id}
@@ -628,8 +631,13 @@ class AreaLightingController:
 
         if target_state == "on":
             for attr in (
-                "brightness", "color_temp_kelvin", "color_temp",
-                "hs_color", "rgb_color", "xy_color", "effect",
+                "brightness",
+                "color_temp_kelvin",
+                "color_temp",
+                "hs_color",
+                "rgb_color",
+                "xy_color",
+                "effect",
             ):
                 if attr in state_data:
                     svc_data[attr] = state_data[attr]
@@ -685,17 +693,21 @@ class AreaLightingController:
 
     async def _enable_circadian_switches(self) -> None:
         if self.area.circadian_switches:
-            await asyncio.gather(*[
-                self._call_service("switch.turn_on", entity_id=cs.entity_id)
-                for cs in self.area.circadian_switches
-            ])
+            await asyncio.gather(
+                *[
+                    self._call_service("switch.turn_on", entity_id=cs.entity_id)
+                    for cs in self.area.circadian_switches
+                ]
+            )
 
     async def _disable_circadian_switches(self) -> None:
         if self.area.circadian_switches:
-            await asyncio.gather(*[
-                self._call_service("switch.turn_off", entity_id=cs.entity_id)
-                for cs in self.area.circadian_switches
-            ])
+            await asyncio.gather(
+                *[
+                    self._call_service("switch.turn_off", entity_id=cs.entity_id)
+                    for cs in self.area.circadian_switches
+                ]
+            )
 
     # ── Brightness/dimming helpers (D2, D3) ────────────────────────────
 
@@ -706,37 +718,41 @@ class AreaLightingController:
     def _on_light_entity_ids(self) -> list[str]:
         """Return IDs of lights in this area that are currently 'on'."""
         return [
-            l.id
-            for l in self.area.all_lights
-            if (st := self.hass.states.get(l.id)) and st.state == "on"
+            light.id
+            for light in self.area.all_lights
+            if (st := self.hass.states.get(light.id)) and st.state == "on"
         ]
 
     async def _step_on_lights_pct(self, delta_pct: int) -> None:
         """Apply brightness_step_pct to every currently-on light in the area."""
         entity_ids = self._on_light_entity_ids()
         if entity_ids:
-            await asyncio.gather(*[
-                self._call_service(
-                    "light.turn_on",
-                    entity_id=entity_id,
-                    brightness_step_pct=delta_pct,
-                )
-                for entity_id in entity_ids
-            ])
+            await asyncio.gather(
+                *[
+                    self._call_service(
+                        "light.turn_on",
+                        entity_id=entity_id,
+                        brightness_step_pct=delta_pct,
+                    )
+                    for entity_id in entity_ids
+                ]
+            )
 
     async def _scale_on_lights_to_pct(self, pct: int) -> None:
         """Set every currently-on light to an absolute brightness percentage."""
         brightness = max(1, min(255, round(255 * pct / 100)))
         entity_ids = self._on_light_entity_ids()
         if entity_ids:
-            await asyncio.gather(*[
-                self._call_service(
-                    "light.turn_on",
-                    entity_id=entity_id,
-                    brightness=brightness,
-                )
-                for entity_id in entity_ids
-            ])
+            await asyncio.gather(
+                *[
+                    self._call_service(
+                        "light.turn_on",
+                        entity_id=entity_id,
+                        brightness=brightness,
+                    )
+                    for entity_id in entity_ids
+                ]
+            )
 
     # ── Night-mode timer/fade helpers (D6) ─────────────────────────────
 
@@ -763,7 +779,8 @@ class AreaLightingController:
     # ── Main action methods ───────────────────────────────────────────
 
     async def lighting_on(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle 'on' action with scene cycling logic."""
         from_motion = source == ActivationSource.MOTION
@@ -792,7 +809,8 @@ class AreaLightingController:
         await self._resolve_and_activate(action, source)
 
     async def lighting_off(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle 'off' action (remote off button, off scene activation).
 
@@ -809,18 +827,18 @@ class AreaLightingController:
             ambient_scene_mode=self._get_ambient_scene_mode(),
         )
         ambient_fallback = (
-            action.action == ActionType.ACTIVATE_SCENE
-            and action.scene_slug == "ambient"
+            action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
         ) or action.action == ActionType.ACTIVATE_HOLIDAY_SCENE
-        effective_source = (
-            ActivationSource.AMBIENCE if ambient_fallback else source
-        )
+        effective_source = ActivationSource.AMBIENCE if ambient_fallback else source
         await self._resolve_and_activate(
-            action, effective_source, transition=self._manual_fade_seconds(),
+            action,
+            effective_source,
+            transition=self._manual_fade_seconds(),
         )
 
     async def lighting_off_fade(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle fading off (motion/occupancy timer)."""
         await self._disable_circadian_switches()
@@ -834,18 +852,18 @@ class AreaLightingController:
             ambient_scene_mode=self._get_ambient_scene_mode(),
         )
         ambient_fallback = (
-            action.action == ActionType.ACTIVATE_SCENE
-            and action.scene_slug == "ambient"
+            action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
         ) or action.action == ActionType.ACTIVATE_HOLIDAY_SCENE
-        effective_source = (
-            ActivationSource.AMBIENCE if ambient_fallback else source
-        )
+        effective_source = ActivationSource.AMBIENCE if ambient_fallback else source
         await self._resolve_and_activate(
-            action, effective_source, transition=self._motion_fade_seconds(),
+            action,
+            effective_source,
+            transition=self._motion_fade_seconds(),
         )
 
     async def lighting_favorite(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle 'favorite' action."""
         action = determine_favorite_action(
@@ -856,7 +874,8 @@ class AreaLightingController:
         await self._resolve_and_activate(action, source)
 
     async def lighting_circadian(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Activate circadian mode (public method, called by service)."""
         await self._activate_circadian(source)
@@ -1005,7 +1024,8 @@ class AreaLightingController:
             if remote_ctrl is None:
                 _LOGGER.warning(
                     "Area %s: linked_motion references unknown area %s",
-                    self.area.id, link.remote_area,
+                    self.area.id,
+                    link.remote_area,
                 )
                 continue
 
@@ -1017,9 +1037,7 @@ class AreaLightingController:
 
         return local_scene, remote_activations
 
-    async def _activate_linked_areas(
-        self, remote_activations: list[tuple[str, str]]
-    ) -> None:
+    async def _activate_linked_areas(self, remote_activations: list[tuple[str, str]]) -> None:
         """Activate scenes in remote areas via their controllers."""
         controllers = self.hass.data.get(DOMAIN, {}).get("controllers", {})
         self._linked_activated_scenes.clear()
@@ -1043,9 +1061,7 @@ class AreaLightingController:
             if remote_ctrl is None:
                 continue
             if remote_ctrl.current_scene == activated_scene:
-                await remote_ctrl._activate_scene(
-                    "off_internal", ActivationSource.LINKED
-                )
+                await remote_ctrl._activate_scene("off_internal", ActivationSource.LINKED)
 
         self._linked_activated_scenes.clear()
 
@@ -1113,9 +1129,7 @@ class AreaLightingController:
             # - we're already in a (different) holiday scene that was
             #   itself activated by the holiday handler (so we're tracking
             #   the active holiday rather than reverting a manual choice)
-            if self._state.is_off:
-                await self._activate_scene(mode, ActivationSource.HOLIDAY)
-            elif (
+            if self._state.is_off or (
                 self._state.scene_slug in HOLIDAY_SCENES
                 and self._state.scene_slug != mode
                 and self._state.source == ActivationSource.HOLIDAY

@@ -27,10 +27,17 @@ ROLE_MOVIE = "movie"
 ROLE_CHRISTMAS = "christmas"
 ROLE_PLANT = "plant"
 
-ALL_ROLES = frozenset({
-    ROLE_COLOR, ROLE_DIMMING, ROLE_WHITE, ROLE_NIGHT,
-    ROLE_MOVIE, ROLE_CHRISTMAS, ROLE_PLANT,
-})
+ALL_ROLES = frozenset(
+    {
+        ROLE_COLOR,
+        ROLE_DIMMING,
+        ROLE_WHITE,
+        ROLE_NIGHT,
+        ROLE_MOVIE,
+        ROLE_CHRISTMAS,
+        ROLE_PLANT,
+    }
+)
 
 # Circadian types
 CIRCADIAN_CT = "ct"

@@ -49,7 +49,10 @@ class SceneStorage:
         return self._data.get(area_id, {}).get(scene_slug)
 
     async def async_snapshot_scene(
-        self, area_id: str, scene_slug: str, entity_ids: list[str],
+        self,
+        area_id: str,
+        scene_slug: str,
+        entity_ids: list[str],
     ) -> dict[str, Any]:
         """Capture current light states and persist them.
 
@@ -93,7 +96,9 @@ class SceneStorage:
 
         _LOGGER.info(
             "Snapshot saved for %s/%s: %d entities",
-            area_id, scene_slug, len(snapshot),
+            area_id,
+            scene_slug,
+            len(snapshot),
         )
         return snapshot
 
@@ -104,7 +109,10 @@ class SceneStorage:
             await self.async_save()
 
     async def async_import_from_yaml(
-        self, area_id: str, scene_slug: str, entities: dict[str, Any],
+        self,
+        area_id: str,
+        scene_slug: str,
+        entities: dict[str, Any],
     ) -> None:
         """Import scene data from existing YAML scene files.
 
@@ -113,10 +121,7 @@ class SceneStorage:
         if area_id not in self._data:
             self._data[area_id] = {}
         # Filter to only light entities (skip input_booleans, etc.)
-        light_data = {
-            eid: attrs for eid, attrs in entities.items()
-            if eid.startswith("light.")
-        }
+        light_data = {eid: attrs for eid, attrs in entities.items() if eid.startswith("light.")}
         if light_data:
             self._data[area_id][scene_slug] = light_data
             await self.async_save()

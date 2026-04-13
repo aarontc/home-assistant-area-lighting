@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -94,9 +93,7 @@ async def test_night_mode_uses_occupancy_night_duration(
 
 
 @pytest.mark.integration
-async def test_night_fadeout_seconds_override(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_night_fadeout_seconds_override(hass: HomeAssistant, helper_entities) -> None:
     cfg = {
         "area_lighting": {
             "areas": [

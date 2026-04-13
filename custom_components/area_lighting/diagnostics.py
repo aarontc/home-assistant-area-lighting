@@ -6,7 +6,6 @@ controllers, viewable via Developer Tools → States.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -14,7 +13,6 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
-    async_track_state_change_event,
     async_track_time_interval,
 )
 
@@ -43,8 +41,8 @@ class AreaLightingDiagnosticSensor(SensorEntity):
         self._unsub_refresh = None
 
     def _build_state_text(self) -> str:
-        controllers: dict[str, AreaLightingController] = (
-            self.hass.data.get(DOMAIN, {}).get("controllers", {})
+        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
+            "controllers", {}
         )
         if not controllers:
             return "No controllers loaded"
@@ -54,27 +52,23 @@ class AreaLightingDiagnosticSensor(SensorEntity):
             ctrl = controllers[area_id]
             snap = ctrl.diagnostic_snapshot()
             lines.append(f"=== {area_id} ({ctrl.area.name}) ===")
-            for key in sorted(snap.keys()):
-                lines.append(f"  {key}: {snap[key]}")
+            lines.extend(f"  {key}: {snap[key]}" for key in sorted(snap.keys()))
             lines.append("")
         return "\n".join(lines).rstrip()
 
     @property
     def native_value(self) -> str:
-        text = self._build_state_text()
+        self._build_state_text()
         # HA limits state strings to 255 chars; expose summary as state
         # and full text as an attribute
         return f"{len(self.hass.data.get(DOMAIN, {}).get('controllers', {}))} areas"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        controllers: dict[str, AreaLightingController] = (
-            self.hass.data.get(DOMAIN, {}).get("controllers", {})
+        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
+            "controllers", {}
         )
-        per_area = {
-            area_id: ctrl.diagnostic_snapshot()
-            for area_id, ctrl in controllers.items()
-        }
+        per_area = {area_id: ctrl.diagnostic_snapshot() for area_id, ctrl in controllers.items()}
         return {
             "state_text": self._build_state_text(),
             "per_area": per_area,
@@ -82,8 +76,8 @@ class AreaLightingDiagnosticSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register listeners on every controller so the sensor refreshes."""
-        controllers: dict[str, AreaLightingController] = (
-            self.hass.data.get(DOMAIN, {}).get("controllers", {})
+        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
+            "controllers", {}
         )
         for ctrl in controllers.values():
             ctrl.add_state_listener(self._on_controller_change)
@@ -98,8 +92,8 @@ class AreaLightingDiagnosticSensor(SensorEntity):
         )
 
     async def async_will_remove_from_hass(self) -> None:
-        controllers: dict[str, AreaLightingController] = (
-            self.hass.data.get(DOMAIN, {}).get("controllers", {})
+        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
+            "controllers", {}
         )
         for ctrl in controllers.values():
             ctrl.remove_state_listener(self._on_controller_change)

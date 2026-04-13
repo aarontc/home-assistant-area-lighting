@@ -9,7 +9,6 @@ from custom_components.area_lighting.area_state import (
     LightingState,
 )
 
-
 # ── Initial state ────────────────────────────────────────────────────────
 
 
@@ -137,7 +136,7 @@ def test_dimming_then_transitioning_clears_previous():
 
 
 def test_is_ambient_like_for_ambient_christmas_halloween():
-    assert AMBIENT_LIKE_SCENES == frozenset({"ambient", "christmas", "halloween"})
+    assert frozenset({"ambient", "christmas", "halloween"}) == AMBIENT_LIKE_SCENES
 
     s = AreaState()
     s.transition_to_scene("ambient", ActivationSource.AMBIENCE)
@@ -200,16 +199,13 @@ def test_from_dict_with_empty_data_returns_default():
 
 
 def test_from_dict_with_invalid_enum_falls_back_to_default():
-    s = AreaState.from_dict(
-        {"state": "garbage", "scene_slug": "x", "source": "x", "dimmed": False}
-    )
+    s = AreaState.from_dict({"state": "garbage", "scene_slug": "x", "source": "x", "dimmed": False})
     assert s.state == LightingState.OFF
 
 
 def test_from_dict_with_unknown_source_falls_back():
     s = AreaState.from_dict(
-        {"state": "scene", "scene_slug": "evening",
-         "source": "from_the_void", "dimmed": False}
+        {"state": "scene", "scene_slug": "evening", "source": "from_the_void", "dimmed": False}
     )
     assert s.state == LightingState.OFF
 
@@ -228,11 +224,13 @@ def test_source_propagates_through_all_transitions():
             s.transition_to_scene("daylight", src)
             assert s.source == src
 
+
 # ── last_scene_change_monotonic (D15) ───────────────────────────────────
 
 
 def test_last_scene_change_monotonic_set_on_transition_to_scene():
     import time
+
     s = AreaState()
     before = time.monotonic()
     s.transition_to_scene("daylight", ActivationSource.USER)
@@ -243,6 +241,7 @@ def test_last_scene_change_monotonic_set_on_transition_to_scene():
 
 def test_last_scene_change_monotonic_set_on_transition_to_circadian():
     import time
+
     s = AreaState()
     s.transition_to_circadian(ActivationSource.USER)
     assert s.last_scene_change_monotonic is not None
@@ -283,4 +282,3 @@ def test_from_dict_leaves_monotonic_as_none():
         }
     )
     assert s.last_scene_change_monotonic is None
-

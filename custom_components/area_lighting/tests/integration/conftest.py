@@ -8,7 +8,6 @@ motion-light kill switch) so individual tests don't have to recreate them.
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
 from homeassistant.components.input_select import DOMAIN as INPUT_SELECT_DOMAIN
@@ -20,7 +19,7 @@ from homeassistant.setup import async_setup_component
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Make area_lighting discoverable by the HA test harness."""
-    yield
+    return
 
 
 @pytest.fixture
@@ -31,9 +30,7 @@ async def helper_entities(hass: HomeAssistant) -> None:
     # don't actually touch — we override states directly via async_set.
     assert await async_setup_component(hass, LIGHT_DOMAIN, {"light": []})
     # Load binary_sensor so area_lighting can register occupancy sensors.
-    assert await async_setup_component(
-        hass, BINARY_SENSOR_DOMAIN, {"binary_sensor": []}
-    )
+    assert await async_setup_component(hass, BINARY_SENSOR_DOMAIN, {"binary_sensor": []})
     assert await async_setup_component(
         hass,
         INPUT_SELECT_DOMAIN,
@@ -87,12 +84,8 @@ async def helper_entities(hass: HomeAssistant) -> None:
     # Stub the lights the network_room_config references so the validator's
     # light-assigned-to-circadian-switch check is satisfied in tests that
     # use the default fixture.
-    hass.states.async_set(
-        "light.network_room_overhead_1", "off", {}
-    )
-    hass.states.async_set(
-        "light.network_room_overhead_2", "off", {}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "off", {})
+    hass.states.async_set("light.network_room_overhead_2", "off", {})
     await hass.async_block_till_done()
 
 

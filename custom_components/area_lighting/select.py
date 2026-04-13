@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -28,9 +27,7 @@ async def async_setup_platform(
         return
 
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
-    entities = []
-    for area_id, controller in controllers.items():
-        entities.append(AreaLastSceneSelect(controller))
+    entities = [AreaLastSceneSelect(controller) for controller in controllers.values()]
     async_add_entities(entities)
 
 

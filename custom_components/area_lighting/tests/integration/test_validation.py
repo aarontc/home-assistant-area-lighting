@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -24,8 +23,7 @@ async def test_validator_all_entities_present_no_error(
     hass.bus.async_fire("homeassistant_started")
     await hass.async_block_till_done()
     assert not any(
-        "required external entities are missing" in rec.message
-        for rec in caplog.records
+        "required external entities are missing" in rec.message for rec in caplog.records
     )
 
 
@@ -79,9 +77,7 @@ async def test_validator_missing_holiday_mode_logs_error(
     # Integration still loads
     assert "network_room" in hass.data["area_lighting"]["controllers"]
     # And the error was logged
-    error_messages = [
-        rec.message for rec in caplog.records if rec.levelno >= logging.ERROR
-    ]
+    error_messages = [rec.message for rec in caplog.records if rec.levelno >= logging.ERROR]
     assert any("holiday_mode" in m for m in error_messages)
     assert any("required external entities are missing" in m for m in error_messages)
 
@@ -106,8 +102,7 @@ async def test_validator_multiple_missing_single_error_line(
     validator_errors = [
         rec.message
         for rec in caplog.records
-        if rec.levelno >= logging.ERROR
-        and "required external entities are missing" in rec.message
+        if rec.levelno >= logging.ERROR and "required external entities are missing" in rec.message
     ]
     assert len(validator_errors) == 1
     msg = validator_errors[0]
@@ -318,7 +313,5 @@ async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
     await hass.async_block_till_done()
 
     # An error must be logged about the missing light
-    error_messages = [
-        rec.message for rec in caplog.records if rec.levelno >= logging.ERROR
-    ]
+    error_messages = [rec.message for rec in caplog.records if rec.levelno >= logging.ERROR]
     assert any("light.nonexistent_light" in m for m in error_messages)

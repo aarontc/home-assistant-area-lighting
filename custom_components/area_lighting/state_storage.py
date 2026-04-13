@@ -47,7 +47,9 @@ class StateStorage:
         return self._data.get(area_id, {})
 
     async def async_save_area_state(
-        self, area_id: str, state: dict[str, Any],
+        self,
+        area_id: str,
+        state: dict[str, Any],
     ) -> None:
         """Save state for an area."""
         self._data[area_id] = state

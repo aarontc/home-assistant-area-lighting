@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 
 @pytest.mark.integration
-async def test_brightness_step_pct_parses(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_brightness_step_pct_parses(hass: HomeAssistant, helper_entities) -> None:
     """brightness_step_pct is accepted and propagates to AreaConfig."""
     assert await async_setup_component(
         hass,
@@ -37,9 +34,7 @@ async def test_brightness_step_pct_parses(
 
 
 @pytest.mark.integration
-async def test_night_fadeout_seconds_parses(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_night_fadeout_seconds_parses(hass: HomeAssistant, helper_entities) -> None:
     assert await async_setup_component(
         hass,
         "area_lighting",
@@ -63,9 +58,7 @@ async def test_night_fadeout_seconds_parses(
 
 
 @pytest.mark.integration
-async def test_follow_area_id_rejected(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_follow_area_id_rejected(hass: HomeAssistant, helper_entities) -> None:
     """follow_area_id is no longer part of the schema."""
     result = await async_setup_component(
         hass,
@@ -88,9 +81,7 @@ async def test_follow_area_id_rejected(
 
 
 @pytest.mark.integration
-async def test_light_followers_top_level_rejected(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_light_followers_top_level_rejected(hass: HomeAssistant, helper_entities) -> None:
     result = await async_setup_component(
         hass,
         "area_lighting",
@@ -103,9 +94,7 @@ async def test_light_followers_top_level_rejected(
                         "scenes": [{"id": "circadian", "name": "Circadian"}],
                     }
                 ],
-                "light_followers": [
-                    {"name": "f", "leader": "light.a", "follower": "light.b"}
-                ],
+                "light_followers": [{"name": "f", "leader": "light.a", "follower": "light.b"}],
             }
         },
     )
@@ -113,9 +102,7 @@ async def test_light_followers_top_level_rejected(
 
 
 @pytest.mark.integration
-async def test_standalone_remotes_top_level_rejected(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_standalone_remotes_top_level_rejected(hass: HomeAssistant, helper_entities) -> None:
     result = await async_setup_component(
         hass,
         "area_lighting",

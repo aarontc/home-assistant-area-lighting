@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from custom_components.area_lighting.scene_machine import (
     ActionType,
     determine_favorite_action,
@@ -12,7 +10,6 @@ from custom_components.area_lighting.scene_machine import (
     resolve_sun_position,
     resolve_sun_position_inverted,
 )
-
 
 # Standard network_room scene set
 NR_SCENES = {"ambient", "christmas", "circadian", "daylight", "evening", "night"}
@@ -242,7 +239,9 @@ def test_off_with_holiday_ambient_mode_returns_holiday_scene():
 
 def test_favorite_no_holiday_picks_night():
     a = determine_favorite_action(
-        current_scene="daylight", scene_slugs=NR_SCENES, holiday_mode="none",
+        current_scene="daylight",
+        scene_slugs=NR_SCENES,
+        holiday_mode="none",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "night"
@@ -250,14 +249,18 @@ def test_favorite_no_holiday_picks_night():
 
 def test_favorite_with_holiday_not_yet_holiday_activates_holiday():
     a = determine_favorite_action(
-        current_scene="daylight", scene_slugs=NR_SCENES, holiday_mode="christmas",
+        current_scene="daylight",
+        scene_slugs=NR_SCENES,
+        holiday_mode="christmas",
     )
     assert a.action == ActionType.ACTIVATE_HOLIDAY_SCENE
 
 
 def test_favorite_with_holiday_already_in_holiday_picks_night():
     a = determine_favorite_action(
-        current_scene="christmas", scene_slugs=NR_SCENES, holiday_mode="christmas",
+        current_scene="christmas",
+        scene_slugs=NR_SCENES,
+        holiday_mode="christmas",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "night"
@@ -266,7 +269,9 @@ def test_favorite_with_holiday_already_in_holiday_picks_night():
 def test_favorite_with_holiday_in_other_holiday_picks_night():
     """Already in halloween, holiday mode is christmas - should pick night, not double-cycle."""
     a = determine_favorite_action(
-        current_scene="halloween", scene_slugs=NR_SCENES, holiday_mode="christmas",
+        current_scene="halloween",
+        scene_slugs=NR_SCENES,
+        holiday_mode="christmas",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "night"
@@ -286,6 +291,7 @@ def test_sun_position_daylight_disabled():
 def test_sun_position_inverted():
     assert resolve_sun_position_inverted(True) == "evening"
     assert resolve_sun_position_inverted(False) == "daylight"
+
 
 # ── Source-aware off behavior (D7) ──────────────────────────────────────
 

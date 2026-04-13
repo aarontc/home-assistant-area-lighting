@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -34,16 +33,10 @@ async def test_manual_change_within_grace_does_not_mark_manual(
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
-    hass.states.async_set(
-        "light.network_room_overhead_2", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 200})
     # Fire a manual-change event inside the grace window
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 100}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 100})
     await hass.async_block_till_done()
     assert not ctrl._state.is_manual
 
@@ -57,16 +50,10 @@ async def test_manual_change_after_grace_marks_manual(
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
     # Simulate grace period expiry by backdating the monotonic timestamp
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
-    hass.states.async_set(
-        "light.network_room_overhead_2", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 200})
     await hass.async_block_till_done()
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 100}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 100})
     await hass.async_block_till_done()
     assert ctrl._state.is_manual
 
@@ -110,9 +97,7 @@ async def test_brightness_attribute_only_change_marks_manual(
 
     # User drags the slider — state stays 'on', attribute changes.
     # HA fires EVENT_STATE_REPORTED, not EVENT_STATE_CHANGED.
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 80}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 80})
     await hass.async_block_till_done()
     assert ctrl._state.is_manual
 
@@ -177,9 +162,7 @@ async def test_manual_detection_ignores_nonexistent_light_group(
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
 
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 50}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 50})
     await hass.async_block_till_done()
     assert ctrl._state.is_manual
 
@@ -196,9 +179,7 @@ async def test_manual_change_while_area_is_off_does_not_mark_manual(
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
 
     # Light turns on while we think the area is off
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 100}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 100})
     await hass.async_block_till_done()
     # Should NOT be manual — area is off, this is external activation
     assert not ctrl._state.is_manual

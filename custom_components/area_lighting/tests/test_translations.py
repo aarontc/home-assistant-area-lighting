@@ -24,11 +24,7 @@ REGISTERED_SERVICES = {
 
 
 def _translations_path() -> Path:
-    return (
-        Path(__file__).resolve().parent.parent
-        / "translations"
-        / "en.json"
-    )
+    return Path(__file__).resolve().parent.parent / "translations" / "en.json"
 
 
 def test_translations_file_exists():
@@ -68,12 +64,8 @@ def test_services_with_area_id_field_have_field_translation():
     for service_name in services_with_area_id:
         entry = services.get(service_name, {})
         fields = entry.get("fields", {})
-        assert "area_id" in fields, (
-            f"{service_name}: missing fields.area_id translation"
-        )
-        assert "name" in fields["area_id"], (
-            f"{service_name}: area_id missing name"
-        )
+        assert "area_id" in fields, f"{service_name}: missing fields.area_id translation"
+        assert "name" in fields["area_id"], f"{service_name}: area_id missing name"
 
 
 def test_snapshot_scene_has_scene_field_translation():

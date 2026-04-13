@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 import voluptuous as vol
-
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
@@ -15,14 +14,18 @@ from .scene_storage import SceneStorage
 
 _LOGGER = logging.getLogger(__name__)
 
-SERVICE_SCHEMA = vol.Schema({
-    vol.Required("area_id"): cv.string,
-})
+SERVICE_SCHEMA = vol.Schema(
+    {
+        vol.Required("area_id"): cv.string,
+    }
+)
 
-SNAPSHOT_SCHEMA = vol.Schema({
-    vol.Required("area_id"): cv.string,
-    vol.Required("scene"): cv.string,
-})
+SNAPSHOT_SCHEMA = vol.Schema(
+    {
+        vol.Required("area_id"): cv.string,
+        vol.Required("scene"): cv.string,
+    }
+)
 
 SERVICE_MAP = {
     "lighting_on": "lighting_on",
@@ -48,6 +51,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     # Lighting action services
     for service_name, method_name in SERVICE_MAP.items():
+
         async def _handler(call: ServiceCall, _method=method_name) -> None:
             area_id = call.data["area_id"]
             controller = _get_controller(hass, area_id)
@@ -56,7 +60,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 await method()
 
         hass.services.async_register(
-            DOMAIN, service_name, _handler, schema=SERVICE_SCHEMA,
+            DOMAIN,
+            service_name,
+            _handler,
+            schema=SERVICE_SCHEMA,
         )
 
     # Snapshot scene service
@@ -74,19 +81,24 @@ async def async_register_services(hass: HomeAssistant) -> None:
         if scene_slug not in area.scene_slugs:
             _LOGGER.warning(
                 "snapshot_scene: scene '%s' not configured for area '%s'",
-                scene_slug, area_id,
+                scene_slug,
+                area_id,
             )
             return
 
         # Get all light entity IDs for this area
-        entity_ids = [l.id for l in area.all_lights]
+        entity_ids = [light.id for light in area.all_lights]
         snapshot = await storage.async_snapshot_scene(area_id, scene_slug, entity_ids)
         _LOGGER.info(
             "Snapshot captured for %s/%s: %d lights",
-            area_id, scene_slug, len(snapshot),
+            area_id,
+            scene_slug,
+            len(snapshot),
         )
 
     hass.services.async_register(
-        DOMAIN, "snapshot_scene", _handle_snapshot, schema=SNAPSHOT_SCHEMA,
+        DOMAIN,
+        "snapshot_scene",
+        _handle_snapshot,
+        schema=SNAPSHOT_SCHEMA,
     )
-

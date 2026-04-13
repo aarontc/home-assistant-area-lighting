@@ -7,7 +7,6 @@ real HA instance via pytest-homeassistant-custom-component.
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 

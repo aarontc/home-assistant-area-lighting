@@ -13,8 +13,9 @@ Values persist across restart and take effect on the next timer start.
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC
 
+import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -66,19 +67,13 @@ async def test_timeout_numbers_default_to_config_values(
         occupancy_light_timer_durations: {off: 00:30:00}  # no night_off
     """
     await _setup(hass, network_room_config)
-    assert float(
-        hass.states.get("number.network_room_motion_timeout_minutes").state
-    ) == 8.0
-    assert float(
-        hass.states.get("number.network_room_motion_night_timeout_minutes").state
-    ) == 5.0
-    assert float(
-        hass.states.get("number.network_room_occupancy_timeout_minutes").state
-    ) == 30.0
+    assert float(hass.states.get("number.network_room_motion_timeout_minutes").state) == 8.0
+    assert float(hass.states.get("number.network_room_motion_night_timeout_minutes").state) == 5.0
+    assert float(hass.states.get("number.network_room_occupancy_timeout_minutes").state) == 30.0
     # No night_off configured → falls back to the normal off value
-    assert float(
-        hass.states.get("number.network_room_occupancy_night_timeout_minutes").state
-    ) == 30.0
+    assert (
+        float(hass.states.get("number.network_room_occupancy_night_timeout_minutes").state) == 30.0
+    )
 
 
 @pytest.mark.integration
@@ -106,13 +101,12 @@ async def test_setting_motion_timeout_affects_next_timer_start(
     await ctrl.handle_motion_off()
     assert ctrl._motion_timer.is_active
     # Deadline should be ~15 minutes = 900 seconds in the future
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     deadline = ctrl._motion_timer.deadline_utc
     assert deadline is not None
-    remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-    assert 890 < remaining < 910, (
-        f"expected ~900s remaining, got {remaining}"
-    )
+    remaining = (deadline - datetime.now(UTC)).total_seconds()
+    assert 890 < remaining < 910, f"expected ~900s remaining, got {remaining}"
 
 
 @pytest.mark.integration
@@ -162,13 +156,12 @@ async def test_setting_motion_night_timeout_picks_night_timer(
     await ctrl.handle_motion_off()
     assert ctrl._motion_night_timer.is_active
 
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     deadline = ctrl._motion_night_timer.deadline_utc
     assert deadline is not None
-    remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-    assert 170 < remaining < 190, (
-        f"expected ~180s remaining (3 minutes), got {remaining}"
-    )
+    remaining = (deadline - datetime.now(UTC)).total_seconds()
+    assert 170 < remaining < 190, f"expected ~180s remaining (3 minutes), got {remaining}"
 
 
 @pytest.mark.integration

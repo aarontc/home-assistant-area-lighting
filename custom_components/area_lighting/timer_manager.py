@@ -75,7 +75,9 @@ class TimerHandle:
         remaining = (deadline_utc - now).total_seconds()
         _LOGGER.debug(
             "Timer %s: restore (deadline=%s, remaining=%ss)",
-            self._name, deadline_utc.isoformat(), remaining,
+            self._name,
+            deadline_utc.isoformat(),
+            remaining,
         )
         if remaining <= 0:
             # Past-due: fire immediately

@@ -8,9 +8,8 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 
-from .const import DOMAIN
 from .controller import AreaLightingController
 
 _LOGGER = logging.getLogger(__name__)

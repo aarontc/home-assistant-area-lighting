@@ -12,7 +12,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -42,7 +41,7 @@ def _entity_suffix_matches_name(entity_id: str, area_id: str, name: str) -> bool
     # name_slug starts with "{area_id_slug}_" — strip it
     area_slug = _name_to_slug("Network Room")
     if name_slug.startswith(area_slug + "_"):
-        name_slug = name_slug[len(area_slug) + 1:]
+        name_slug = name_slug[len(area_slug) + 1 :]
     return local_id == name_slug
 
 
@@ -51,7 +50,7 @@ async def test_all_switch_entity_ids_match_friendly_names(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
     await _setup(hass, network_room_config)
-    registry_entries = {
+    {
         eid: state
         for eid, state in hass.states.async_all_internal().items()
         if eid.startswith("switch.network_room_")
@@ -76,9 +75,7 @@ async def test_override_ambient_switch_id_includes_motion(
     """The 'Motion Override Ambient' switch's entity_id must include 'motion'."""
     await _setup(hass, network_room_config)
     # Should exist as switch.network_room_motion_override_ambient
-    assert (
-        hass.states.get("switch.network_room_motion_override_ambient") is not None
-    ), (
+    assert hass.states.get("switch.network_room_motion_override_ambient") is not None, (
         "expected switch.network_room_motion_override_ambient but only these "
         "area_lighting switches exist: "
         + ", ".join(
@@ -169,7 +166,5 @@ async def test_entity_icons_match_function(
             continue
         actual = state.attributes.get("icon")
         if actual != expected_icon:
-            mismatches.append(
-                f"{entity_id}: expected {expected_icon!r}, got {actual!r}"
-            )
+            mismatches.append(f"{entity_id}: expected {expected_icon!r}, got {actual!r}")
     assert not mismatches, "Icon mismatches:\n  " + "\n  ".join(mismatches)

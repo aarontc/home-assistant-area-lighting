@@ -5,17 +5,17 @@ from __future__ import annotations
 import logging
 
 import voluptuous as vol
-
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
+from .binary_sensor import AreaOccupiedBinarySensor
 from .config_schema import AREA_SCHEMA, parse_config
 from .const import DOMAIN
 from .controller import AreaLightingController
-from .event_handlers import async_setup_event_handlers
 from .diagnostics import AreaLightingDiagnosticSensor
+from .event_handlers import async_setup_event_handlers
 from .number import (
     AreaManualFadeoutNumber,
     AreaMotionFadeoutNumber,
@@ -25,17 +25,16 @@ from .number import (
     AreaOccupancyTimeoutNumber,
 )
 from .scene import (
-    AreaLightingScene,
-    BehavioralScene,
     BEHAVIORAL_SCENE_HANDLERS,
     HIDDEN_SCENES,
+    AreaLightingScene,
+    BehavioralScene,
 )
-from .select import AreaLastSceneSelect
-from .binary_sensor import AreaOccupiedBinarySensor
-from .switch import SWITCH_DEFS, AreaLightingSwitch
 from .scene_storage import SceneStorage
+from .select import AreaLastSceneSelect
 from .services import async_register_services
 from .state_storage import StateStorage
+from .switch import SWITCH_DEFS, AreaLightingSwitch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,7 +157,7 @@ async def _register_scene_entities(
 
     entities: list = []
     for area in area_config.enabled_areas:
-        configured_slugs = {s.slug for s in area.scenes}
+        {s.slug for s in area.scenes}
 
         # Visual scenes from config
         for scene_cfg in area.scenes:
@@ -167,9 +166,7 @@ async def _register_scene_entities(
             if scene_cfg.slug in BEHAVIORAL_SCENE_HANDLERS:
                 # Handled below as a BehavioralScene
                 continue
-            entities.append(
-                AreaLightingScene(hass, area, scene_cfg, scene_storage)
-            )
+            entities.append(AreaLightingScene(hass, area, scene_cfg, scene_storage))
 
         # Behavioral scenes (off, circadian) - always registered for every area
         # so external integrations can trigger them via scene.turn_on
@@ -180,9 +177,7 @@ async def _register_scene_entities(
                 if s.slug == slug:
                     name = s.name
                     break
-            entities.append(
-                BehavioralScene(hass, area, slug, name, method)
-            )
+            entities.append(BehavioralScene(hass, area, slug, name, method))
 
     if not entities:
         return
@@ -199,7 +194,8 @@ async def _register_scene_entities(
         registry_entry = entity_reg.async_get(entity.entity_id)
         if registry_entry and registry_entry.area_id != ha_area.id:
             entity_reg.async_update_entity(
-                entity.entity_id, area_id=ha_area.id,
+                entity.entity_id,
+                area_id=ha_area.id,
             )
             _LOGGER.debug("Assigned %s to area %s", entity.entity_id, ha_area.name)
 
@@ -210,8 +206,8 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
     from homeassistant.components.select import DATA_COMPONENT as SELECT_COMPONENT
     from homeassistant.components.switch import DATA_COMPONENT as SWITCH_COMPONENT
 
-    controllers: dict[str, AreaLightingController] = (
-        hass.data.get(DOMAIN, {}).get("controllers", {})
+    controllers: dict[str, AreaLightingController] = hass.data.get(DOMAIN, {}).get(
+        "controllers", {}
     )
     if not controllers:
         return
@@ -272,7 +268,9 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
 
     # Assign every helper entity + its device to the matching HA area so
     # HA's auto-generated area dashboard picks them up.
-    await _assign_entities_to_ha_areas(hass, controllers, switches, selects, numbers, binary_sensors)
+    await _assign_entities_to_ha_areas(
+        hass, controllers, switches, selects, numbers, binary_sensors
+    )
 
 
 async def _assign_entities_to_ha_areas(
@@ -315,7 +313,8 @@ async def _assign_entities_to_ha_areas(
                 continue
             if registry_entry.area_id != ha_area.id:
                 entity_reg.async_update_entity(
-                    entity.entity_id, area_id=ha_area.id,
+                    entity.entity_id,
+                    area_id=ha_area.id,
                 )
 
 
@@ -331,5 +330,3 @@ async def _register_diagnostic_sensor(hass: HomeAssistant) -> None:
     sensor = AreaLightingDiagnosticSensor(hass)
     await component.async_add_entities([sensor])
     _LOGGER.info("Registered diagnostic sensor")
-
-

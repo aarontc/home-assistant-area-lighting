@@ -16,7 +16,6 @@ Two closely-related bugs:
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -222,16 +221,10 @@ async def test_two_fadeout_number_entities_registered(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
     await _setup(hass, network_room_config)
-    assert hass.states.get(
-        "number.network_room_manual_fadeout_seconds"
-    ) is not None
-    assert hass.states.get(
-        "number.network_room_motion_fadeout_seconds"
-    ) is not None
+    assert hass.states.get("number.network_room_manual_fadeout_seconds") is not None
+    assert hass.states.get("number.network_room_motion_fadeout_seconds") is not None
     # Old entity id should be gone
-    assert hass.states.get(
-        "number.network_room_motion_light_fadeout_seconds"
-    ) is None
+    assert hass.states.get("number.network_room_motion_light_fadeout_seconds") is None
 
 
 @pytest.mark.integration
@@ -318,6 +311,7 @@ async def test_fadeout_legacy_key_migrates(
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
 
     from custom_components.area_lighting.controller import AreaLightingController
+
     fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
     fresh.load_persisted_state({"fadeout_seconds": 9.0})
     # The old single fadeout was used by motion timer expiry, so it

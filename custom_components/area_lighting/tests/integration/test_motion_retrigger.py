@@ -7,13 +7,9 @@ reset (so the lights stay on through continuous activity).
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from homeassistant.util import dt as dt_util
 
 from custom_components.area_lighting.area_state import ActivationSource
 
@@ -114,7 +110,8 @@ async def test_motion_retrigger_restarts_full_duration_on_next_off(
     await ctrl.handle_motion_off()
     assert ctrl._motion_timer.is_active
     deadline2 = ctrl._motion_timer.deadline_utc
-    assert deadline2 is not None and deadline1 is not None
+    assert deadline2 is not None
+    assert deadline1 is not None
     # The new deadline should be at/after the old one (full fresh duration)
     assert deadline2 >= deadline1
 

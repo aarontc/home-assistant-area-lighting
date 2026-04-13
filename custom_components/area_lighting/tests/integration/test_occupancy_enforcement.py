@@ -9,7 +9,6 @@ without triggering a sensor-off event.
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -126,9 +125,7 @@ async def test_timer_starts_when_transitioning_from_ambient_to_active(
 
 
 @pytest.mark.integration
-async def test_timer_does_not_start_when_sensor_is_on(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_timer_does_not_start_when_sensor_is_on(hass: HomeAssistant, helper_entities) -> None:
     """User activates circadian, occupancy sensor is on → no timer."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "on")
@@ -145,9 +142,7 @@ async def test_timer_does_not_start_when_sensor_is_on(
 
 
 @pytest.mark.integration
-async def test_timer_cancelled_when_area_goes_off(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_timer_cancelled_when_area_goes_off(hass: HomeAssistant, helper_entities) -> None:
     """Area goes to off → timer cancelled."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
@@ -164,9 +159,7 @@ async def test_timer_cancelled_when_area_goes_off(
 
 
 @pytest.mark.integration
-async def test_timer_cancelled_when_area_goes_ambient(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_timer_cancelled_when_area_goes_ambient(hass: HomeAssistant, helper_entities) -> None:
     """Area goes to ambient → timer cancelled."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
@@ -214,9 +207,7 @@ async def test_timer_not_reset_on_active_to_active_transition(
 
 
 @pytest.mark.integration
-async def test_occupancy_on_cancels_timer(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_occupancy_on_cancels_timer(hass: HomeAssistant, helper_entities) -> None:
     """Positive occupancy detection cancels the timer."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
@@ -234,9 +225,7 @@ async def test_occupancy_on_cancels_timer(
 
 
 @pytest.mark.integration
-async def test_occupancy_off_restarts_timer(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_occupancy_off_restarts_timer(hass: HomeAssistant, helper_entities) -> None:
     """Occupancy sensor clearing restarts the timer with full duration."""
     hass.states.async_set("light.media_room_overhead", "on")
     hass.states.async_set("binary_sensor.media_room_presence", "on")
@@ -259,9 +248,7 @@ async def test_occupancy_off_restarts_timer(
 
 
 @pytest.mark.integration
-async def test_no_occupancy_sensors_no_timer(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_no_occupancy_sensors_no_timer(hass: HomeAssistant, helper_entities) -> None:
     """Areas without occupancy sensors don't get an occupancy timer."""
     hass.states.async_set("light.hallway_overhead", "off")
     hass.states.async_set("binary_sensor.hallway_motion", "off")
@@ -301,9 +288,7 @@ async def test_timer_starts_on_startup_when_area_is_active(
 
 
 @pytest.mark.integration
-async def test_timer_starts_on_manual_light_change(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_timer_starts_on_manual_light_change(hass: HomeAssistant, helper_entities) -> None:
     """External integration turns on a light → area goes manual → timer starts."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
@@ -321,9 +306,7 @@ async def test_timer_starts_on_manual_light_change(
 
 
 @pytest.mark.integration
-async def test_timer_starts_on_occupancy_lights_on(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_timer_starts_on_occupancy_lights_on(hass: HomeAssistant, helper_entities) -> None:
     """Lights aggregate transitions from off to on → timer starts."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")

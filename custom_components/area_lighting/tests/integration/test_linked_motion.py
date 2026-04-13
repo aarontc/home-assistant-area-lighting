@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.area_lighting.area_state import ActivationSource, LightingState
+from custom_components.area_lighting.area_state import ActivationSource
 
 
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:
@@ -82,9 +81,7 @@ def _two_area_config() -> dict:
 
 
 @pytest.mark.integration
-async def test_linked_basic_activation_theater_off(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_basic_activation_theater_off(hass: HomeAssistant, helper_entities) -> None:
     """Stairs motion + theater off -> stairs=circadian, theater=stairs."""
     hass.states.async_set("light.theater_overhead", "off")
     hass.states.async_set("light.stairs_upper", "off")
@@ -104,9 +101,7 @@ async def test_linked_basic_activation_theater_off(
 
 
 @pytest.mark.integration
-async def test_linked_movie_mode(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_movie_mode(hass: HomeAssistant, helper_entities) -> None:
     """Stairs motion + theater in movie -> stairs=movie, theater untouched."""
     hass.states.async_set("light.theater_overhead", "on")
     hass.states.async_set("light.stairs_upper", "off")
@@ -127,9 +122,7 @@ async def test_linked_movie_mode(
 
 
 @pytest.mark.integration
-async def test_linked_default_no_match(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_default_no_match(hass: HomeAssistant, helper_entities) -> None:
     """Stairs motion + theater in daylight -> stairs=circadian, theater untouched."""
     hass.states.async_set("light.theater_overhead", "on")
     hass.states.async_set("light.stairs_upper", "off")
@@ -150,9 +143,7 @@ async def test_linked_default_no_match(
 
 
 @pytest.mark.integration
-async def test_linked_cleanup_normal(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_cleanup_normal(hass: HomeAssistant, helper_entities) -> None:
     """Stairs timer expires + theater still in 'stairs' -> theater goes off."""
     hass.states.async_set("light.theater_overhead", "off")
     hass.states.async_set("light.stairs_upper", "off")
@@ -178,9 +169,7 @@ async def test_linked_cleanup_normal(
 
 
 @pytest.mark.integration
-async def test_linked_cleanup_manual_override(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_cleanup_manual_override(hass: HomeAssistant, helper_entities) -> None:
     """Theater changed manually during stairs activity -> cleanup skips theater."""
     hass.states.async_set("light.theater_overhead", "off")
     hass.states.async_set("light.stairs_upper", "off")
@@ -206,9 +195,7 @@ async def test_linked_cleanup_manual_override(
 
 
 @pytest.mark.integration
-async def test_linked_cleanup_null_remote_scene(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_cleanup_null_remote_scene(hass: HomeAssistant, helper_entities) -> None:
     """When remote_scene was null (movie case), no cleanup needed."""
     hass.states.async_set("light.theater_overhead", "on")
     hass.states.async_set("light.stairs_upper", "off")
@@ -230,9 +217,7 @@ async def test_linked_cleanup_null_remote_scene(
 
 
 @pytest.mark.integration
-async def test_linked_retrigger_no_duplicate(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_retrigger_no_duplicate(hass: HomeAssistant, helper_entities) -> None:
     """Re-triggering stairs motion doesn't re-activate theater if it was changed."""
     hass.states.async_set("light.theater_overhead", "off")
     hass.states.async_set("light.stairs_upper", "off")
@@ -259,9 +244,7 @@ async def test_linked_retrigger_no_duplicate(
 
 
 @pytest.mark.integration
-async def test_linked_invalid_remote_area(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_linked_invalid_remote_area(hass: HomeAssistant, helper_entities) -> None:
     """linked_motion references non-existent area -> local area still works."""
     cfg = _two_area_config()
     cfg["area_lighting"]["areas"][1]["linked_motion"][0]["remote_area"] = "nonexistent"

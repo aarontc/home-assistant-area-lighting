@@ -27,7 +27,7 @@ async def async_setup_platform(
 
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
     entities = []
-    for area_id, controller in controllers.items():
+    for controller in controllers.values():
         entities.append(AreaManualFadeoutNumber(controller))
         entities.append(AreaMotionFadeoutNumber(controller))
         entities.append(AreaMotionTimeoutNumber(controller))
@@ -189,9 +189,7 @@ class AreaOccupancyNightTimeoutNumber(_BaseTimeoutMinutes):
         super().__init__(controller)
         area = controller.area
         self._attr_name = f"{area.name} Occupancy Night Timeout"
-        self._attr_unique_id = (
-            f"area_lighting_{area.id}_occupancy_night_timeout_minutes"
-        )
+        self._attr_unique_id = f"area_lighting_{area.id}_occupancy_night_timeout_minutes"
         # Outline variant = night/lighter version of AreaOccupancyTimeoutNumber.
         self._attr_icon = "mdi:account-clock-outline"
         self.entity_id = f"number.{area.id}_occupancy_night_timeout_minutes"

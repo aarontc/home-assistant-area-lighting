@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 
 @pytest.mark.integration
-async def test_integration_loads(
-    hass: HomeAssistant, helper_entities, network_room_config
-) -> None:
+async def test_integration_loads(hass: HomeAssistant, helper_entities, network_room_config) -> None:
     """area_lighting sets up cleanly with a minimal config."""
     assert await async_setup_component(hass, "area_lighting", network_room_config)
     await hass.async_block_till_done()

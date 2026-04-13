@@ -191,10 +191,10 @@ class AreaConfig:
         return sorted(slugs)
 
     def lights_with_role(self, role: str) -> list[LightConfig]:
-        return [l for l in self.all_lights if role in l.roles]
+        return [light for light in self.all_lights if role in light.roles]
 
     def lights_in_scene(self, scene_slug: str) -> list[LightConfig]:
-        return [l for l in self.all_lights if l.in_scene(scene_slug)]
+        return [light for light in self.all_lights if light.in_scene(scene_slug)]
 
     def circadian_switch_for_light(self, light: LightConfig) -> CircadianSwitchConfig | None:
         if not light.circadian_switch:

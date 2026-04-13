@@ -8,7 +8,6 @@ not restore the scene after dimming.
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -38,12 +37,8 @@ async def test_lighting_lower_service_sets_dimmed(
     """Calling the area_lighting.lighting_lower service must set dimmed."""
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
-    hass.states.async_set(
-        "light.network_room_overhead_2", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 200})
     ctrl._state.transition_to_scene("evening", ActivationSource.USER)
     assert not ctrl._state.dimmed
 
@@ -61,9 +56,7 @@ async def test_lighting_raise_service_sets_dimmed(
 ) -> None:
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 100}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 100})
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
 
     await _call_service(hass, "lighting_raise", "network_room")
@@ -80,12 +73,8 @@ async def test_lighting_on_service_restores_scene_when_dimmed(
     """Dimmed evening → calling lighting_on service restores evening (not cycles)."""
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
-    hass.states.async_set(
-        "light.network_room_overhead_2", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 200})
     ctrl._state.transition_to_scene("evening", ActivationSource.USER)
 
     # Dim via the service
@@ -112,9 +101,7 @@ async def test_select_entity_exposes_dimmed_attribute(
     """
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
     ctrl._state.transition_to_scene("evening", ActivationSource.USER)
     await _call_service(hass, "lighting_lower", "network_room")
     await hass.async_block_till_done()
@@ -133,9 +120,7 @@ async def test_select_entity_dimmed_attribute_clears_on_restore(
     attribute must go back to False."""
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 200}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
     await _call_service(hass, "lighting_lower", "network_room")
     await hass.async_block_till_done()

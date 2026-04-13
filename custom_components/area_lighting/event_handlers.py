@@ -7,7 +7,6 @@ and routing events to the appropriate AreaLightingController.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.const import STATE_OFF, STATE_ON
@@ -16,15 +15,14 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 
+from .area_state import ActivationSource
 from .const import (
     DOMAIN,
     GLOBAL_MOTION_LIGHT_ENABLED_ENTITY,
     HOLIDAY_MODE_ENTITY,
-    HOLIDAY_MODE_NONE,
     MANUAL_DETECTION_BRIGHTNESS_THRESHOLD,
     MANUAL_DETECTION_GRACE_SECONDS,
 )
-from .area_state import ActivationSource
 from .controller import AreaLightingController
 from .models import AreaLightingConfig
 
@@ -70,13 +68,14 @@ def _build_circadian_switches_block(config: AreaLightingConfig) -> str:
             for ctype in ("ct", "brightness", "rgb"):
                 if ctype in by_type:
                     lines.append(f"    lights_{ctype}:")
-                    for light_id in by_type[ctype]:
-                        lines.append(f"      - {light_id}")
+                    lines.extend(f"      - {light_id}" for light_id in by_type[ctype])
     return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _build_bootstrap_yaml(
-    missing: set[str], zones: set[str], config: AreaLightingConfig,
+    missing: set[str],
+    zones: set[str],
+    config: AreaLightingConfig,
 ) -> str:
     """Generate a copy-pasteable YAML block for whichever helpers are missing."""
     input_select_lines: list[str] = []
@@ -104,16 +103,13 @@ def _build_bootstrap_yaml(
         )
     if "input_boolean.motion_light_enabled" in missing:
         input_boolean_lines.append(
-            "  motion_light_enabled:\n"
-            "    name: Motion Lighting (Global)\n"
-            "    initial: true"
+            "  motion_light_enabled:\n    name: Motion Lighting (Global)\n    initial: true"
         )
     for zone in sorted(zones):
         entity = f"input_boolean.lighting_{zone}_ambient"
         if entity in missing:
             input_boolean_lines.append(
-                f"  lighting_{zone}_ambient:\n"
-                f"    name: {zone.title()} Ambient Zone"
+                f"  lighting_{zone}_ambient:\n    name: {zone.title()} Ambient Zone"
             )
 
     blocks: list[str] = []
@@ -149,7 +145,8 @@ def _build_bootstrap_yaml(
 
 
 async def async_validate_external_entities(
-    hass: HomeAssistant, config: AreaLightingConfig,
+    hass: HomeAssistant,
+    config: AreaLightingConfig,
 ) -> list[str]:
     """Verify required external entities exist (D10).
 
@@ -266,9 +263,7 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
     controllers = _controllers(hass)
 
     # ── Scene activation tracking (replaces global_last_scene_updater) ──
-    unsubs.append(
-        hass.bus.async_listen("call_service", _make_scene_tracker(hass, config))
-    )
+    unsubs.append(hass.bus.async_listen("call_service", _make_scene_tracker(hass, config)))
 
     # ── Per-area listeners ──────────────────────────────────────────────
     for area in config.enabled_areas:
@@ -278,14 +273,15 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
         if not ctrl:
             continue
 
-        all_light_ids = [l.id for l in area.all_lights]
+        all_light_ids = [light.id for light in area.all_lights]
 
         # Lights-off detection — track individual lights; the handler
         # aggregates to "all off" itself.
         if all_light_ids:
             unsubs.append(
                 async_track_state_change_event(
-                    hass, all_light_ids,
+                    hass,
+                    all_light_ids,
                     _make_lights_off_handler(hass, ctrl),
                 )
             )
@@ -293,7 +289,8 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
             # Manual light detection — same subscription list
             unsubs.append(
                 async_track_state_change_event(
-                    hass, all_light_ids,
+                    hass,
+                    all_light_ids,
                     _make_manual_detection_handler(hass, ctrl),
                 )
             )
@@ -302,7 +299,8 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
         if area.has_motion_lighting and area.motion_light_motion_sensor_ids:
             unsubs.append(
                 async_track_state_change_event(
-                    hass, area.motion_light_motion_sensor_ids,
+                    hass,
+                    area.motion_light_motion_sensor_ids,
                     _make_motion_handler(hass, ctrl, area),
                 )
             )
@@ -311,7 +309,8 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
         if area.has_occupancy_lighting and area.occupancy_light_sensor_ids:
             unsubs.append(
                 async_track_state_change_event(
-                    hass, area.occupancy_light_sensor_ids,
+                    hass,
+                    area.occupancy_light_sensor_ids,
                     _make_occupancy_handler(ctrl),
                 )
             )
@@ -319,7 +318,8 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
             if all_light_ids:
                 unsubs.append(
                     async_track_state_change_event(
-                        hass, all_light_ids,
+                        hass,
+                        all_light_ids,
                         _make_occupancy_light_handler(hass, ctrl),
                     )
                 )
@@ -328,13 +328,12 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
     ambient_entities = set()
     for area in config.enabled_areas:
         if area.event_handlers and area.ambient_lighting_zone:
-            ambient_entities.add(
-                f"input_boolean.lighting_{area.ambient_lighting_zone}_ambient"
-            )
+            ambient_entities.add(f"input_boolean.lighting_{area.ambient_lighting_zone}_ambient")
     if ambient_entities:
         unsubs.append(
             async_track_state_change_event(
-                hass, list(ambient_entities),
+                hass,
+                list(ambient_entities),
                 _make_ambient_zone_handler(hass, config),
             )
         )
@@ -342,7 +341,8 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
     # ── Holiday mode listener ───────────────────────────────────────────
     unsubs.append(
         async_track_state_change_event(
-            hass, [HOLIDAY_MODE_ENTITY],
+            hass,
+            [HOLIDAY_MODE_ENTITY],
             _make_holiday_handler(hass, config),
         )
     )
@@ -359,6 +359,7 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
 
 
 # ── Scene activation tracking ──────────────────────────────────────────
+
 
 def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
     """Track scene.turn_on calls to update last_scene."""
@@ -384,7 +385,7 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
         for area_id, ctrl in controllers.items():
             prefix = f"{area_id}_"
             if short.startswith(prefix):
-                scene_slug = short[len(prefix):]
+                scene_slug = short[len(prefix) :]
                 if scene_slug:
                     hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
                 break
@@ -393,6 +394,7 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
 
 
 # ── Lights-off detection ───────────────────────────────────────────────
+
 
 def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
     """Detect 'all lights in the area are now off' without relying on any
@@ -421,6 +423,7 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
 
 # ── Manual light detection ─────────────────────────────────────────────
 
+
 def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingController):
     """Handle light state change events for manual detection.
 
@@ -441,7 +444,9 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
     def _skip(reason: str, entity_id: str) -> None:
         _LOGGER.debug(
             "area_lighting[%s] manual detection skipped (%s) for %s",
-            area_id, reason, entity_id,
+            area_id,
+            reason,
+            entity_id,
         )
 
     @callback
@@ -508,9 +513,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 break
 
         if not (
-            was_off
-            or color_changed
-            or brightness_change > MANUAL_DETECTION_BRIGHTNESS_THRESHOLD
+            was_off or color_changed or brightness_change > MANUAL_DETECTION_BRIGHTNESS_THRESHOLD
         ):
             _skip(
                 f"delta too small (brightness_change={brightness_change} "
@@ -520,13 +523,17 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             return
 
         reason = (
-            "was off" if was_off
-            else f"color changed ({changed_color_attr})" if color_changed
+            "was off"
+            if was_off
+            else f"color changed ({changed_color_attr})"
+            if color_changed
             else f"brightness delta {brightness_change}"
         )
         _LOGGER.info(
             "area_lighting[%s] manual detection fired for %s: %s",
-            area_id, entity_id, reason,
+            area_id,
+            entity_id,
+            reason,
         )
         hass.async_create_task(ctrl.handle_manual_light_change())
 
@@ -534,6 +541,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
 
 
 # ── Motion handling ────────────────────────────────────────────────────
+
 
 def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area):
     """Handle motion sensor state changes."""
@@ -617,6 +625,7 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
 
 # ── Occupancy handling ─────────────────────────────────────────────────
 
+
 def _make_occupancy_handler(ctrl: AreaLightingController):
     @callback
     def _handler(event: Event) -> None:
@@ -631,8 +640,7 @@ def _make_occupancy_handler(ctrl: AreaLightingController):
             # Same unavailable/unknown tolerance as the motion handler:
             # "no sensor is reporting on" is the trigger.
             any_on = any(
-                (s := ctrl.hass.states.get(sid)) is not None
-                and s.state == STATE_ON
+                (s := ctrl.hass.states.get(sid)) is not None and s.state == STATE_ON
                 for sid in ctrl.area.occupancy_light_sensor_ids
             )
             if not any_on:
@@ -675,6 +683,7 @@ def _make_occupancy_light_handler(hass: HomeAssistant, ctrl: AreaLightingControl
 
 # ── Ambient zone handling ──────────────────────────────────────────────
 
+
 def _make_ambient_zone_handler(hass: HomeAssistant, config: AreaLightingConfig):
     @callback
     def _handler(event: Event) -> None:
@@ -704,6 +713,7 @@ def _make_ambient_zone_handler(hass: HomeAssistant, config: AreaLightingConfig):
 
 
 # ── Holiday mode handling ──────────────────────────────────────────────
+
 
 def _make_holiday_handler(hass: HomeAssistant, config: AreaLightingConfig):
     @callback
@@ -797,10 +807,6 @@ def _make_remote_handler(hass: HomeAssistant, config: AreaLightingConfig):
                 if service:
                     domain, svc = service.split(".", 1)
                     call_data = {**data, **target}
-                    hass.async_create_task(
-                        hass.services.async_call(domain, svc, call_data)
-                    )
+                    hass.async_create_task(hass.services.async_call(domain, svc, call_data))
 
     return _handler
-
-

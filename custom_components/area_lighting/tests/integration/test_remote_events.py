@@ -8,12 +8,10 @@ the subtype lives in `button_type` and `action` holds "press"/"release".
 from __future__ import annotations
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from custom_components.area_lighting.area_state import ActivationSource
-
 
 _REMOTE_DEVICE_ID = "97051ec8ae44dc6414792646470f6c69"
 
@@ -40,9 +38,7 @@ def network_room_config_with_remote() -> dict:
                             "roles": ["color", "dimming", "night", "white"],
                         },
                     ],
-                    "lutron_remotes": [
-                        {"id": _REMOTE_DEVICE_ID, "name": "Entry Remote"}
-                    ],
+                    "lutron_remotes": [{"id": _REMOTE_DEVICE_ID, "name": "Entry Remote"}],
                     "scenes": [
                         {"id": "circadian", "name": "Circadian"},
                         {"id": "daylight", "name": "Daylight"},
@@ -77,7 +73,7 @@ def _fire_lutron_button(
             "device_id": device_id,
             "area_name": "Network Room",
             "button_type": button_type,  # "on" / "off" / "raise" / "lower" / "stop"
-            "action": action,              # "press" / "release" / "multi_tap"
+            "action": action,  # "press" / "release" / "multi_tap"
         },
     )
 
@@ -149,9 +145,7 @@ async def test_remote_raise_press_dims(
 ) -> None:
     await _setup(hass, network_room_config_with_remote)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    hass.states.async_set(
-        "light.network_room_overhead_1", "on", {"brightness": 150}
-    )
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 150})
     ctrl._state.transition_to_scene("evening", ActivationSource.USER)
 
     _fire_lutron_button(hass, _REMOTE_DEVICE_ID, "raise")

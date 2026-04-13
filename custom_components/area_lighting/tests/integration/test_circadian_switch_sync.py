@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -115,7 +114,7 @@ async def test_holiday_change_from_circadian_disables_switches(
     # Put the area in circadian state, so the holiday transition has
     # somewhere to come from.
     ctrl._state.transition_to_circadian(ActivationSource.HOLIDAY)
-    spy = _spy_disable(ctrl)
+    _spy_disable(ctrl)
 
     hass.states.async_set("input_select.holiday_mode", "christmas")
     await ctrl.handle_holiday_changed("christmas")

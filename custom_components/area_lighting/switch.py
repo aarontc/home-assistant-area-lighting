@@ -38,8 +38,8 @@ async def async_setup_platform(
 
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
     entities = []
-    for area_id, controller in controllers.items():
-        for attr, name_suffix, icon, default in SWITCH_DEFS:
+    for controller in controllers.values():
+        for attr, name_suffix, icon, _default in SWITCH_DEFS:
             entities.append(AreaLightingSwitch(controller, attr, name_suffix, icon))
     async_add_entities(entities)
 

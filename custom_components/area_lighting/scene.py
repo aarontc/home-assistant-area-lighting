@@ -15,7 +15,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.scene import Scene
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
@@ -104,7 +104,8 @@ class AreaLightingScene(Scene):
         transition = kwargs.get("transition")
         _LOGGER.debug(
             "Activating scene %s/%s (has_stored=%s, has_config=%s)",
-            self._area.id, self._scene_cfg.slug,
+            self._area.id,
+            self._scene_cfg.slug,
             self._storage.get_scene_data(self._area.id, self._scene_cfg.slug) is not None,
             self._scene_cfg.entities is not None,
         )
@@ -124,7 +125,9 @@ class AreaLightingScene(Scene):
         await self._apply_skeleton(transition)
 
     async def _apply_stored(
-        self, stored: dict[str, Any], transition: float | None,
+        self,
+        stored: dict[str, Any],
+        transition: float | None,
     ) -> None:
         """Apply stored snapshot data to lights."""
         _LOGGER.debug("Applying scene data: %d entities", len(stored))
@@ -142,20 +145,35 @@ class AreaLightingScene(Scene):
             if target_state == "on":
                 # Apply stored attributes
                 for attr in (
-                    "brightness", "color_temp_kelvin", "color_temp",
-                    "hs_color", "rgb_color", "xy_color", "effect",
+                    "brightness",
+                    "color_temp_kelvin",
+                    "color_temp",
+                    "hs_color",
+                    "rgb_color",
+                    "xy_color",
+                    "effect",
                 ):
                     if attr in state_data:
                         service_data[attr] = state_data[attr]
                 _LOGGER.debug("light.turn_on: %s", service_data)
-                tasks.append(self.hass.services.async_call(
-                    "light", "turn_on", service_data, blocking=True,
-                ))
+                tasks.append(
+                    self.hass.services.async_call(
+                        "light",
+                        "turn_on",
+                        service_data,
+                        blocking=True,
+                    )
+                )
             else:
                 _LOGGER.debug("light.turn_off: %s", entity_id)
-                tasks.append(self.hass.services.async_call(
-                    "light", "turn_off", service_data, blocking=True,
-                ))
+                tasks.append(
+                    self.hass.services.async_call(
+                        "light",
+                        "turn_off",
+                        service_data,
+                        blocking=True,
+                    )
+                )
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -174,13 +192,23 @@ class AreaLightingScene(Scene):
                 service_data["transition"] = transition
 
             if light.in_scene(scene_slug):
-                tasks.append(self.hass.services.async_call(
-                    "light", "turn_on", service_data, blocking=True,
-                ))
+                tasks.append(
+                    self.hass.services.async_call(
+                        "light",
+                        "turn_on",
+                        service_data,
+                        blocking=True,
+                    )
+                )
             else:
-                tasks.append(self.hass.services.async_call(
-                    "light", "turn_off", service_data, blocking=True,
-                ))
+                tasks.append(
+                    self.hass.services.async_call(
+                        "light",
+                        "turn_off",
+                        service_data,
+                        blocking=True,
+                    )
+                )
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -230,14 +258,16 @@ class BehavioralScene(Scene):
         if ctrl is None:
             _LOGGER.warning(
                 "BehavioralScene %s: no controller for area %s",
-                self.entity_id, self._area.id,
+                self.entity_id,
+                self._area.id,
             )
             return
         method = getattr(ctrl, self._controller_method, None)
         if method is None:
             _LOGGER.warning(
                 "BehavioralScene %s: controller has no method %s",
-                self.entity_id, self._controller_method,
+                self.entity_id,
+                self._controller_method,
             )
             return
         await method()

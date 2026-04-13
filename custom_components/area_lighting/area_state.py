@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -34,15 +34,15 @@ class LightingState(Enum):
 
 
 class ActivationSource(Enum):
-    USER = "user"          # Explicit: service call, scene.turn_on, behavioral scene
-    REMOTE = "remote"      # Lutron remote button
-    MOTION = "motion"      # Motion sensor
+    USER = "user"  # Explicit: service call, scene.turn_on, behavioral scene
+    REMOTE = "remote"  # Lutron remote button
+    MOTION = "motion"  # Motion sensor
     OCCUPANCY = "occupancy"  # Occupancy sensor
     AMBIENCE = "ambience"  # Ambience mode toggle
-    HOLIDAY = "holiday"    # Holiday mode change
+    HOLIDAY = "holiday"  # Holiday mode change
     RESTORED = "restored"  # Loaded from persistence
-    MANUAL = "manual"      # Detected manual light adjustment
-    LINKED = "linked"      # Cross-area linked motion activation
+    MANUAL = "manual"  # Detected manual light adjustment
+    LINKED = "linked"  # Cross-area linked motion activation
 
 
 # Scene slugs that count as "ambient-style" (will be cleaned up when ambience disabled)
@@ -126,7 +126,8 @@ class AreaState:
         self.last_scene_change_monotonic = time.monotonic()
 
     def transition_to_circadian(
-        self, source: ActivationSource = ActivationSource.USER,
+        self,
+        source: ActivationSource = ActivationSource.USER,
     ) -> None:
         self._log_transition(LightingState.CIRCADIAN, "circadian", source)
         self.state = LightingState.CIRCADIAN
@@ -163,12 +164,19 @@ class AreaState:
         return prev
 
     def _log_transition(
-        self, new_state: LightingState, slug: str, source: ActivationSource,
+        self,
+        new_state: LightingState,
+        slug: str,
+        source: ActivationSource,
     ) -> None:
         _LOGGER.debug(
             "Transition: %s/%s (%s) → %s/%s (%s)",
-            self.state.value, self.scene_slug, self.source.value,
-            new_state.value, slug, source.value,
+            self.state.value,
+            self.scene_slug,
+            self.source.value,
+            new_state.value,
+            slug,
+            source.value,
         )
 
     # ── Persistence ────────────────────────────────────────────────────
