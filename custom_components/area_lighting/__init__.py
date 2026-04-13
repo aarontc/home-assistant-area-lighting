@@ -202,8 +202,12 @@ async def _register_scene_entities(
 
 async def _register_helper_entities(hass: HomeAssistant) -> None:
     """Register switch/select/number helper entities for each area."""
-    from homeassistant.components.number import DATA_COMPONENT as NUMBER_COMPONENT
-    from homeassistant.components.select import DATA_COMPONENT as SELECT_COMPONENT
+    from homeassistant.components.number import (  # type: ignore[attr-defined]
+        DATA_COMPONENT as NUMBER_COMPONENT,
+    )
+    from homeassistant.components.select import (  # type: ignore[attr-defined]
+        DATA_COMPONENT as SELECT_COMPONENT,
+    )
     from homeassistant.components.switch import DATA_COMPONENT as SWITCH_COMPONENT
 
     controllers: dict[str, AreaLightingController] = hass.data.get(DOMAIN, {}).get(
@@ -320,7 +324,9 @@ async def _assign_entities_to_ha_areas(
 
 async def _register_diagnostic_sensor(hass: HomeAssistant) -> None:
     """Register the diagnostic sensor via the sensor EntityComponent."""
-    from homeassistant.components.sensor import DATA_COMPONENT as SENSOR_DATA_COMPONENT
+    from homeassistant.components.sensor import (  # type: ignore[attr-defined]
+        DATA_COMPONENT as SENSOR_DATA_COMPONENT,
+    )
 
     component = hass.data.get(SENSOR_DATA_COMPONENT)
     if component is None:

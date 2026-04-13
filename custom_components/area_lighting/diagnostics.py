@@ -7,6 +7,7 @@ controllers, viewable via Developer Tools → States.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -38,7 +39,7 @@ class AreaLightingDiagnosticSensor(SensorEntity):
         self._attr_name = "Area Lighting Diagnostics"
         self._attr_unique_id = "area_lighting_diagnostics"
         self.entity_id = "sensor.area_lighting_diagnostics"
-        self._unsub_refresh = None
+        self._unsub_refresh: Callable[[], None] | None = None
 
     def _build_state_text(self) -> str:
         controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(

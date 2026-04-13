@@ -64,7 +64,7 @@ class AreaLightingSwitch(SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return getattr(self._controller, self._attr_key)
+        return bool(getattr(self._controller, self._attr_key))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if self._attr_key == "ambience_enabled":

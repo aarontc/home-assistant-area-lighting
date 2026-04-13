@@ -253,7 +253,7 @@ class AreaLightingController:
         now = dt_util.utcnow()
         remaining = (timer.deadline_utc - now).total_seconds()
         # Round to 1 decimal for readability
-        return round(max(0.0, remaining), 1)
+        return float(round(max(0.0, remaining), 1))
 
     def _motion_sensor_states(self) -> dict[str, dict[str, str | None]]:
         """Return current state and last_changed for all motion/occupancy sensors."""
@@ -582,6 +582,7 @@ class AreaLightingController:
         storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
         stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
 
+        entities: dict[str, Any] | None
         if stored:
             entities = stored
         else:
@@ -679,7 +680,8 @@ class AreaLightingController:
         if action.action == ActionType.NOOP:
             return
         if action.action == ActionType.ACTIVATE_SCENE:
-            await self._activate_scene(action.scene_slug, source, transition)
+            if action.scene_slug is not None:
+                await self._activate_scene(action.scene_slug, source, transition)
         elif action.action == ActionType.ACTIVATE_HOLIDAY_SCENE:
             await self._activate_holiday_scene(source, transition)
         elif action.action == ActionType.SET_SUN_POSITION:

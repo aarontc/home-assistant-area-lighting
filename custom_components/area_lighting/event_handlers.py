@@ -30,11 +30,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _controllers(hass: HomeAssistant) -> dict[str, AreaLightingController]:
-    return hass.data[DOMAIN]["controllers"]
+    result: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
+    return result
 
 
 def _config(hass: HomeAssistant) -> AreaLightingConfig:
-    return hass.data[DOMAIN]["config"]
+    result: AreaLightingConfig = hass.data[DOMAIN]["config"]
+    return result
 
 
 _REPAIRS_ISSUE_ID = "missing_external_entities"
@@ -641,7 +643,7 @@ def _make_occupancy_handler(ctrl: AreaLightingController):
             # "no sensor is reporting on" is the trigger.
             any_on = any(
                 (s := ctrl.hass.states.get(sid)) is not None and s.state == STATE_ON
-                for sid in ctrl.area.occupancy_light_sensor_ids
+                for sid in (ctrl.area.occupancy_light_sensor_ids or [])
             )
             if not any_on:
                 ctrl.hass.async_create_task(ctrl.handle_occupancy_off())
