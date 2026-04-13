@@ -1,0 +1,22 @@
+{
+  "domain": "area_lighting",
+  "name": "Area Lighting",
+  "codeowners": [],
+  "dependencies": [
+    "input_boolean",
+    "input_select",
+    "scene",
+    "sensor",
+    "switch",
+    "select",
+    "number"
+  ],
+  "after_dependencies": [
+    "circadian_lighting",
+    "lutron_caseta"
+  ],
+  "documentation": "",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "0.1.0"
+}

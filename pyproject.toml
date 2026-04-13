@@ -1,0 +1,63 @@
+[project]
+name = "area-lighting"
+version = "0.1.0"
+description = "Area Lighting – Home Assistant custom component for multi-scene, motion-aware room lighting"
+requires-python = ">=3.13.2"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-xdist>=3",
+    "pytest-cov>=6",
+    "pytest-homeassistant-custom-component>=0.13",
+    "ruff>=0.11",
+    "mypy>=1.15",
+    "homeassistant-stubs>=2025.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["custom_components/area_lighting/tests"]
+asyncio_mode = "auto"
+addopts = "-n auto --strict-markers --import-mode=importlib"
+markers = [
+    "unit: pure-function tests with no HA dependency",
+    "integration: tests using pytest-homeassistant-custom-component",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "ASYNC", # async best practices
+    "B",     # flake8-bugbear
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort
+    "PERF",  # performance anti-patterns
+    "PT",    # pytest style
+    "RUF",   # ruff-specific
+    "S",     # bandit security
+    "SIM",   # flake8-simplify
+    "T20",   # no stray print()
+    "UP",    # pyupgrade
+    "W",     # pycodestyle warnings
+]
+ignore = [
+    "E501",  # line length (formatter handles it)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"custom_components/area_lighting/tests/**" = ["S101"]
+"custom_components/area_lighting/conftest.py" = ["S101", "T20"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

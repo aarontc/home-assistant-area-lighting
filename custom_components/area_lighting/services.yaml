@@ -1,0 +1,102 @@
+lighting_on:
+  name: Turn on area lighting
+  description: Turns on lighting for an area, cycling through scenes intelligently based on the current state, holiday mode, night mode, and sun position.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID (e.g., kitchen, living_room).
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_off:
+  name: Turn off area lighting
+  description: Turns off lighting for an area. Falls back to the ambient scene when ambience is enabled and the area isn't already in an ambience-owned state.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_off_fade:
+  name: Fade off area lighting
+  description: Turns off lighting for an area with a fade transition. Used by motion/occupancy timer expiry.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_favorite:
+  name: Activate favorite scene
+  description: Activates the favorite scene for an area. Cycles between the active holiday scene (if any) and the night scene.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_raise:
+  name: Raise area brightness
+  description: Raises brightness of the lights that are currently on in the area by the configured brightness step percentage. Marks the area as dimmed without losing its scene identity.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_lower:
+  name: Lower area brightness
+  description: Lowers brightness of the lights that are currently on in the area by the configured brightness step percentage. Marks the area as dimmed without losing its scene identity. No-op when the area is off.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+lighting_circadian:
+  name: Activate circadian lighting
+  description: Activates circadian lighting for an area (enables the circadian_lighting switches and applies their brightness/color temperature to the lights).
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
+snapshot_scene:
+  name: Snapshot area scene
+  description: Captures the current light states in an area and saves them as the definition for the named scene. Adjust lights to the desired levels before calling this.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+    scene:
+      name: Scene slug
+      description: The scene slug to overwrite (e.g., daylight, evening, night, ambient).
+      required: true
+      example: daylight
+      selector:
+        text:

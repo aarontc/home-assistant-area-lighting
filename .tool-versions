@@ -1,0 +1,4 @@
+python 3.13
+uv 0.10.7
+dagger 0.20.5
+golang 1.26.2
