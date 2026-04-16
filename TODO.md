@@ -19,3 +19,11 @@
 * **Custom remote button mappings.** `LutronRemoteConfig.buttons` is parsed but the remote handler hardcodes `LUTRON_BUTTON_MAP`. The favorite button always triggers the standard favorite action instead of respecting per-remote overrides. Affects main_bedroom bedside remotes (bedside_east→bedside_aaron, bedside_west→bedside_mara, entry→night).
 
 * **Follow-area scene mirroring.** `follow_area_id` was removed (D11). main_closet (→main_bathroom) and pantry (→kitchen) now operate independently instead of mirroring their parent area's scene.
+
+* **Submit logo to `home-assistant/brands`.** HA and HACS load brand images exclusively from `brands.home-assistant.io`, backed by [home-assistant/brands](https://github.com/home-assistant/brands) — not from this repo. Until a PR is merged there, the logo only shows in the rendered README (HACS detail view, GitLab/GitHub repo pages). Submit a PR adding `custom_integrations/area_lighting/` with the following files, generated from `assets/Home Assistant Area Lighting.png` (1024×1024 master):
+  * `icon.png` — 256×256, square, PNG with transparency, **visible content in the inner 192×192** (~32px transparent padding on all sides)
+  * `icon@2x.png` — 512×512, square, ~64px transparent padding (visible content 384×384)
+  * `logo.png` — (optional, only if we want a wordmark variant) max height 128, transparent background
+  * `logo@2x.png` — (optional) max height 256
+  
+  Spec: https://github.com/home-assistant/brands#guideline. Validated by `hassfest` in the brands repo CI. After merge, the logo appears automatically in HA's "Add Integration" picker, the configured integration card (Settings → Devices & Services), and HACS's card + detail view.

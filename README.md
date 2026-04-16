@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Home%20Assistant%20Area%20Lighting%20%28128x128%29.png" alt="Area Lighting" width="128" height="128">
+</p>
+
 [![GitLab CI](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/badges/main/pipeline.svg)](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/pipelines)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 
