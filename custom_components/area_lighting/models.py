@@ -144,6 +144,10 @@ class AreaConfig:
     brightness_step_pct: int | None = None
     # D6: per-area night-mode fade override
     night_fadeout_seconds: float | None = None
+    # Leader/follower: when set, this area follows the named leader's scene state.
+    leader_area_id: str | None = None
+    # When True, follower also follows leader transitions to off/ambient.
+    follow_leader_deactivation: bool = False
 
     circadian_switches: list[CircadianSwitchConfig] = field(default_factory=list)
     lights: list[LightConfig] = field(default_factory=list)

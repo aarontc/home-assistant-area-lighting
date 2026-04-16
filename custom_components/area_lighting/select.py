@@ -62,6 +62,11 @@ class AreaLastSceneSelect(SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Allow manual scene selection via the select entity."""
+        _LOGGER.debug(
+            "Area %s: select last_scene set to %s",
+            self._controller.area.id,
+            option,
+        )
         self._controller.current_scene = option
 
     async def async_added_to_hass(self) -> None:

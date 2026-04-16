@@ -29,14 +29,34 @@ from .motion_condition import evaluate_motion_condition
 _LOGGER = logging.getLogger(__name__)
 
 
+def _format_motion_condition(cond) -> str:
+    """Produce a short human-readable description of a motion condition
+    for log lines. Reads only the fields MotionLightCondition exposes.
+    """
+    parts: list[str] = []
+    if cond.entity_ids:
+        parts.append(f"entity_ids={list(cond.entity_ids)}")
+    elif cond.entity_id:
+        parts.append(f"entity_id={cond.entity_id}")
+    if cond.aggregate:
+        parts.append(f"aggregate={cond.aggregate}")
+    if cond.attribute:
+        parts.append(f"attribute={cond.attribute}")
+    if cond.state is not None:
+        parts.append(f"state={cond.state}")
+    if cond.above is not None:
+        parts.append(f"above={cond.above}")
+    if cond.below is not None:
+        parts.append(f"below={cond.below}")
+    return " ".join(parts) if parts else "(empty)"
+
+
 def _controllers(hass: HomeAssistant) -> dict[str, AreaLightingController]:
-    result: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
-    return result
+    return hass.data[DOMAIN]["controllers"]  # type: ignore[no-any-return]
 
 
 def _config(hass: HomeAssistant) -> AreaLightingConfig:
-    result: AreaLightingConfig = hass.data[DOMAIN]["config"]
-    return result
+    return hass.data[DOMAIN]["config"]  # type: ignore[no-any-return]
 
 
 _REPAIRS_ISSUE_ID = "missing_external_entities"
@@ -389,6 +409,12 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
             if short.startswith(prefix):
                 scene_slug = short[len(prefix) :]
                 if scene_slug:
+                    _LOGGER.debug(
+                        "Area %s: scene_activated entity=%s slug=%s",
+                        area_id,
+                        entity_id,
+                        scene_slug,
+                    )
                     hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
                 break
 
@@ -444,7 +470,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
 
     def _skip(reason: str, entity_id: str) -> None:
         _LOGGER.debug(
-            "area_lighting[%s] manual detection skipped (%s) for %s",
+            "Area %s: manual detection skipped reason=%s entity=%s",
             area_id,
             reason,
             entity_id,
@@ -500,7 +526,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             return
 
         _LOGGER.info(
-            "area_lighting[%s] manual detection fired for %s",
+            "Area %s: manual detection fired entity=%s",
             area_id,
             entity_id,
         )
@@ -549,7 +575,14 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
 
         # Area-specific conditions
         for cond in area.motion_light_conditions:
-            if not evaluate_motion_condition(cond, hass.states.get):
+            passed = evaluate_motion_condition(cond, hass.states.get)
+            _LOGGER.debug(
+                "Area %s: motion_condition %s → %s",
+                ctrl.area.id,
+                _format_motion_condition(cond),
+                "pass" if passed else "fail",
+            )
+            if not passed:
                 return False
 
         return True
@@ -560,6 +593,15 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
         old_state = event.data.get("old_state")
         if not new_state or not old_state:
             return
+
+        entity_id = new_state.entity_id
+        _LOGGER.debug(
+            "Area %s: motion sensor %s %s→%s",
+            ctrl.area.id,
+            entity_id,
+            old_state.state,
+            new_state.state,
+        )
 
         if new_state.state == STATE_ON and old_state.state != STATE_ON:
             if _check_conditions():
@@ -590,6 +632,15 @@ def _make_occupancy_handler(ctrl: AreaLightingController):
         old_state = event.data.get("old_state")
         if not new_state or not old_state:
             return
+
+        entity_id = new_state.entity_id
+        _LOGGER.debug(
+            "Area %s: occupancy sensor %s %s→%s",
+            ctrl.area.id,
+            entity_id,
+            old_state.state,
+            new_state.state,
+        )
 
         if new_state.state == STATE_ON and old_state.state != STATE_ON:
             ctrl.hass.async_create_task(ctrl.handle_occupancy_on())
@@ -652,6 +703,12 @@ def _make_ambient_zone_handler(hass: HomeAssistant, config: AreaLightingConfig):
         entity_id = new_state.entity_id
         # Extract zone name: input_boolean.lighting_{zone}_ambient
         zone = entity_id.removeprefix("input_boolean.lighting_").removesuffix("_ambient")
+        _LOGGER.debug(
+            "ambient_zone %s %s→%s",
+            zone,
+            old_state.state,
+            new_state.state,
+        )
 
         controllers = _controllers(hass)
         for area in config.enabled_areas:
@@ -680,6 +737,7 @@ def _make_holiday_handler(hass: HomeAssistant, config: AreaLightingConfig):
             return
 
         mode = new_state.state
+        _LOGGER.debug("holiday_mode changed to %s", mode)
         controllers = _controllers(hass)
         for area in config.enabled_areas:
             if not area.event_handlers or not area.has_holiday_scenes:
@@ -727,20 +785,44 @@ def _make_remote_handler(hass: HomeAssistant, config: AreaLightingConfig):
             return
 
         device_id = event.data.get("device_id", "")
-        # The button subtype is in `button_type`, NOT `action`. This was
-        # the long-standing bug: we were reading `action` as the subtype.
         button_type = event.data.get("button_type", "")
         button_slug = LUTRON_BUTTON_MAP.get(button_type)
-        if not button_slug:
-            _LOGGER.debug("Unknown Lutron button_type: %s", button_type)
-            return
 
         matches = device_map.get(device_id, [])
+
+        if not button_slug:
+            # Unknown button types are rare and worth surfacing at INFO
+            # (visible without enabling DEBUG). Include area/remote for
+            # context when the device is one of ours.
+            if matches:
+                for area_id, remote in matches:
+                    _LOGGER.info(
+                        "Area %s: unknown Lutron button_type=%s remote=%s device=%s",
+                        area_id,
+                        button_type,
+                        remote.name,
+                        device_id,
+                    )
+            else:
+                _LOGGER.info(
+                    "Unknown Lutron button_type=%s from unregistered device=%s",
+                    button_type,
+                    device_id,
+                )
+            return
+
         if not matches:
             return
 
         controllers = _controllers(hass)
         for area_id, remote in matches:
+            _LOGGER.debug(
+                "Area %s: remote button=%s remote=%s device=%s",
+                area_id,
+                button_slug,
+                remote.name,
+                device_id,
+            )
             ctrl = controllers.get(area_id)
             if not ctrl:
                 continue
@@ -762,6 +844,13 @@ def _make_remote_handler(hass: HomeAssistant, config: AreaLightingConfig):
                 data = svc_call.get("data", {})
                 target = svc_call.get("target", {})
                 if service:
+                    _LOGGER.debug(
+                        "Area %s: remote additional_action service=%s data=%s target=%s",
+                        area_id,
+                        service,
+                        data,
+                        target,
+                    )
                     domain, svc = service.split(".", 1)
                     call_data = {**data, **target}
                     hass.async_create_task(hass.services.async_call(domain, svc, call_data))

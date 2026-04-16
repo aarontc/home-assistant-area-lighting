@@ -135,6 +135,12 @@ class AreaLightingController:
         # Deadlines to be restored by restore_timers() after HA startup (D4).
         self._pending_timer_restore: dict[str, str | None] = {}
 
+        # Leader/follower wiring (populated by __init__.py after every
+        # controller exists). Leaderless areas keep `leader = None`;
+        # leaders without followers keep `followers == []`.
+        self.leader: AreaLightingController | None = None
+        self.followers: list[AreaLightingController] = []
+
     # ── Persistence ────────────────────────────────────────────────────
 
     def load_persisted_state(self, data: dict) -> None:
@@ -355,6 +361,43 @@ class AreaLightingController:
             self._state.transition_to_scene(value, ActivationSource.USER)
         self._notify_state_change()
 
+    def current_on_scene_slug(self) -> str | None:
+        """Return the concrete on-scene slug the area is showing, or None.
+
+        Returns None when the area is off, in an ambient-like scene
+        (ambient/christmas/halloween), or in manual mode. Otherwise returns
+        the active scene slug (e.g. "evening", "circadian").
+
+        Consumed by follower areas to decide whether to mirror the leader.
+        """
+        if self._state.is_off:
+            return None
+        if self._state.is_manual:
+            return None
+        if self._state.is_ambient_like:
+            return None
+        return self._state.scene_slug
+
+    def _resolve_leader_on_slug(self) -> str | None:
+        """Return the scene slug the follower should mirror, or None.
+
+        Returns None when:
+        - this controller has no leader
+        - the leader is off, ambient, or manual
+        - the leader's scene slug is not defined on this follower
+
+        The caller (lighting_on) interprets None as "no hint — fall back to
+        the area's own default on-scene logic".
+        """
+        if self.leader is None:
+            return None
+        leader_slug = self.leader.current_on_scene_slug()
+        if leader_slug is None:
+            return None
+        if leader_slug not in self.area.scene_slugs:
+            return None
+        return leader_slug
+
     @property
     def dimmed(self) -> bool:
         return self._state.dimmed
@@ -473,9 +516,31 @@ class AreaLightingController:
         self._state_listeners = [c for c in self._state_listeners if c is not callback]
 
     def _notify_state_change(self) -> None:
+        self._log_state_snapshot_if_changed()
         for callback in self._state_listeners:
             callback()
         self._schedule_save()
+
+    def _log_state_snapshot_if_changed(self) -> None:
+        """Log a single line when primary state/scene/source changes.
+
+        Avoids log spam from setters that don't change lighting state
+        (e.g., ambience_enabled toggled to the same value).
+        """
+        snapshot = (
+            self._state.state.value,
+            self._state.scene_slug,
+            self._state.source.value,
+            self._state.dimmed,
+        )
+        if snapshot == getattr(self, "_last_logged_snapshot", None):
+            return
+        self._last_logged_snapshot = snapshot
+        _LOGGER.debug(
+            "Area %s: state state=%s scene=%s source=%s dimmed=%s",
+            self.area.id,
+            *snapshot,
+        )
 
     # ── HA state helpers ───────────────────────────────────────────────
 
@@ -502,7 +567,54 @@ class AreaLightingController:
 
     async def _call_service(self, service: str, **kwargs: Any) -> None:
         domain, svc = service.split(".", 1)
+        _LOGGER.debug(
+            "Area %s: service_call %s %s",
+            self.area.id,
+            service,
+            self._fmt_service_kwargs(service, kwargs),
+        )
         await self.hass.services.async_call(domain, svc, kwargs, blocking=True)
+
+    @staticmethod
+    def _fmt_service_kwargs(service: str, kwargs: dict[str, Any]) -> str:
+        """Format service kwargs for logging — only the keys that matter.
+
+        Keeps log lines grep-friendly by dropping noise. The selected keys
+        are the ones a troubleshooter actually wants to see at a glance.
+        """
+        relevant_keys = (
+            "entity_id",
+            "brightness",
+            "brightness_step_pct",
+            "color_temp_kelvin",
+            "color_temp",
+            "rgb_color",
+            "hs_color",
+            "xy_color",
+            "effect",
+            "transition",
+        )
+        parts = [f"{k}={kwargs[k]}" for k in relevant_keys if k in kwargs]
+        return " ".join(parts) if parts else "(no args)"
+
+    def _propagate_to_followers(
+        self,
+        new_slug: str | None,
+        reason,
+    ) -> None:
+        """Notify every follower of this leader's state transition.
+
+        Schedules each follower's handle_leader_change as a separate HA
+        task so they run asynchronously and independently. The follower
+        applies its own Scenario B rules.
+
+        `reason` is a LeaderReason — imported locally inside _activate_scene
+        and handle_manual_light_change callers to avoid top-level clutter.
+        """
+        if not self.followers:
+            return
+        for follower in self.followers:
+            self.hass.async_create_task(follower.handle_leader_change(new_slug, reason))
 
     async def _activate_scene(
         self,
@@ -516,6 +628,8 @@ class AreaLightingController:
         Any transition OUT of a circadian state disables the circadian
         switches first so they don't fight the new scene's light settings.
         """
+        from .area_state import LeaderReason
+
         if scene_slug == SCENE_OFF_INTERNAL:
             await self._disable_circadian_switches()
             await self._turn_off_all_lights(transition)
@@ -523,11 +637,18 @@ class AreaLightingController:
             self._state.transition_to_off(source)
             self._enforce_occupancy_timer()
             self._notify_state_change()
+            if source != ActivationSource.LEADER:
+                self._propagate_to_followers(None, LeaderReason.OFF)
             return
 
         if scene_slug == SCENE_CIRCADIAN:
             self._active_scene_targets = {}
             await self._activate_circadian(source)
+            if source != ActivationSource.LEADER:
+                self._propagate_to_followers(
+                    SCENE_CIRCADIAN,
+                    LeaderReason.SCENE_ACTIVATED,
+                )
             return
 
         # Visual scene → disable circadian first so the switches stop
@@ -538,6 +659,15 @@ class AreaLightingController:
         self._state.transition_to_scene(scene_slug, source)
         self._enforce_occupancy_timer()
         self._notify_state_change()
+
+        if source != ActivationSource.LEADER:
+            if scene_slug in ("ambient", "christmas", "halloween"):
+                self._propagate_to_followers(scene_slug, LeaderReason.AMBIENT)
+            else:
+                self._propagate_to_followers(
+                    scene_slug,
+                    LeaderReason.SCENE_ACTIVATED,
+                )
 
     async def _activate_circadian(
         self,
@@ -771,7 +901,8 @@ class AreaLightingController:
         if action.action == ActionType.NOOP:
             return
         if action.action == ActionType.ACTIVATE_SCENE:
-            await self._activate_scene(action.scene_slug or "", source, transition)
+            if action.scene_slug is not None:
+                await self._activate_scene(action.scene_slug, source, transition)
         elif action.action == ActionType.ACTIVATE_HOLIDAY_SCENE:
             await self._activate_holiday_scene(source, transition)
         elif action.action == ActionType.SET_SUN_POSITION:
@@ -875,6 +1006,29 @@ class AreaLightingController:
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle 'on' action with scene cycling logic."""
+        _LOGGER.debug(
+            "Area %s: lighting_on source=%s current_scene=%s dimmed=%s",
+            self.area.id,
+            source.value,
+            self._state.scene_slug,
+            self._state.dimmed,
+        )
+
+        # Scenario A: if we're transitioning from off/ambient → on and
+        # have a leader with a concrete on-scene we also define, mirror
+        # the leader instead of running our own cycle logic.
+        if self._state.is_off or self._state.is_ambient_like:
+            hint = self._resolve_leader_on_slug()
+            if hint is not None:
+                _LOGGER.debug(
+                    "Area %s: mirroring leader %s scene %s",
+                    self.area.id,
+                    self.leader.area.id if self.leader else "?",
+                    hint,
+                )
+                await self._activate_scene(hint, source)
+                return
+
         from_motion = source == ActivationSource.MOTION
 
         action = determine_on_action(
@@ -885,6 +1039,12 @@ class AreaLightingController:
             motion_override_ambient=self._motion_override_ambient,
             holiday_mode=self._get_holiday_mode(),
             night_mode=self._night_mode,
+        )
+        _LOGGER.debug(
+            "Area %s: on_decision action=%s target_scene=%s",
+            self.area.id,
+            action.action.name,
+            getattr(action, "scene_slug", None),
         )
 
         if action.action == ActionType.NOOP:
@@ -910,6 +1070,12 @@ class AreaLightingController:
         turn-off rather than an abrupt snap. Distinct from
         lighting_off_fade which uses the motion fade.
         """
+        _LOGGER.debug(
+            "Area %s: lighting_off source=%s current_scene=%s",
+            self.area.id,
+            source.value,
+            self._state.scene_slug,
+        )
         action = determine_off_action(
             current_scene=self._state.scene_slug,
             source=self._state.source.value,
@@ -917,6 +1083,12 @@ class AreaLightingController:
             area_ambience_enabled=self._ambience_enabled,
             holiday_mode=self._get_holiday_mode(),
             ambient_scene_mode=self._get_ambient_scene_mode(),
+        )
+        _LOGGER.debug(
+            "Area %s: off_decision action=%s target_scene=%s",
+            self.area.id,
+            action.action.name,
+            getattr(action, "scene_slug", None),
         )
         ambient_fallback = (
             action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
@@ -933,6 +1105,13 @@ class AreaLightingController:
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle fading off (motion/occupancy timer)."""
+        _LOGGER.debug(
+            "Area %s: lighting_off_fade source=%s current_scene=%s fade=%.1fs",
+            self.area.id,
+            source.value,
+            self._state.scene_slug,
+            self._motion_fade_seconds(),
+        )
         await self._disable_circadian_switches()
 
         action = determine_off_fade_action(
@@ -942,6 +1121,12 @@ class AreaLightingController:
             area_ambience_enabled=self._ambience_enabled,
             holiday_mode=self._get_holiday_mode(),
             ambient_scene_mode=self._get_ambient_scene_mode(),
+        )
+        _LOGGER.debug(
+            "Area %s: off_fade_decision action=%s target_scene=%s",
+            self.area.id,
+            action.action.name,
+            getattr(action, "scene_slug", None),
         )
         ambient_fallback = (
             action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
@@ -958,10 +1143,22 @@ class AreaLightingController:
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Handle 'favorite' action."""
+        _LOGGER.debug(
+            "Area %s: lighting_favorite source=%s current_scene=%s",
+            self.area.id,
+            source.value,
+            self._state.scene_slug,
+        )
         action = determine_favorite_action(
             current_scene=self._state.scene_slug,
             scene_slugs=self.area.scene_slugs,
             holiday_mode=self._get_holiday_mode(),
+        )
+        _LOGGER.debug(
+            "Area %s: favorite_decision action=%s target_scene=%s",
+            self.area.id,
+            action.action.name,
+            getattr(action, "scene_slug", None),
         )
         await self._resolve_and_activate(action, source)
 
@@ -970,10 +1167,21 @@ class AreaLightingController:
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Activate circadian mode (public method, called by service)."""
+        _LOGGER.debug(
+            "Area %s: lighting_circadian source=%s",
+            self.area.id,
+            source.value,
+        )
         await self._activate_circadian(source)
 
     async def lighting_raise(self) -> None:
         """Raise brightness of currently-on lights (D2)."""
+        _LOGGER.debug(
+            "Area %s: lighting_raise current_scene=%s dimmed=%s",
+            self.area.id,
+            self._state.scene_slug,
+            self._state.dimmed,
+        )
         step = self._brightness_step_pct()
 
         if self._state.is_off:
@@ -1001,6 +1209,12 @@ class AreaLightingController:
 
     async def lighting_lower(self) -> None:
         """Lower brightness of currently-on lights (D2)."""
+        _LOGGER.debug(
+            "Area %s: lighting_lower current_scene=%s dimmed=%s",
+            self.area.id,
+            self._state.scene_slug,
+            self._state.dimmed,
+        )
         if self._state.is_off:
             return  # explicit no-op per README §"Remote `lower`" item 1
 
@@ -1023,6 +1237,11 @@ class AreaLightingController:
         Any transition away from circadian disables the circadian switches
         so they don't keep fighting the externally-activated scene.
         """
+        _LOGGER.debug(
+            "Area %s: handle_scene_activated scene=%s",
+            self.area.id,
+            scene_slug,
+        )
         if scene_slug == SCENE_OFF_INTERNAL:
             return
         # External activation defaults to USER source
@@ -1045,6 +1264,7 @@ class AreaLightingController:
         Cancels any running timers so they can't fire into an already-off
         area (README §4 "All lights externally turned off" bullet 3).
         """
+        _LOGGER.debug("Area %s: handle_lights_all_off", self.area.id)
         self._active_scene_targets = {}
         self._state.transition_to_off(ActivationSource.USER)
         await self._disable_circadian_switches()
@@ -1059,13 +1279,28 @@ class AreaLightingController:
         Disables circadian switches so they don't immediately overwrite
         the user's manual change with a circadian-calculated one.
         """
+        _LOGGER.debug(
+            "Area %s: handle_manual_light_change current_scene=%s dimmed=%s",
+            self.area.id,
+            self._state.scene_slug,
+            self._state.dimmed,
+        )
         if not self._state.dimmed:
             await self._disable_circadian_switches()
             self._state.transition_to_manual()
             self._enforce_occupancy_timer()
             self._notify_state_change()
+            from .area_state import LeaderReason
+
+            self._propagate_to_followers(None, LeaderReason.MANUAL)
 
     async def handle_motion_on(self) -> None:
+        _LOGGER.debug(
+            "Area %s: handle_motion_on current_scene=%s source=%s",
+            self.area.id,
+            self._state.scene_slug,
+            self._state.source.value,
+        )
         self._last_motion_event = "motion_on"
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
@@ -1094,6 +1329,12 @@ class AreaLightingController:
         even when motion lighting is disabled or the area is in a non-motion
         state (e.g. manual, user-activated scene).
         """
+        _LOGGER.debug(
+            "Area %s: handle_motion_off state_source=%s night_mode=%s",
+            self.area.id,
+            self._state.source.value,
+            self._night_mode,
+        )
         self._last_motion_event = "motion_off"
         if self._state.source != ActivationSource.MOTION:
             return
@@ -1192,10 +1433,16 @@ class AreaLightingController:
             self._occupancy_timer.start(duration=self._occupancy_off_duration())
 
     async def handle_occupancy_on(self) -> None:
+        _LOGGER.debug("Area %s: handle_occupancy_on", self.area.id)
         self._occupancy_timer.cancel()
         self._notify_state_change()
 
     async def handle_occupancy_off(self) -> None:
+        _LOGGER.debug(
+            "Area %s: handle_occupancy_off current_scene=%s",
+            self.area.id,
+            self._state.scene_slug,
+        )
         if self._state.is_off or self._state.is_ambient_like:
             return
         # Restart timer with full duration (sensor cleared, countdown resets)
@@ -1203,13 +1450,20 @@ class AreaLightingController:
         self._notify_state_change()
 
     async def handle_occupancy_lights_on(self) -> None:
+        _LOGGER.debug("Area %s: handle_occupancy_lights_on", self.area.id)
         self._enforce_occupancy_timer()
 
     async def handle_occupancy_lights_off(self) -> None:
+        _LOGGER.debug("Area %s: handle_occupancy_lights_off", self.area.id)
         self._occupancy_timer.cancel()
 
     async def handle_ambient_enabled(self) -> None:
         """Ambient mode enabled (zone or area). Activate ambient scene if off."""
+        _LOGGER.debug(
+            "Area %s: handle_ambient_enabled current_scene=%s",
+            self.area.id,
+            self._state.scene_slug,
+        )
         if not self._state.is_off:
             return
         holiday = self._get_holiday_mode()
@@ -1221,12 +1475,24 @@ class AreaLightingController:
 
     async def handle_ambient_disabled(self) -> None:
         """Ambient mode disabled. Only turn off if it was activated by ambience."""
+        _LOGGER.debug(
+            "Area %s: handle_ambient_disabled was_ambient_activated=%s",
+            self.area.id,
+            self._state.was_ambient_activated,
+        )
         if not self._state.was_ambient_activated:
             return
         await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.AMBIENCE)
 
     async def handle_holiday_changed(self, mode: str) -> None:
         """Holiday mode changed."""
+        _LOGGER.debug(
+            "Area %s: handle_holiday_changed mode=%s current_scene=%s source=%s",
+            self.area.id,
+            mode,
+            self._state.scene_slug,
+            self._state.source.value,
+        )
         if mode != HOLIDAY_MODE_NONE:
             # Activate the new holiday scene if:
             # - lights are off, OR
@@ -1248,7 +1514,69 @@ class AreaLightingController:
                 await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.HOLIDAY)
 
     async def handle_circadian_enabled(self) -> None:
+        _LOGGER.debug("Area %s: handle_circadian_enabled", self.area.id)
         await self._activate_circadian(ActivationSource.USER)
+
+    async def handle_leader_change(
+        self,
+        new_slug: str | None,
+        reason,
+    ) -> None:
+        """Apply a leader's state transition to this follower (Scenario B).
+
+        Follower is left alone when off, ambient-like, or in manual mode.
+        For concrete scene activations, follower activates the same slug
+        if it has one; missing slugs are logged and skipped.
+        For OFF/AMBIENT leader transitions, follower only follows when
+        configured via follow_leader_deactivation. MANUAL never propagates.
+
+        `reason` is a LeaderReason enum; imported locally to avoid
+        cluttering the top of the module with feature-specific types.
+        """
+        from .area_state import LeaderReason
+
+        _LOGGER.debug(
+            "Area %s: handle_leader_change leader=%s reason=%s slug=%s follower_state=%s",
+            self.area.id,
+            self.leader.area.id if self.leader else None,
+            reason.value,
+            new_slug,
+            self._state.state.value,
+        )
+
+        if self._state.is_off:
+            return
+        if self._state.is_ambient_like:
+            return
+        if self._state.is_manual:
+            return
+
+        if reason is LeaderReason.SCENE_ACTIVATED:
+            if new_slug is None or new_slug not in self.area.scene_slugs:
+                _LOGGER.warning(
+                    "Area %s: leader %s activated scene %s but follower has "
+                    "no such scene; skipping",
+                    self.area.id,
+                    self.leader.area.id if self.leader else "?",
+                    new_slug,
+                )
+                return
+            await self._activate_scene(new_slug, ActivationSource.LEADER)
+            return
+
+        if reason is LeaderReason.OFF:
+            if not self.area.follow_leader_deactivation:
+                return
+            await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.LEADER)
+            return
+
+        if reason is LeaderReason.AMBIENT:
+            if not self.area.follow_leader_deactivation:
+                return
+            await self._activate_scene("ambient", ActivationSource.LEADER)
+            return
+
+        # LeaderReason.MANUAL: always no-op
 
     # ── Timer callbacks ────────────────────────────────────────────────
 

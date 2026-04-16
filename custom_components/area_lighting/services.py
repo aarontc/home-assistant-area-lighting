@@ -42,7 +42,7 @@ def _get_controller(hass: HomeAssistant, area_id: str) -> AreaLightingController
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
     controller = controllers.get(area_id)
     if not controller:
-        _LOGGER.warning("No controller for area_id: %s", area_id)
+        _LOGGER.warning("Area %s: no controller registered", area_id)
     return controller
 
 
@@ -52,8 +52,17 @@ async def async_register_services(hass: HomeAssistant) -> None:
     # Lighting action services
     for service_name, method_name in SERVICE_MAP.items():
 
-        async def _handler(call: ServiceCall, _method=method_name) -> None:
+        async def _handler(
+            call: ServiceCall,
+            _method=method_name,
+            _svc=service_name,
+        ) -> None:
             area_id = call.data["area_id"]
+            _LOGGER.debug(
+                "Area %s: service %s invoked",
+                area_id,
+                _svc,
+            )
             controller = _get_controller(hass, area_id)
             if controller:
                 method = getattr(controller, _method)
@@ -70,19 +79,24 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def _handle_snapshot(call: ServiceCall) -> None:
         area_id = call.data["area_id"]
         scene_slug = call.data["scene"]
+        _LOGGER.debug(
+            "Area %s: service snapshot_scene invoked scene=%s",
+            area_id,
+            scene_slug,
+        )
         storage: SceneStorage = hass.data[DOMAIN]["scene_storage"]
         config = hass.data[DOMAIN]["config"]
         area = config.area_by_id(area_id)
         if not area:
-            _LOGGER.warning("snapshot_scene: unknown area_id %s", area_id)
+            _LOGGER.warning("Area %s: snapshot_scene unknown area_id", area_id)
             return
 
         # Validate scene slug exists for this area
         if scene_slug not in area.scene_slugs:
             _LOGGER.warning(
-                "snapshot_scene: scene '%s' not configured for area '%s'",
-                scene_slug,
+                "Area %s: snapshot_scene scene '%s' not configured",
                 area_id,
+                scene_slug,
             )
             return
 

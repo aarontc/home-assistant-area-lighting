@@ -26,7 +26,7 @@ async def async_setup_platform(
         return
 
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
-    entities: list[_BaseAreaNumber] = []
+    entities: list[NumberEntity] = []
     for controller in controllers.values():
         entities.append(AreaManualFadeoutNumber(controller))
         entities.append(AreaMotionFadeoutNumber(controller))
@@ -75,6 +75,12 @@ class _BaseFadeoutSeconds(_BaseAreaNumber):
         return float(getattr(self._controller, self._controller_attr))
 
     async def async_set_native_value(self, value: float) -> None:
+        _LOGGER.debug(
+            "Area %s: number %s set to %.1f s",
+            self._controller.area.id,
+            self._controller_attr,
+            float(value),
+        )
         setattr(self._controller, self._controller_attr, float(value))
 
 
@@ -126,10 +132,17 @@ class _BaseTimeoutMinutes(_BaseAreaNumber):
 
     @property
     def native_value(self) -> float:
-        seconds = float(getattr(self._controller, self._controller_attr))
+        seconds = getattr(self._controller, self._controller_attr)
         return float(round(seconds / 60.0, 2))
 
     async def async_set_native_value(self, value: float) -> None:
+        _LOGGER.debug(
+            "Area %s: number %s set to %.1f min (%.1f s)",
+            self._controller.area.id,
+            self._controller_attr,
+            float(value),
+            float(value) * 60.0,
+        )
         setattr(self._controller, self._controller_attr, float(value) * 60.0)
 
 

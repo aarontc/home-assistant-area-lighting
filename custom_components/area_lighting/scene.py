@@ -103,7 +103,7 @@ class AreaLightingScene(Scene):
         """
         transition = kwargs.get("transition")
         _LOGGER.debug(
-            "Activating scene %s/%s (has_stored=%s, has_config=%s)",
+            "Area %s: activating scene %s (has_stored=%s, has_config=%s)",
             self._area.id,
             self._scene_cfg.slug,
             self._storage.get_scene_data(self._area.id, self._scene_cfg.slug) is not None,
@@ -130,7 +130,11 @@ class AreaLightingScene(Scene):
         transition: float | None,
     ) -> None:
         """Apply stored snapshot data to lights."""
-        _LOGGER.debug("Applying scene data: %d entities", len(stored))
+        _LOGGER.debug(
+            "Area %s: applying scene data (%d entities)",
+            self._area.id,
+            len(stored),
+        )
         tasks: list = []
         for entity_id, state_data in stored.items():
             if not entity_id.startswith("light."):
@@ -155,7 +159,11 @@ class AreaLightingScene(Scene):
                 ):
                     if attr in state_data:
                         service_data[attr] = state_data[attr]
-                _LOGGER.debug("light.turn_on: %s", service_data)
+                _LOGGER.debug(
+                    "Area %s: scene_apply light.turn_on %s",
+                    self._area.id,
+                    service_data,
+                )
                 tasks.append(
                     self.hass.services.async_call(
                         "light",
@@ -165,7 +173,11 @@ class AreaLightingScene(Scene):
                     )
                 )
             else:
-                _LOGGER.debug("light.turn_off: %s", entity_id)
+                _LOGGER.debug(
+                    "Area %s: scene_apply light.turn_off entity=%s",
+                    self._area.id,
+                    entity_id,
+                )
                 tasks.append(
                     self.hass.services.async_call(
                         "light",
@@ -257,15 +269,16 @@ class BehavioralScene(Scene):
         ctrl = controllers.get(self._area.id)
         if ctrl is None:
             _LOGGER.warning(
-                "BehavioralScene %s: no controller for area %s",
-                self.entity_id,
+                "Area %s: BehavioralScene %s no controller registered",
                 self._area.id,
+                self.entity_id,
             )
             return
         method = getattr(ctrl, self._controller_method, None)
         if method is None:
             _LOGGER.warning(
-                "BehavioralScene %s: controller has no method %s",
+                "Area %s: BehavioralScene %s controller has no method %s",
+                self._area.id,
                 self.entity_id,
                 self._controller_method,
             )

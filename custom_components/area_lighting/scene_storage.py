@@ -39,6 +39,10 @@ class SceneStorage:
 
     async def async_save(self) -> None:
         """Save scene data to storage."""
+        _LOGGER.debug(
+            "Persisted scene snapshots for %d areas",
+            len(self._data),
+        )
         await self._store.async_save(self._data)
 
     def get_scene_data(self, area_id: str, scene_slug: str) -> dict[str, Any] | None:

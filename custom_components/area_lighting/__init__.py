@@ -11,7 +11,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .binary_sensor import AreaOccupiedBinarySensor
-from .config_schema import AREA_SCHEMA, parse_config
+from .config_schema import AREA_SCHEMA, parse_config, validate_leader_follower_graph
 from .const import DOMAIN
 from .controller import AreaLightingController
 from .diagnostics import AreaLightingDiagnosticSensor
@@ -61,6 +61,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     conf = config[DOMAIN]
     area_config = parse_config(conf)
+    try:
+        validate_leader_follower_graph(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid leader/follower config: %s", err)
+        return False
 
     # Initialize scene storage
     scene_storage = SceneStorage(hass)
@@ -85,6 +90,25 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         ctrl.load_persisted_state(state_storage.get_area_state(area.id))
         controllers[area.id] = ctrl
     hass.data[DOMAIN]["controllers"] = controllers
+
+    # Wire leader/follower references. Safe because every enabled
+    # controller is in `controllers` by this point; graph invariants were
+    # already validated above.
+    for ctrl in controllers.values():
+        leader_id = ctrl.area.leader_area_id
+        if leader_id is None:
+            continue
+        leader = controllers.get(leader_id)
+        if leader is None:
+            _LOGGER.warning(
+                "Area %s: configured leader %s is not an enabled area; "
+                "follower will run standalone",
+                ctrl.area.id,
+                leader_id,
+            )
+            continue
+        ctrl.leader = leader
+        leader.followers.append(ctrl)
 
     enabled = area_config.enabled_areas
     _LOGGER.info(

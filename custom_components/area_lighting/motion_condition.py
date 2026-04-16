@@ -38,7 +38,9 @@ def evaluate_motion_condition(
 
 
 def _evaluate_single(cond: MotionLightCondition, get_state: StateResolver) -> bool:
-    state = get_state(cond.entity_id or "")
+    if cond.entity_id is None:
+        return False
+    state = get_state(cond.entity_id)
     if state is None or state.state in _UNAVAILABLE_STATES:
         return False
     if cond.state is not None:

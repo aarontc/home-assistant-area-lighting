@@ -43,6 +43,18 @@ class ActivationSource(Enum):
     RESTORED = "restored"  # Loaded from persistence
     MANUAL = "manual"  # Detected manual light adjustment
     LINKED = "linked"  # Cross-area linked motion activation
+    LEADER = "leader"  # Follower scene mirrored from its leader area
+
+
+class LeaderReason(Enum):
+    """Why a leader is notifying its followers of a state change."""
+
+    SCENE_ACTIVATED = (
+        "scene_activated"  # Leader entered a concrete on-scene (not ambient, not manual)
+    )
+    OFF = "off"  # Leader turned off
+    AMBIENT = "ambient"  # Leader entered ambient/holiday scene
+    MANUAL = "manual"  # Leader entered manual mode
 
 
 # Scene slugs that count as "ambient-style" (will be cleaned up when ambience disabled)
@@ -103,7 +115,6 @@ class AreaState:
     # ── Transitions ────────────────────────────────────────────────────
 
     def transition_to_off(self, source: ActivationSource = ActivationSource.USER) -> None:
-        self._log_transition(LightingState.OFF, "off", source)
         self.state = LightingState.OFF
         self.scene_slug = "off"
         self.source = source
@@ -116,7 +127,6 @@ class AreaState:
         scene_slug: str,
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
-        self._log_transition(LightingState.SCENE, scene_slug, source)
         self.state = LightingState.SCENE
         self.scene_slug = scene_slug
         self.source = source
@@ -129,7 +139,6 @@ class AreaState:
         self,
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
-        self._log_transition(LightingState.CIRCADIAN, "circadian", source)
         self.state = LightingState.CIRCADIAN
         self.scene_slug = "circadian"
         self.source = source
@@ -138,7 +147,6 @@ class AreaState:
         self.last_scene_change_monotonic = time.monotonic()
 
     def transition_to_manual(self) -> None:
-        self._log_transition(LightingState.MANUAL, "manual", ActivationSource.MANUAL)
         self.state = LightingState.MANUAL
         self.scene_slug = "manual"
         self.source = ActivationSource.MANUAL
@@ -151,7 +159,6 @@ class AreaState:
         if not self.dimmed:
             self.previous_scene = self.scene_slug
             self.dimmed = True
-            _LOGGER.debug("State: dimmed (previous=%s)", self.previous_scene)
 
     def clear_dimmed(self) -> str | None:
         """Clear the dimmed flag and return the previous scene to restore."""
@@ -160,24 +167,7 @@ class AreaState:
         prev = self.previous_scene
         self.dimmed = False
         self.previous_scene = None
-        _LOGGER.debug("State: cleared dimmed (restoring %s)", prev)
         return prev
-
-    def _log_transition(
-        self,
-        new_state: LightingState,
-        slug: str,
-        source: ActivationSource,
-    ) -> None:
-        _LOGGER.debug(
-            "Transition: %s/%s (%s) → %s/%s (%s)",
-            self.state.value,
-            self.scene_slug,
-            self.source.value,
-            new_state.value,
-            slug,
-            source.value,
-        )
 
     # ── Persistence ────────────────────────────────────────────────────
 

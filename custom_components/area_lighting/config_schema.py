@@ -138,6 +138,8 @@ AREA_SCHEMA = vol.Schema(
         vol.Optional("brightness_step_pct"): vol.All(int, vol.Range(min=1, max=100)),
         # D6: per-area night-mode fade duration override
         vol.Optional("night_fadeout_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Optional("leader_area_id"): cv.string,
+        vol.Optional("follow_leader_deactivation", default=False): cv.boolean,
         vol.Optional("circadian_switches", default=[]): vol.All(
             cv.ensure_list, [CIRCADIAN_SWITCH_SCHEMA]
         ),
@@ -282,7 +284,38 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 occupancy_light_sensor_ids=area_raw.get("occupancy_light_sensor_ids"),
                 occupancy_light_timer_durations=area_raw.get("occupancy_light_timer_durations", {}),
                 linked_motion=linked_motion,
+                leader_area_id=area_raw.get("leader_area_id"),
+                follow_leader_deactivation=area_raw.get("follow_leader_deactivation", False),
             )
         )
 
     return AreaLightingConfig(areas=areas)
+
+
+def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
+    """Enforce leader/follower graph invariants.
+
+    Raises vol.Invalid with a precise message when:
+    - any leader_area_id equals the area's own id
+    - any leader_area_id points to an area not defined in this config
+    - any follower's leader is itself a follower (no chaining)
+    """
+    by_id = {a.id: a for a in config.areas}
+
+    for area in config.areas:
+        if area.leader_area_id is None:
+            continue
+        if area.leader_area_id == area.id:
+            raise vol.Invalid(f"area '{area.id}' cannot be its own leader")
+        leader = by_id.get(area.leader_area_id)
+        if leader is None:
+            raise vol.Invalid(
+                f"area '{area.id}' references nonexistent area "
+                f"'{area.leader_area_id}' as its leader"
+            )
+        if leader.leader_area_id is not None:
+            raise vol.Invalid(
+                f"area '{area.id}' follows '{leader.id}', but '{leader.id}' "
+                f"already follows '{leader.leader_area_id}' — leader/follower "
+                f"relationships cannot be chained"
+            )

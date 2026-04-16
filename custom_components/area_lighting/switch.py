@@ -67,12 +67,22 @@ class AreaLightingSwitch(SwitchEntity):
         return bool(getattr(self._controller, self._attr_key))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
+        _LOGGER.debug(
+            "Area %s: switch %s set to on",
+            self._controller.area.id,
+            self._attr_key,
+        )
         if self._attr_key == "ambience_enabled":
             await self._controller.async_set_ambience_enabled(True)
         else:
             setattr(self._controller, self._attr_key, True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        _LOGGER.debug(
+            "Area %s: switch %s set to off",
+            self._controller.area.id,
+            self._attr_key,
+        )
         if self._attr_key == "ambience_enabled":
             await self._controller.async_set_ambience_enabled(False)
         else:
