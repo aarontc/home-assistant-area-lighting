@@ -22,17 +22,19 @@ Run the same pipeline CI runs on merge requests:
 dagger call all
 ```
 
-That runs lint, typecheck, and the pytest suite concurrently and fails on
-the first error. Please run it before every commit.
+That runs lint, typecheck, the pytest suite, and the versioning-helper
+tests concurrently and fails on the first error. Please run it before every
+commit.
 
 ## Running individual checks
 
-| Task                      | Command                         |
-| ------------------------- | ------------------------------- |
+| Task                       | Command                         |
+| -------------------------- | ------------------------------- |
 | Lint (ruff check + format) | `dagger call lint`              |
-| Typecheck (mypy)          | `dagger call typecheck`         |
-| Unit + integration tests  | `dagger call test`              |
-| Tests against latest HA   | `dagger call test-latest`       |
+| Typecheck (mypy)           | `dagger call typecheck`         |
+| Unit + integration tests   | `dagger call test`              |
+| Tests against latest HA    | `dagger call test-latest`       |
+| Versioning-helper tests    | `dagger call test-versioning`   |
 
 The first run of each pulls the Python image; subsequent runs reuse the cached
 `uv` volume and are much faster.
@@ -62,3 +64,44 @@ git config --unset core.hooksPath
 Short subject line (under ~72 chars), lowercase prefix describing the area
 (`area_lighting:`, `ci:`, `docs:`, `test:`, etc.), then a blank line and a
 longer body if needed. Run `git log` for recent examples.
+
+## Versioning
+
+Releases use semantic versioning and are driven entirely by commit
+messages. A commit that starts with one of the following markers bumps
+the corresponding component of the next release tag:
+
+| Marker     | Effect          | Example                                   |
+| ---------- | --------------- | ----------------------------------------- |
+| `(Major)`  | `X.y.z → X+1.0.0` | `(Major) drop Python 3.12 support`      |
+| `(Minor)`  | `x.Y.z → x.Y+1.0` | `(Minor) add per-area holiday scenes`   |
+| `(Patch)`  | `x.y.Z → x.y.Z+1` | `(Patch) fix motion timer race on HA reload` |
+
+Normal commits (no marker) count as a patch bump. The highest marker
+across all commits since the last tag wins.
+
+### Previewing the next release
+
+```sh
+dagger call commits-since-tag   # list commits and the severity each contributes
+dagger call next-version        # print the version the next release would get
+```
+
+### Cutting a release
+
+Releases are tagged via the GitLab API — no local `git tag` push is
+needed. Create a Project Access Token (or use a Personal Access Token)
+with **write_repository** scope, export it, then run:
+
+```sh
+export GITLAB_TOKEN=glpat-…
+dagger call create-tag \
+    --source=. \
+    --gitlab-url=https://gitlab.idleengineers.com \
+    --project-id=aaron/home-assistant-area-lighting \
+    --token=env:GITLAB_TOKEN
+```
+
+The command calculates the next version, creates the tag at the current
+`HEAD` commit, and prints the tag name. GitLab then triggers any
+tag-scoped CI jobs (releases, HACS artifact, etc.).

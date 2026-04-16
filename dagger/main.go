@@ -74,11 +74,17 @@ func (m *AreaLighting) TestLatest(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// All runs lint, typecheck, and test concurrently.
-func (m *AreaLighting) All(ctx context.Context) error {
+// All runs lint, typecheck, test, and the versioning-helper tests
+// concurrently.
+func (m *AreaLighting) All(
+	ctx context.Context,
+	// +defaultPath="./dagger/versioning"
+	versioningSource *dagger.Directory,
+) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error { _, err := m.Lint(ctx); return err })
 	eg.Go(func() error { _, err := m.Typecheck(ctx); return err })
 	eg.Go(func() error { _, err := m.Test(ctx); return err })
+	eg.Go(func() error { _, err := m.TestVersioning(ctx, versioningSource); return err })
 	return eg.Wait()
 }
