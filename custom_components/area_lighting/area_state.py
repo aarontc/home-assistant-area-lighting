@@ -10,9 +10,11 @@ The state machine has three components:
 2. **Source**: how the current state was entered (USER, MOTION, AMBIENCE, ...)
 3. **Modifiers**: dimmed flag, current/previous scene slug
 
-All transitions go through `transition_to()` which logs and emits a single
-state-change event. This module is pure (no HA dependencies) so the state
-logic is unit-testable in isolation.
+This module is pure (no HA dependencies) so the state logic is
+unit-testable in isolation. The per-area state-transition DEBUG log
+is emitted by `AreaLightingController._log_state_snapshot_if_changed`,
+which has access to the area id that this dataclass intentionally
+does not.
 """
 
 from __future__ import annotations

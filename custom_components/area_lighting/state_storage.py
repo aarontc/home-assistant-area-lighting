@@ -53,9 +53,9 @@ class StateStorage:
     ) -> None:
         """Save state for an area."""
         _LOGGER.debug(
-            "Persisted state for area %s (%d bytes of dict)",
+            "Persisted state for area %s (%d keys)",
             area_id,
-            len(str(state)),
+            len(state),
         )
         self._data[area_id] = state
         await self.async_save()

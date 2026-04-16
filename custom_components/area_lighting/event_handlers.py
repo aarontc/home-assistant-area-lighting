@@ -576,12 +576,13 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
         # Area-specific conditions
         for cond in area.motion_light_conditions:
             passed = evaluate_motion_condition(cond, hass.states.get)
-            _LOGGER.debug(
-                "Area %s: motion_condition %s → %s",
-                ctrl.area.id,
-                _format_motion_condition(cond),
-                "pass" if passed else "fail",
-            )
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "Area %s: motion_condition %s → %s",
+                    ctrl.area.id,
+                    _format_motion_condition(cond),
+                    "pass" if passed else "fail",
+                )
             if not passed:
                 return False
 
