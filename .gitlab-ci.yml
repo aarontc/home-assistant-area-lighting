@@ -18,7 +18,7 @@ check:
   before_script:
     - *dagger-setup
   script:
-    - dagger call all --source=.
+    - dagger call all
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -33,6 +33,6 @@ nightly:
   before_script:
     - *dagger-setup
   script:
-    - dagger call test-latest --source=.
+    - dagger call test-latest
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
