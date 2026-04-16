@@ -226,11 +226,8 @@ Behavior:
 
 Current code notes:
 
-1. The code does brightness stepping without entering `manual`
-2. The code marks known scenes as dimmed
-3. The current step size is `20%`, not `12.5%`
-4. From `off`, the current code does not restore the most recent scene at reduced brightness
-5. The current code targets pre-defined dimming light groups directly rather than expressing this in scene-relative terms
+1. Step size defaults to `12` (rounded from `12.5%` because HA's `brightness_step_pct` service field is an int); configurable per area via `brightness_step_pct`
+2. The code targets pre-defined dimming light groups directly rather than expressing this in scene-relative terms
 
 #### `lower`
 
@@ -248,9 +245,8 @@ Behavior:
 
 Current code notes:
 
-1. The code does brightness stepping and dimmed tracking
-2. The current step size is `20%`, not `12.5%`
-3. From `off`, the current code does not explicitly no-op in the way described here
+1. Step size defaults to `12` (rounded from `12.5%`, see `raise`)
+2. From `off`, no explicit no-op — `_step_on_lights_pct` simply has no on-lights to act on
 
 #### `favorite`
 
@@ -294,7 +290,7 @@ Current code notes:
 1. Ambience gating via both area flag and ambient zone is implemented
 2. Falling back to ambience from normal scenes is implemented
 3. Turning off from already-ambient states is implemented
-4. The special-case rule "holiday scene -> literal ambient without holiday logic" is not implemented yet; current code turns fully off from holiday scenes
+4. The "holiday scene -> literal ambient" fallback is implemented at `scene_machine.py:186-189` (user-owned holiday + ambience active → `ambient`)
 
 ### Remote flow
 
@@ -558,7 +554,7 @@ Current code notes:
 
 1. Transitioning to `off` and clearing dimmed context is implemented
 2. Circadian switches are disabled when all lights go off
-3. Timer cancellation on this path is still pending
+3. Motion, motion-night, and occupancy timers are cancelled (`controller.py:1271-1273`)
 
 ## State ownership and precedence
 
@@ -752,17 +748,19 @@ work:
 The component has two test layers:
 
 - **Pure unit tests** — no HA dependency, fast. Cover `scene_machine`,
-  `area_state`, and `timer_manager`. Located directly under
+  `area_state`, `timer_manager`, `motion_condition` (and its schema),
+  `cluster_dispatch`, `leader_follower_controller` (and its schema),
+  and `translations`. Located directly under
   `custom_components/area_lighting/tests/`.
 - **Integration tests** — run against a real HA instance via
   `pytest-homeassistant-custom-component`. Cover controller behavior,
   event handlers, persistence, validation, and edge cases. Located
   under `custom_components/area_lighting/tests/integration/`.
 
-To run everything from inside the component directory:
+The `pyproject.toml` at the repo root owns the pytest configuration.
+Run tests from the repo root:
 
 ```bash
-cd custom_components/area_lighting
 uv sync --extra dev
 uv run pytest -n auto
 ```
