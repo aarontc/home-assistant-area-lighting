@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run `dagger call lint` before allowing a commit.
+#
+# Enable once per clone with:
+#   git config core.hooksPath hooks
+#
+# Skip for one commit (discouraged) with:
+#   git commit --no-verify
+
+set -euo pipefail
+
+if ! command -v dagger >/dev/null 2>&1; then
+    echo "pre-commit: dagger not found on PATH — see CONTRIBUTING.md for install instructions." >&2
+    exit 1
+fi
+
+exec dagger call lint
