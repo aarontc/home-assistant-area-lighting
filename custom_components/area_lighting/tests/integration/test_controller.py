@@ -195,7 +195,7 @@ async def test_motion_off_starts_timer(
 ) -> None:
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
-    ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
+    ctrl._state.transition_to_scene("daylight", ActivationSource.MOTION)
     await ctrl.handle_motion_off()
     assert ctrl._motion_timer.is_active
 

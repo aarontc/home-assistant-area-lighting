@@ -20,11 +20,11 @@ from .const import (
     DOMAIN,
     GLOBAL_MOTION_LIGHT_ENABLED_ENTITY,
     HOLIDAY_MODE_ENTITY,
-    MANUAL_DETECTION_BRIGHTNESS_THRESHOLD,
     MANUAL_DETECTION_GRACE_SECONDS,
 )
 from .controller import AreaLightingController
 from .models import AreaLightingConfig
+from .motion_condition import evaluate_motion_condition
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -429,15 +429,14 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
 def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingController):
     """Handle light state change events for manual detection.
 
-    Fires a transition to `manual` when the controller believes the
-    area is in a scene/circadian but a light's brightness or color
-    changed by more than the threshold outside of the integration.
+    Compares incoming HA state updates against the active scene's
+    target states. Only fires a manual transition when a light's
+    attributes diverge from what the scene instructed — late Hue
+    bridge reports that converge toward the target are not overrides.
 
-    Intentionally does NOT consult any templater-generated light group
-    entity — the component must work without the legacy templater. The
-    gate is `ctrl._state.is_off`: if the controller thinks the area is
-    off, any incoming 'on' state is treated as external scene activation
-    (and ignored by manual detection), not as a manual override.
+    A short grace window after scene transitions still protects
+    against intermediate states (e.g., a Hue bulb briefly reporting
+    old brightness before reaching the new target).
     """
     import time as _time
 
@@ -472,25 +471,17 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             _skip("dimmed (raise/lower in progress)", entity_id)
             return
 
-        # If the controller believes the area is off, treat any incoming
-        # 'on' event as external scene activation, not a manual override.
         if ctrl._state.is_off:
             _skip("area state is off", entity_id)
             return
 
-        # While the area is in circadian state, circadian_lighting is
-        # actively firing light.turn_on calls every interval to adjust
-        # brightness and color temperature. Those are NOT manual
-        # overrides. Skip entirely — if the user wants to 'go manual'
-        # from circadian, they should press a remote button or activate
-        # a different scene, which transitions state away from circadian
-        # and then this gate no longer applies.
         if ctrl._state.is_circadian:
             _skip("area state is circadian", entity_id)
             return
 
-        # Grace period check (D5): ignore events inside the window after
-        # a scene transition. 4 seconds by default.
+        # Grace period: ignore all events in the window immediately
+        # after a scene transition (covers intermediate Hue states
+        # like old-brightness-before-new-target).
         last_change = ctrl._state.last_scene_change_monotonic
         if last_change is not None:
             age = _time.monotonic() - last_change
@@ -501,41 +492,17 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 )
                 return
 
-        was_off = old_state.state == STATE_OFF
-        old_brightness = old_state.attributes.get("brightness", 0) or 0
-        new_brightness = new_state.attributes.get("brightness", 0) or 0
-        brightness_change = abs(int(new_brightness) - int(old_brightness))
-
-        color_changed = False
-        changed_color_attr: str | None = None
-        for attr in ("color_temp_kelvin", "hs_color", "rgb_color", "xy_color"):
-            if old_state.attributes.get(attr) != new_state.attributes.get(attr):
-                color_changed = True
-                changed_color_attr = attr
-                break
-
-        if not (
-            was_off or color_changed or brightness_change > MANUAL_DETECTION_BRIGHTNESS_THRESHOLD
-        ):
-            _skip(
-                f"delta too small (brightness_change={brightness_change} "
-                f"<= {MANUAL_DETECTION_BRIGHTNESS_THRESHOLD}, color unchanged)",
-                entity_id,
-            )
+        # Compare against scene targets: if the light's current state
+        # matches what the scene instructed, this is a late bridge
+        # report or convergence, not a manual override.
+        if ctrl.state_matches_scene_target(entity_id, new_state):
+            _skip("matches scene target", entity_id)
             return
 
-        reason = (
-            "was off"
-            if was_off
-            else f"color changed ({changed_color_attr})"
-            if color_changed
-            else f"brightness delta {brightness_change}"
-        )
         _LOGGER.info(
-            "area_lighting[%s] manual detection fired for %s: %s",
+            "area_lighting[%s] manual detection fired for %s",
             area_id,
             entity_id,
-            reason,
         )
         hass.async_create_task(ctrl.handle_manual_light_change())
 
@@ -582,20 +549,8 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
 
         # Area-specific conditions
         for cond in area.motion_light_conditions:
-            state = hass.states.get(cond.entity_id)
-            if not state:
+            if not evaluate_motion_condition(cond, hass.states.get):
                 return False
-            if cond.state is not None and state.state != cond.state:
-                return False
-            if cond.attribute is not None:
-                attr_val = state.attributes.get(cond.attribute)
-                if attr_val is None:
-                    return False
-                attr_val = float(attr_val)
-                if cond.above is not None and attr_val <= cond.above:
-                    return False
-                if cond.below is not None and attr_val >= cond.below:
-                    return False
 
         return True
 

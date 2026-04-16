@@ -18,8 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 class AreaOccupiedBinarySensor(BinarySensorEntity):
     """Binary sensor that exposes whether an area is currently occupied.
 
-    True when any occupancy sensor is active or the occupancy timer
-    is still running. Always False for areas without occupancy sensors.
+    Uses active lighting state as a proxy for presence: True when lights
+    are on due to a human-triggered action (remote, motion, manual).
+    Automated activations (ambient zone, holiday mode) are excluded.
     """
 
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY

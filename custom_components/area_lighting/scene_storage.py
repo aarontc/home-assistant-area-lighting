@@ -26,9 +26,7 @@ class SceneStorage:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass
-        self._store: Store[dict[str, dict[str, dict[str, Any]]]] = Store(
-            hass, STORAGE_VERSION, STORAGE_KEY
-        )
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._data: dict[str, dict[str, dict[str, Any]]] = {}
         # Structure: { "area_id": { "scene_slug": { "entity_id": { state_dict } } } }
 

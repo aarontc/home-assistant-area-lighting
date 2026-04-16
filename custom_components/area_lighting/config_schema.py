@@ -52,14 +52,46 @@ SCENE_SCHEMA = vol.Schema(
     }
 )
 
-MOTION_LIGHT_CONDITION_SCHEMA = vol.Schema(
-    {
-        vol.Required("entity_id"): cv.entity_id,
-        vol.Optional("state"): cv.string,
-        vol.Optional("attribute"): cv.string,
-        vol.Optional("above"): vol.Coerce(float),
-        vol.Optional("below"): vol.Coerce(float),
-    }
+
+def _validate_motion_light_condition(value: dict) -> dict:
+    """Enforce mutual-exclusion rules not expressible via the base schema."""
+    has_single = "entity_id" in value
+    has_multi = "entity_ids" in value
+    if has_single and has_multi:
+        raise vol.Invalid(
+            "motion_light_condition: specify either 'entity_id' or 'entity_ids', not both"
+        )
+    if not has_single and not has_multi:
+        raise vol.Invalid("motion_light_condition: one of 'entity_id' or 'entity_ids' is required")
+    if has_multi and "aggregate" not in value:
+        raise vol.Invalid(
+            "motion_light_condition: 'aggregate' is required when 'entity_ids' is set"
+        )
+    if has_multi and "state" in value:
+        raise vol.Invalid(
+            "motion_light_condition: 'state' is not supported with 'entity_ids' "
+            "(string-state matching does not aggregate)"
+        )
+    return value
+
+
+MOTION_LIGHT_CONDITION_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional("entity_id"): cv.entity_id,
+            vol.Optional("entity_ids"): vol.All(
+                cv.ensure_list,
+                vol.Length(min=1),
+                [cv.entity_id],
+            ),
+            vol.Optional("aggregate"): vol.In(["average", "min", "max"]),
+            vol.Optional("state"): cv.string,
+            vol.Optional("attribute"): cv.string,
+            vol.Optional("above"): vol.Coerce(float),
+            vol.Optional("below"): vol.Coerce(float),
+        }
+    ),
+    _validate_motion_light_condition,
 )
 
 LUTRON_REMOTE_SCHEMA = vol.Schema(
@@ -161,14 +193,14 @@ def parse_config(raw: dict) -> AreaLightingConfig:
 
         light_clusters = [
             LightConfig(
-                id=cluster_raw["id"],
-                circadian_switch=cluster_raw.get("circadian_switch"),
-                circadian_type=cluster_raw.get("circadian_type"),
-                roles=cluster_raw.get("roles", []),
-                scenes=cluster_raw.get("scenes", []),
-                members=cluster_raw.get("members", []),
+                id=light_raw["id"],
+                circadian_switch=light_raw.get("circadian_switch"),
+                circadian_type=light_raw.get("circadian_type"),
+                roles=light_raw.get("roles", []),
+                scenes=light_raw.get("scenes", []),
+                members=light_raw.get("members", []),
             )
-            for cluster_raw in area_raw.get("light_clusters", [])
+            for light_raw in area_raw.get("light_clusters", [])
         ]
 
         scenes = [
@@ -186,7 +218,9 @@ def parse_config(raw: dict) -> AreaLightingConfig:
 
         motion_conditions = [
             MotionLightCondition(
-                entity_id=c["entity_id"],
+                entity_id=c.get("entity_id"),
+                entity_ids=c.get("entity_ids"),
+                aggregate=c.get("aggregate"),
                 state=c.get("state"),
                 attribute=c.get("attribute"),
                 above=c.get("above"),

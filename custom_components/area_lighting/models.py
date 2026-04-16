@@ -81,9 +81,17 @@ class SceneConfig:
 
 @dataclass
 class MotionLightCondition:
-    """A condition that must be met for motion lighting to activate."""
+    """A condition that must be met for motion lighting to activate.
 
-    entity_id: str
+    Exactly one of ``entity_id`` or ``entity_ids`` must be set. When
+    ``entity_ids`` is set, ``aggregate`` selects the reduction mode
+    applied across the sensors' numeric values before the above/below
+    comparison.
+    """
+
+    entity_id: str | None = None
+    entity_ids: list[str] | None = None
+    aggregate: str | None = None  # "average" | "min" | "max"
     state: str | None = None
     attribute: str | None = None
     above: float | None = None

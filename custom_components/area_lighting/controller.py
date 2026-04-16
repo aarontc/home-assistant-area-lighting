@@ -122,6 +122,11 @@ class AreaLightingController:
         # Callbacks for entity state updates
         self._state_listeners: list = []
 
+        # Resolved per-light target states for the active scene.
+        # Populated by _activate_scene; used by manual detection to compare
+        # incoming HA state updates against what the scene instructed.
+        self._active_scene_targets: dict[str, dict] = {}
+
         # Seed the manual-detection grace clock so the first 10s after
         # controller construction (including post-restart) are protected
         # from spurious manual detection (D15).
@@ -317,14 +322,16 @@ class AreaLightingController:
 
     @property
     def is_occupied(self) -> bool:
-        """True if any occupancy sensor is active or the occupancy timer is running."""
-        if self._occupancy_timer.is_active:
-            return True
-        for sid in self.area.occupancy_light_sensor_ids or []:
-            state = self.hass.states.get(sid)
-            if state is not None and state.state == "on":
-                return True
-        return False
+        """True when lights are on due to a human-triggered action.
+
+        Uses active lighting state as a proxy for physical presence:
+        someone pressed a button, triggered motion lighting, etc.
+        Automated activations (ambient zone, holiday mode) are excluded.
+        """
+        return self._state.is_on and self._state.source not in (
+            ActivationSource.AMBIENCE,
+            ActivationSource.HOLIDAY,
+        )
 
     @property
     def current_scene(self) -> str:
@@ -512,18 +519,21 @@ class AreaLightingController:
         if scene_slug == SCENE_OFF_INTERNAL:
             await self._disable_circadian_switches()
             await self._turn_off_all_lights(transition)
+            self._active_scene_targets = {}
             self._state.transition_to_off(source)
             self._enforce_occupancy_timer()
             self._notify_state_change()
             return
 
         if scene_slug == SCENE_CIRCADIAN:
+            self._active_scene_targets = {}
             await self._activate_circadian(source)
             return
 
         # Visual scene → disable circadian first so the switches stop
         # overriding the scene's color/brightness, then apply + transition.
         await self._disable_circadian_switches()
+        self._active_scene_targets = self._resolve_scene_targets(scene_slug)
         await self._apply_scene_data(scene_slug, transition)
         self._state.transition_to_scene(scene_slug, source)
         self._enforce_occupancy_timer()
@@ -596,7 +606,9 @@ class AreaLightingController:
                 eid: state for eid, state in entities.items() if eid.startswith("light.")
             }
             cluster_specs = [
-                (lc.id, list(lc.members)) for lc in self.area.light_clusters if lc.is_cluster
+                (light.id, list(light.members))
+                for light in self.area.light_clusters
+                if light.is_cluster
             ]
             commands = select_dispatch_commands(light_entities, cluster_specs)
             await asyncio.gather(
@@ -652,6 +664,85 @@ class AreaLightingController:
                 return s
         return None
 
+    def _resolve_scene_targets(self, scene_slug: str) -> dict[str, dict]:
+        """Resolve the per-light target states for a scene.
+
+        Uses the same priority as _apply_scene_data: stored snapshot →
+        inline config entities → role-based skeleton. Returns a dict
+        mapping entity_id → target state dict for every light in the area.
+        """
+        from .scene_storage import SceneStorage
+
+        storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
+        stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
+
+        entities: dict[str, Any] | None
+        if stored:
+            entities = stored
+        else:
+            scene_cfg = self._get_scene_config(scene_slug)
+            entities = scene_cfg.entities if scene_cfg and scene_cfg.entities else None
+
+        if entities:
+            return {eid: state for eid, state in entities.items() if eid.startswith("light.")}
+
+        # Skeleton fallback: role-based on/off, no attribute targets
+        return {
+            light.id: {"state": "on" if light.in_scene(scene_slug) else "off"}
+            for light in self.area.all_lights
+        }
+
+    def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
+        """Check whether a light's HA state matches the active scene target.
+
+        Returns True if the light's current attributes are consistent with
+        what the scene instructed (within tolerance for Hue bridge jitter).
+        Returns False if no target exists for this light or if the values
+        diverge, indicating a genuine manual override.
+        """
+        target = self._active_scene_targets.get(entity_id)
+        if target is None:
+            return False
+
+        target_on = target.get("state", "off") == "on"
+        actual_on = ha_state.state == "on"
+
+        if target_on != actual_on:
+            return False
+
+        if not target_on:
+            return True  # both off, matches
+
+        # Compare attributes with tolerances for Hue bridge jitter
+        attrs = ha_state.attributes
+
+        target_brightness = target.get("brightness")
+        if target_brightness is not None:
+            actual_brightness = attrs.get("brightness")
+            if (
+                actual_brightness is not None
+                and abs(int(target_brightness) - int(actual_brightness)) > 10
+            ):
+                return False
+
+        target_ct = target.get("color_temp_kelvin")
+        if target_ct is not None:
+            actual_ct = attrs.get("color_temp_kelvin")
+            if actual_ct is not None and abs(int(target_ct) - int(actual_ct)) > 100:
+                return False
+
+        target_hs = target.get("hs_color")
+        if target_hs is not None:
+            actual_hs = attrs.get("hs_color")
+            if actual_hs is not None:
+                hue_diff = abs(float(target_hs[0]) - float(actual_hs[0]))
+                hue_diff = min(hue_diff, 360 - hue_diff)
+                sat_diff = abs(float(target_hs[1]) - float(actual_hs[1]))
+                if hue_diff > 10 or sat_diff > 10:
+                    return False
+
+        return True
+
     async def _activate_holiday_scene(
         self,
         source: ActivationSource = ActivationSource.USER,
@@ -680,8 +771,7 @@ class AreaLightingController:
         if action.action == ActionType.NOOP:
             return
         if action.action == ActionType.ACTIVATE_SCENE:
-            if action.scene_slug is not None:
-                await self._activate_scene(action.scene_slug, source, transition)
+            await self._activate_scene(action.scene_slug or "", source, transition)
         elif action.action == ActionType.ACTIVATE_HOLIDAY_SCENE:
             await self._activate_holiday_scene(source, transition)
         elif action.action == ActionType.SET_SUN_POSITION:
@@ -937,12 +1027,15 @@ class AreaLightingController:
             return
         # External activation defaults to USER source
         if scene_slug == "circadian":
+            self._active_scene_targets = {}
             self._state.transition_to_circadian(ActivationSource.USER)
         elif scene_slug == "off":
+            self._active_scene_targets = {}
             await self._disable_circadian_switches()
             self._state.transition_to_off(ActivationSource.USER)
         else:
             await self._disable_circadian_switches()
+            self._active_scene_targets = self._resolve_scene_targets(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()
 
@@ -952,6 +1045,7 @@ class AreaLightingController:
         Cancels any running timers so they can't fire into an already-off
         area (README §4 "All lights externally turned off" bullet 3).
         """
+        self._active_scene_targets = {}
         self._state.transition_to_off(ActivationSource.USER)
         await self._disable_circadian_switches()
         self._motion_timer.cancel()
@@ -993,8 +1087,16 @@ class AreaLightingController:
         fields (not the TimerHandle's construction-time default), so
         user edits to the corresponding number entity take effect on
         the next motion event.
+
+        Only starts the timer if motion actually owns the current state.
+        Without this guard, a sensor shared between motion and occupancy
+        would unconditionally start the motion timer on any off event —
+        even when motion lighting is disabled or the area is in a non-motion
+        state (e.g. manual, user-activated scene).
         """
         self._last_motion_event = "motion_off"
+        if self._state.source != ActivationSource.MOTION:
+            return
         if self._night_mode:
             self._motion_timer.cancel()
             self._motion_night_timer.start(

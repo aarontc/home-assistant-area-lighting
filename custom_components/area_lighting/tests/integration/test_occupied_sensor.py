@@ -31,6 +31,8 @@ def _config_with_occupancy() -> dict:
                     "scenes": [
                         {"id": "circadian", "name": "Circadian"},
                         {"id": "daylight", "name": "Daylight"},
+                        {"id": "ambient", "name": "Ambient"},
+                        {"id": "christmas", "name": "Christmas"},
                     ],
                     "occupancy_light_sensor_ids": [
                         "binary_sensor.office_occupancy_1",
@@ -75,7 +77,7 @@ def _config_without_occupancy() -> dict:
 
 
 @pytest.mark.integration
-async def test_no_occupancy_sensors_always_off(hass: HomeAssistant, helper_entities) -> None:
+async def test_off_state_not_occupied(hass: HomeAssistant, helper_entities) -> None:
     hass.states.async_set("light.shed_main", "off")
     hass.states.async_set("binary_sensor.shed_motion_1", "off")
     await _setup(hass, _config_without_occupancy())
@@ -86,7 +88,7 @@ async def test_no_occupancy_sensors_always_off(hass: HomeAssistant, helper_entit
 
 
 @pytest.mark.integration
-async def test_occupancy_sensor_on_sets_occupied(hass: HomeAssistant, helper_entities) -> None:
+async def test_user_scene_sets_occupied(hass: HomeAssistant, helper_entities) -> None:
     hass.states.async_set("light.office_overhead", "off")
     hass.states.async_set("binary_sensor.office_occupancy_1", "off")
     hass.states.async_set("binary_sensor.office_motion_1", "off")
@@ -95,71 +97,123 @@ async def test_occupancy_sensor_on_sets_occupied(hass: HomeAssistant, helper_ent
     assert hass.states.get("binary_sensor.office_occupied").state == STATE_OFF
 
     ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
+
+
+@pytest.mark.integration
+async def test_motion_scene_sets_occupied(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.office_overhead", "off")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("circadian", ActivationSource.MOTION)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
+
+
+@pytest.mark.integration
+async def test_ambient_source_not_occupied(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.office_overhead", "off")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_OFF
+
+
+@pytest.mark.integration
+async def test_holiday_source_not_occupied(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.office_overhead", "off")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("christmas", ActivationSource.HOLIDAY)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_OFF
+
+
+@pytest.mark.integration
+async def test_holiday_scene_manual_trigger_is_occupied(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """A holiday scene triggered by a human (remote press) IS occupied."""
+    hass.states.async_set("light.office_overhead", "off")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("christmas", ActivationSource.USER)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
+
+
+@pytest.mark.integration
+async def test_scene_off_clears_occupied(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.office_overhead", "on")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
+    ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
+
+    ctrl._state.transition_to_off()
+    ctrl._notify_state_change()
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.office_occupied").state == STATE_OFF
+
+
+@pytest.mark.integration
+async def test_motion_sensor_alone_not_occupied(hass: HomeAssistant, helper_entities) -> None:
+    """Raw motion sensor activity without a scene change does not set occupied."""
+    hass.states.async_set("light.office_overhead", "off")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    hass.states.async_set("binary_sensor.office_motion_1", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    # Simulate motion sensor going on without area_lighting acting on it
     hass.states.async_set("binary_sensor.office_occupancy_1", "on")
+    ctrl = hass.data["area_lighting"]["controllers"]["office"]
     await ctrl.handle_occupancy_on()
     await hass.async_block_till_done()
 
-    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
-
-
-@pytest.mark.integration
-async def test_occupancy_sensor_off_timer_keeps_occupied(
-    hass: HomeAssistant, helper_entities
-) -> None:
-    hass.states.async_set("light.office_overhead", "on")
-    hass.states.async_set("binary_sensor.office_occupancy_1", "on")
-    hass.states.async_set("binary_sensor.office_motion_1", "off")
-    await _setup(hass, _config_with_occupancy())
-
-    ctrl = hass.data["area_lighting"]["controllers"]["office"]
-    ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
-    await ctrl.handle_occupancy_off()
-    await hass.async_block_till_done()
-
-    assert ctrl._occupancy_timer.is_active
-    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
-
-
-@pytest.mark.integration
-async def test_occupancy_timer_expires_clears_occupied(
-    hass: HomeAssistant, helper_entities
-) -> None:
-    hass.states.async_set("light.office_overhead", "on")
-    hass.states.async_set("binary_sensor.office_occupancy_1", "on")
-    hass.states.async_set("binary_sensor.office_motion_1", "off")
-    await _setup(hass, _config_with_occupancy())
-
-    ctrl = hass.data["area_lighting"]["controllers"]["office"]
-    ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-
-    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
-    await ctrl.handle_occupancy_off()
-    await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
-
-    # Fire the timer through its _fire() method so is_active clears properly
-    await ctrl._occupancy_timer._fire()
-    await hass.async_block_till_done()
+    # Area is still off, so not occupied even though sensor fired
     assert hass.states.get("binary_sensor.office_occupied").state == STATE_OFF
 
 
 @pytest.mark.integration
-async def test_multiple_sensors_one_still_on(hass: HomeAssistant, helper_entities) -> None:
-    cfg = _config_with_occupancy()
-    cfg["area_lighting"]["areas"][0]["occupancy_light_sensor_ids"].append(
-        "binary_sensor.office_occupancy_2"
-    )
+async def test_manual_source_is_occupied(hass: HomeAssistant, helper_entities) -> None:
     hass.states.async_set("light.office_overhead", "off")
-    hass.states.async_set("binary_sensor.office_occupancy_1", "on")
-    hass.states.async_set("binary_sensor.office_occupancy_2", "on")
+    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
     hass.states.async_set("binary_sensor.office_motion_1", "off")
-    await _setup(hass, cfg)
+    await _setup(hass, _config_with_occupancy())
 
     ctrl = hass.data["area_lighting"]["controllers"]["office"]
-    assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
-
-    hass.states.async_set("binary_sensor.office_occupancy_1", "off")
+    ctrl._state.transition_to_scene("manual", ActivationSource.MANUAL)
     ctrl._notify_state_change()
     await hass.async_block_till_done()
+
     assert hass.states.get("binary_sensor.office_occupied").state == STATE_ON
