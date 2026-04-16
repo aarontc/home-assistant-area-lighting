@@ -97,13 +97,12 @@ async def async_set_occupancy_timeout_enabled(self, enabled: bool) -> None:
     else:
         # On → Off: cancel any running timer without firing its callback.
         self._occupancy_timer.cancel()
-    self._notify_state_listeners()
-    await self._persist_state()
+    self._notify_state_change()  # also schedules the persistence save
 ```
 
 Idempotent (early-return on no-change). Ordering: update the flag, then
-apply side effects, then notify + persist — so listeners observe the new
-flag value and any resulting timer state together.
+apply the timer side effect, then `_notify_state_change()` — which fans
+out to UI listeners and schedules a state-dict save via `_schedule_save`.
 
 ### Switch entity
 
@@ -140,10 +139,10 @@ is not suppressed by the current switch state.
 
 ### Diagnostics
 
-Extend the diagnostics payload in
-`custom_components/area_lighting/diagnostics.py` to include
-`occupancy_timeout_enabled` next to the existing switch booleans. Single-line
-addition.
+Extend `AreaLightingController.diagnostic_snapshot()` (controller.py ~288)
+to include `occupancy_timeout_enabled` next to the existing switch
+booleans. Single-line addition. `diagnostics.py` iterates the snapshot
+dict, so no change there.
 
 ## Testing
 
