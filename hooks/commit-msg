@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Validate that the commit subject starts with (Major), (Minor), or (Patch).
+# These markers drive the auto-versioning in dagger/version.go — see
+# CONTRIBUTING.md#versioning.
+#
+# Enable once per clone with:
+#   git config core.hooksPath hooks
+#
+# Skip for one commit (discouraged) with:
+#   git commit --no-verify
+
+set -euo pipefail
+
+commit_msg_file="$1"
+# Read the first non-comment line as the subject.
+subject=$(grep -v '^#' "$commit_msg_file" | sed '/^$/d' | head -n 1 || true)
+
+# Escape hatches: git-managed commits that set their own subjects.
+if [[ $subject =~ ^Merge\  ]]; then
+    exit 0
+fi
+if [[ $subject =~ ^(fixup|squash)!\  ]]; then
+    exit 0
+fi
+if [[ $subject =~ ^Revert\  ]]; then
+    exit 0
+fi
+
+if [[ ! $subject =~ ^\((Major|Minor|Patch)\)\  ]]; then
+    cat >&2 <<EOF
+ERROR: Commit subject must start with (Major), (Minor), or (Patch).
+
+These markers drive the auto-versioning in CI. Pick the severity that
+matches the change:
+
+  (Major) breaking change — bumps x.y.z → (x+1).0.0
+  (Minor) new functionality — bumps x.y.z → x.(y+1).0
+  (Patch) bug fix / internal change — bumps x.y.z → x.y.(z+1)
+
+Your subject was:
+  $subject
+
+EOF
+    exit 1
+fi
+
+exit 0

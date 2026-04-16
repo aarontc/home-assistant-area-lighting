@@ -39,46 +39,50 @@ commit.
 The first run of each pulls the Python image; subsequent runs reuse the cached
 `uv` volume and are much faster.
 
-## Pre-commit hook
+## Git hooks
 
-A `pre-commit` hook that runs `dagger call lint` lives in `hooks/pre-commit`.
-To enable it, point Git at the in-repo hooks directory **once per clone**:
+Two hooks live in `hooks/`:
+
+- `pre-commit` runs `dagger call lint` and aborts the commit on failure.
+- `commit-msg` enforces that the commit subject starts with `(Major)`,
+  `(Minor)`, or `(Patch)` — the markers the auto-versioning pipeline reads
+  (see [Versioning](#versioning)). Merge/fixup/squash/revert subjects are
+  exempt.
+
+Enable both **once per clone** by pointing Git at the in-repo hooks
+directory:
 
 ```sh
 git config core.hooksPath hooks
 ```
 
-From then on, every `git commit` will run the lint step and abort the commit
-if it fails. To skip the hook for a specific commit (discouraged), pass
-`--no-verify`.
+To skip the hooks for one commit (discouraged), pass `--no-verify`.
 
-If the hook is too slow for your workflow, run `dagger call all` manually
-before each commit instead and unset the config:
+If the `pre-commit` lint step is too slow for your workflow, run
+`dagger call all` manually before each commit and unset just the
+hooks path:
 
 ```sh
 git config --unset core.hooksPath
 ```
 
-## Commit message style
-
-Short subject line (under ~72 chars), lowercase prefix describing the area
-(`area_lighting:`, `ci:`, `docs:`, `test:`, etc.), then a blank line and a
-longer body if needed. Run `git log` for recent examples.
+(The `commit-msg` hook is cheap — there's no reason to disable it.)
 
 ## Versioning
 
 Releases use semantic versioning and are driven entirely by commit
-messages. A commit that starts with one of the following markers bumps
-the corresponding component of the next release tag:
+messages. Every commit subject must start with one of these markers
+(enforced by the `commit-msg` hook):
 
-| Marker     | Effect          | Example                                   |
-| ---------- | --------------- | ----------------------------------------- |
-| `(Major)`  | `X.y.z → X+1.0.0` | `(Major) drop Python 3.12 support`      |
-| `(Minor)`  | `x.Y.z → x.Y+1.0` | `(Minor) add per-area holiday scenes`   |
-| `(Patch)`  | `x.y.Z → x.y.Z+1` | `(Patch) fix motion timer race on HA reload` |
+| Marker     | Effect            | Example                                                |
+| ---------- | ----------------- | ------------------------------------------------------ |
+| `(Major)`  | `X.y.z → X+1.0.0` | `(Major) drop Python 3.12 support`                    |
+| `(Minor)`  | `x.Y.z → x.Y+1.0` | `(Minor) ci: auto-tag main branch`                     |
+| `(Patch)`  | `x.y.Z → x.y.Z+1` | `(Patch) area_lighting: fix motion timer on HA reload` |
 
-Normal commits (no marker) count as a patch bump. The highest marker
-across all commits since the last tag wins.
+Keep the subject under ~72 chars. An optional area prefix
+(`area_lighting:`, `ci:`, `docs:`, `test:`, …) may follow the severity
+marker. The highest marker across all commits since the last tag wins.
 
 ### Previewing the next release
 
@@ -89,9 +93,22 @@ dagger call next-version        # print the version the next release would get
 
 ### Cutting a release
 
-Releases are tagged via the GitLab API — no local `git tag` push is
-needed. Create a Project Access Token (or use a Personal Access Token)
-with **write_repository** scope, export it, then run:
+Releases are tagged automatically by CI. The `tag:auto` GitLab CI job
+runs on every push to `main`, calculates the next version from commit
+subjects, and creates the tag via the GitLab API.
+
+For this to work, a **project CI/CD variable `PROJECT_ACCESS_TOKEN`**
+must be set to a Project Access Token (or Personal Access Token) that
+has the **`write_repository`** scope. Create it under **Settings →
+Access Tokens** and mark the variable **Masked** and **Protected**.
+
+The job is a no-op on pipelines triggered by tags themselves, so there's
+no feedback loop.
+
+### Tagging manually
+
+You can also invoke the same Dagger function locally — useful for
+testing or to tag from a detached branch:
 
 ```sh
 export GITLAB_TOKEN=glpat-…
@@ -101,7 +118,3 @@ dagger call create-tag \
     --project-id=aaron/home-assistant-area-lighting \
     --token=env:GITLAB_TOKEN
 ```
-
-The command calculates the next version, creates the tag at the current
-`HEAD` commit, and prints the tag name. GitLab then triggers any
-tag-scoped CI jobs (releases, HACS artifact, etc.).
