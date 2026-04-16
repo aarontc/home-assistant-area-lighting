@@ -1435,7 +1435,21 @@ class AreaLightingController:
             for sid in (self.area.occupancy_light_sensor_ids or [])
         )
         if not any_sensor_on:
-            self._occupancy_timer.start(duration=self._occupancy_off_duration())
+            self._start_occupancy_timer()
+
+    def _start_occupancy_timer(self) -> None:
+        """Arm the occupancy timer, respecting the enable flag.
+
+        Single choke-point for every start so the `occupancy_timeout_enabled`
+        gate lives in one place. Cancels remain independent of the flag.
+        """
+        if not self._occupancy_timeout_enabled:
+            _LOGGER.debug(
+                "Area %s: occupancy timer start suppressed (timeout disabled)",
+                self.area.id,
+            )
+            return
+        self._occupancy_timer.start(duration=self._occupancy_off_duration())
 
     async def handle_occupancy_on(self) -> None:
         _LOGGER.debug("Area %s: handle_occupancy_on", self.area.id)
@@ -1451,7 +1465,7 @@ class AreaLightingController:
         if self._state.is_off or self._state.is_ambient_like:
             return
         # Restart timer with full duration (sensor cleared, countdown resets)
-        self._occupancy_timer.start(duration=self._occupancy_off_duration())
+        self._start_occupancy_timer()
         self._notify_state_change()
 
     async def handle_occupancy_lights_on(self) -> None:

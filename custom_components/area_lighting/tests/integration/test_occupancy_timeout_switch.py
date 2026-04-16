@@ -67,3 +67,44 @@ async def test_defaults_to_enabled(hass: HomeAssistant, helper_entities) -> None
 
     ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
     assert ctrl.occupancy_timeout_enabled is True
+
+
+@pytest.mark.integration
+async def test_start_suppressed_when_disabled(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """With the flag off, activating a scene does not arm the occupancy timer."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+    # Directly mutate the flag; the public async setter is added in Task 3.
+    ctrl._occupancy_timeout_enabled = False
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    assert not ctrl._occupancy_timer.is_active
+
+
+@pytest.mark.integration
+async def test_handle_occupancy_off_suppressed_when_disabled(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """With the flag off, a sensor-clear event also does not arm the timer."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "on")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert not ctrl._occupancy_timer.is_active  # sensor on → no timer
+
+    ctrl._occupancy_timeout_enabled = False
+    # Simulate sensor going clear
+    await ctrl.handle_occupancy_off()
+    await hass.async_block_till_done()
+
+    assert not ctrl._occupancy_timer.is_active
