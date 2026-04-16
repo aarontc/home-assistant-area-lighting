@@ -1,8 +1,10 @@
 [![GitLab CI](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/badges/main/pipeline.svg)](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/pipelines)
-[![GitHub Actions](https://github.com/aaron/home-assistant-area-lighting/actions/workflows/ci.yml/badge.svg)](https://github.com/aaron/home-assistant-area-lighting/actions)
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 
 # Area Lighting
+
+> The canonical source for this project is [gitlab.idleengineers.com/aaron/home-assistant-area-lighting](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting).
+> The [GitHub repository](https://github.com/aarontc/home-assistant-area-lighting) is a read-only mirror that exists so HACS can install it. Please file issues and merge requests on GitLab.
 
 `area_lighting` is a Home Assistant custom component for managing lights on a per-area basis.
 Its purpose is to replace large collections of ad hoc automations, scripts, scenes, helpers, and
@@ -14,9 +16,9 @@ device-specific logic with one consistent behavioral model.
 
 1. Open HACS in your Home Assistant instance.
 2. Go to **Integrations** → **⋮** (top-right menu) → **Custom repositories**.
-3. Add the repository URL:
+3. Add the repository URL (HACS only supports GitHub, so use the mirror):
    ```
-   https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting
+   https://github.com/aarontc/home-assistant-area-lighting
    ```
 4. Select **Integration** as the category and click **Add**.
 5. Search for **Area Lighting** in HACS and click **Install**.

@@ -15,8 +15,8 @@
     "circadian_lighting",
     "lutron_caseta"
   ],
-  "documentation": "https://github.com/aarontc/home-assistant-area-lighting",
-  "issue_tracker": "https://github.com/aarontc/home-assistant-area-lighting/issues",
+  "documentation": "https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting",
+  "issue_tracker": "https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/issues",
   "iot_class": "local_push",
   "requirements": [],
   "version": "0.1.0"
