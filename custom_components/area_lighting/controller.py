@@ -438,6 +438,24 @@ class AreaLightingController:
         else:
             await self.handle_ambient_disabled()
 
+    async def async_set_occupancy_timeout_enabled(self, enabled: bool) -> None:
+        """Set occupancy_timeout_enabled and apply timer side effects.
+
+        On→Off: cancels any running occupancy timer without firing the
+        lights-off callback. Off→On: re-arms the timer if the area is
+        currently in an on-scene with all occupancy sensors clear
+        (via _enforce_occupancy_timer, which encodes those preconditions).
+        Idempotent.
+        """
+        if self._occupancy_timeout_enabled == enabled:
+            return
+        self._occupancy_timeout_enabled = enabled
+        if enabled:
+            self._enforce_occupancy_timer()
+        else:
+            self._occupancy_timer.cancel()
+        self._notify_state_change()  # also schedules the persistence save
+
     @property
     def night_mode(self) -> bool:
         return self._night_mode
