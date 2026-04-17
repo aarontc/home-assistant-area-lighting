@@ -70,9 +70,7 @@ async def test_defaults_to_enabled(hass: HomeAssistant, helper_entities) -> None
 
 
 @pytest.mark.integration
-async def test_start_suppressed_when_disabled(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_start_suppressed_when_disabled(hass: HomeAssistant, helper_entities) -> None:
     """With the flag off, activating a scene does not arm the occupancy timer."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
@@ -226,9 +224,7 @@ async def test_switch_service_call_flips_controller_flag(
 
 
 @pytest.mark.integration
-async def test_diagnostic_snapshot_includes_flag(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_diagnostic_snapshot_includes_flag(hass: HomeAssistant, helper_entities) -> None:
     """diagnostic_snapshot exposes occupancy_timeout_enabled."""
     hass.states.async_set("light.media_room_overhead", "off")
     hass.states.async_set("binary_sensor.media_room_presence", "off")
