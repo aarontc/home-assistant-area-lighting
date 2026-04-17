@@ -308,14 +308,22 @@ async def async_setup_event_handlers(hass: HomeAssistant) -> list:
                 )
             )
 
-            # Manual light detection — same subscription list
-            unsubs.append(
-                async_track_state_change_event(
-                    hass,
-                    all_light_ids,
-                    _make_manual_detection_handler(hass, ctrl),
+            # Manual light detection — exclude cluster aggregates.
+            # Clusters (Hue Zone-style groups) echo their members' state;
+            # any real user adjustment reaches the member lights, which
+            # trigger manual detection themselves. Scenes target individual
+            # members, so clusters never appear in _active_scene_targets —
+            # subscribing to them would trip false positives on every
+            # out-of-grace aggregate update.
+            manual_light_ids = [light.id for light in area.lights]
+            if manual_light_ids:
+                unsubs.append(
+                    async_track_state_change_event(
+                        hass,
+                        manual_light_ids,
+                        _make_manual_detection_handler(hass, ctrl),
+                    )
                 )
-            )
 
         # Motion sensors
         if area.has_motion_lighting and area.motion_light_motion_sensor_ids:
