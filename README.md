@@ -408,6 +408,11 @@ Occupancy protection:
 3. When the timer expires, the area is turned off as if `off` had been pressed
 4. This applies even if the area is in `manual`
 5. Ambient-owned states are exempt from occupancy shutoff
+6. The per-area `switch.<area>_occupancy_timeout_enabled` (default on)
+   can suppress the occupancy timer entirely — when off, the timer does
+   not start, and any running timer is cancelled without turning off
+   the lights. Turning the switch back on re-arms the timer if the area
+   is occupied and all occupancy sensors are clear.
 
 #### Motion activation
 
@@ -556,6 +561,137 @@ Current code notes:
 2. Circadian switches are disabled when all lights go off
 3. Motion, motion-night, and occupancy timers are cancelled (`controller.py:1271-1273`)
 
+### 5. Alerts
+
+Status: `Implemented`
+
+Alert mode flashes lights in one or all areas according to a named
+pattern, then restores their previous state. Patterns are defined
+globally under `alert_patterns` in the area_lighting YAML config and
+triggered via the `area_lighting.alert` service.
+
+During an alert:
+
+1. All light states in the area are captured for later restore
+2. Manual detection is suppressed (light changes from the alert are not
+   interpreted as user overrides)
+3. Motion, motion-night, and occupancy timers are paused — if a timer
+   would have fired during the alert, it fires immediately after the
+   alert completes (against the restored light state)
+4. After the pattern finishes, lights are restored to their pre-alert
+   state (if `restore: true`, which is the default)
+
+Alerts are orthogonal to the scene state machine — they do not cause
+scene transitions and have no lasting effect on the area's state.
+
+#### Alert patterns
+
+Each pattern defines a list of steps executed in order. Steps specify
+which lights to target (`all`, `color`, or `white`), what state to set,
+and how long to hold before the next step. The full step sequence can
+repeat, and `start_inverted` ensures a strobe pattern always begins
+with a visible contrast regardless of the lights' current state.
+
+The `color` and `white` targets are resolved at runtime from each
+light's `supported_color_modes` attribute — no per-light capability
+flags need to be configured.
+
+Example configuration with both a color flash and a strobe pattern:
+
+```yaml
+area_lighting:
+  alert_patterns:
+    blue_alert:
+      steps:
+        - target: color
+          state: "on"
+          brightness: 255
+          rgb_color: [0, 0, 255]
+        - target: white
+          state: "off"
+      delay: 3.0
+      restore: true
+
+    three_flashes:
+      steps:
+        - target: all
+          state: "on"
+          brightness: 255
+          delay: 1.0
+        - target: all
+          state: "off"
+          delay: 1.0
+      repeat: 3
+      start_inverted: true
+      restore: true
+
+  areas:
+    # ... area definitions ...
+```
+
+**`blue_alert`** — in an area with both color-capable Hue bulbs and
+white-only Hue bulbs: captures light states, turns off white-only
+lights, sets all color bulbs to maximum-brightness blue, holds for
+3 seconds, then restores every light to its prior state.
+
+**`three_flashes`** — in an area with Lutron dimmers (no color): turns
+all lights on at full brightness for 1 second, off for 1 second,
+repeated 3 times. `start_inverted` means that if all lights are already
+on, the sequence starts with an off step instead so the first transition
+is always visible. After the flashes, lights are restored.
+
+#### Alert service calls
+
+Trigger an alert from an automation, script, or Developer Tools:
+
+```yaml
+# Flash the kitchen with the blue alert pattern
+service: area_lighting.alert
+data:
+  area_id: kitchen
+  pattern: blue_alert
+```
+
+```yaml
+# Flash the living room with three strobe flashes
+service: area_lighting.alert
+data:
+  area_id: living_room
+  pattern: three_flashes
+```
+
+```yaml
+# Flash every area at once (e.g., doorbell notification)
+service: area_lighting.alert
+data:
+  area_id: all
+  pattern: blue_alert
+```
+
+#### Pattern field reference
+
+| Field            | Type         | Default | Description |
+| ---------------- | ------------ | ------- | ----------- |
+| `steps`          | list         | required | Ordered list of steps executed per cycle |
+| `delay`          | float (sec)  | `0`     | Hold after all steps complete (for non-repeating patterns) |
+| `repeat`         | int          | `1`     | Number of times to execute the full step sequence |
+| `start_inverted` | bool         | `false` | Reverse step order on the first cycle when the majority of targeted lights already match the first step's state |
+| `restore`        | bool         | `true`  | Capture light states before the alert and restore after |
+
+#### Step field reference
+
+| Field              | Type         | Default | Description |
+| ------------------ | ------------ | ------- | ----------- |
+| `target`           | string       | required | `all`, `color`, or `white` |
+| `state`            | string       | required | `on` or `off` |
+| `delay`            | float (sec)  | `0`     | Hold after this step before the next |
+| `brightness`       | int (0-255)  | —       | Optional brightness for `turn_on` |
+| `rgb_color`        | [R, G, B]   | —       | Optional; requires color-capable target |
+| `color_temp_kelvin`| int          | —       | Optional |
+| `hs_color`         | [H, S]      | —       | Optional |
+| `xy_color`         | [X, Y]      | —       | Optional |
+| `transition`       | float (sec)  | —       | HA transition for the light call |
+
 ## State ownership and precedence
 
 Status: `Implemented`
@@ -603,8 +739,10 @@ After restart, the component should:
 
 Current code notes:
 
-1. Core area state and several toggles are already persisted
-2. Full timer reconstruction across restart is not implemented yet
+1. Core area state and all toggles are persisted (including occupancy
+   timeout enabled)
+2. Timer deadlines are persisted and restored across restarts — past-due
+   timers fire immediately on startup
 3. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
 
 ## Rules summary
@@ -636,6 +774,7 @@ An area configuration generally needs to define:
 8. Optional timer durations (normal and night-mode overrides)
 9. Optional `brightness_step_pct` per-area override (default 12)
 10. Optional `night_fadeout_seconds` per-area override
+11. Optional global `alert_patterns` defining named flash/strobe effects
 
 This README intentionally describes behavior first. The exact YAML or storage format can evolve as long
 as these behavioral guarantees remain true.
@@ -717,10 +856,9 @@ work:
    alone. Role-based targeting for dimming was present in earlier versions
    and was removed in favor of "lights currently on" as the simpler
    baseline.
-2. **Follow-area scene mirroring.** Allow one area to track another
-   area's current scene (e.g., kitchen follows living room when the
-   kitchen is off and the living room turns on). Earlier code had a
-   partial implementation; removed pending a cleaner design.
+2. ~~**Follow-area scene mirroring.**~~ **Implemented** as leader/follower
+   relationships via `leader_area_id` and `follow_leader_deactivation`
+   per-area config. A follower mirrors its leader's scene transitions.
 3. **Light followers.** Configurable leader/follower light pairs for
    situations like "fan light tracks ceiling light." Removed pending a
    clearer use case.
