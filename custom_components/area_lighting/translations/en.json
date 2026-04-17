@@ -104,6 +104,10 @@
           "description": "Name of the alert pattern defined in alert_patterns."
         }
       }
+    },
+    "reload": {
+      "name": "Reload",
+      "description": "Re-read area_lighting YAML configuration. Updates alert patterns and other top-level config without restarting Home Assistant."
     }
   }
 }

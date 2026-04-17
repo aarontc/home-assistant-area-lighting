@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 
 import voluptuous as vol
+from homeassistant.config import async_hass_config_yaml
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
@@ -127,6 +128,32 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     # Register services
     await async_register_services(hass)
+
+    # Reload service — re-reads YAML and updates the parsed config so
+    # new/changed alert patterns (and other top-level config) take effect
+    # without restarting HA.  Controllers and entities stay alive; only
+    # the config object is swapped.
+    async def _handle_reload(_call: ServiceCall) -> None:
+        raw_yaml = await async_hass_config_yaml(hass)
+        raw_conf = raw_yaml.get(DOMAIN)
+        if raw_conf is None:
+            _LOGGER.warning("area_lighting: YAML key %r not found during reload", DOMAIN)
+            return
+        validated = CONFIG_SCHEMA({DOMAIN: raw_conf})[DOMAIN]
+        new_config = parse_config(validated)
+        try:
+            validate_leader_follower_graph(new_config)
+        except vol.Invalid as err:
+            _LOGGER.error("area_lighting reload: invalid config: %s", err)
+            return
+        hass.data[DOMAIN]["config"] = new_config
+        _LOGGER.info(
+            "area_lighting: configuration reloaded (%d areas, %d alert patterns)",
+            len(new_config.enabled_areas),
+            len(new_config.alert_patterns),
+        )
+
+    hass.services.async_register(DOMAIN, "reload", _handle_reload)
 
     # Defer entity registration until HA is fully started to avoid
     # blocking startup.

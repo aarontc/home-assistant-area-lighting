@@ -21,6 +21,7 @@ REGISTERED_SERVICES = {
     "lighting_circadian",
     "snapshot_scene",
     "alert",
+    "reload",
 }
 
 
@@ -61,7 +62,8 @@ def test_services_with_area_id_field_have_field_translation():
     data = json.loads(_translations_path().read_text())
     services = data.get("services", {})
     # All lighting_* services take area_id; snapshot_scene takes area_id + scene.
-    services_with_area_id = REGISTERED_SERVICES
+    # reload has no fields.
+    services_with_area_id = REGISTERED_SERVICES - {"reload"}
     for service_name in services_with_area_id:
         entry = services.get(service_name, {})
         fields = entry.get("fields", {})
