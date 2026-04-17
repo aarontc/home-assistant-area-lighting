@@ -15,6 +15,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, State
 
+from .cluster_dispatch import select_dispatch_commands
 from .models import AlertPattern, AlertStep
 
 _LOGGER = logging.getLogger(__name__)
@@ -107,16 +108,26 @@ async def _execute_steps(
     hass: HomeAssistant,
     controller: Any,
     pattern: AlertPattern,
-    all_light_ids: list[str],
+    individual_light_ids: list[str],
+    clusters: list[tuple[str, list[str]]],
 ) -> None:
-    """Run the step sequence with repeat and start_inverted logic."""
+    """Run the step sequence with repeat and start_inverted logic.
+
+    Target filtering classifies *individual* lights by capability
+    (color/white via supported_color_modes). The resulting entity set
+    is then optimised through ``select_dispatch_commands`` so that Hue
+    Zone clusters replace per-light calls where every member of a
+    cluster falls within the same target cohort.
+    """
     steps = list(pattern.steps)
 
     for cycle in range(pattern.repeat):
         effective_steps = steps
         if cycle == 0 and pattern.start_inverted and steps:
             first = steps[0]
-            targeted = filter_lights_by_target(all_light_ids, first.target, hass.states.get)
+            targeted = filter_lights_by_target(
+                individual_light_ids, first.target, hass.states.get
+            )
             if targeted:
                 on_count = sum(
                     1
@@ -128,66 +139,95 @@ async def _execute_steps(
                 if majority_on == first_is_on:
                     effective_steps = list(reversed(steps))
 
-        # Batch consecutive delay-0 steps into a single concurrent dispatch
-        # so commands like "color on + white off" hit the bridge simultaneously,
-        # avoiding brief flashes from Hue bridge side effects on RGBW fixtures.
+        # Batch consecutive delay-0 steps that target disjoint entity
+        # sets so commands like "color on + white off" dispatch
+        # concurrently.  If a step targets entities already in the
+        # batch (e.g. three_flashes: all-on then all-off), the batch
+        # is flushed first so the commands stay sequential.
         batch: list[tuple[list[str], AlertStep]] = []
+        batch_entities: set[str] = set()
         for step in effective_steps:
-            targeted = filter_lights_by_target(all_light_ids, step.target, hass.states.get)
+            targeted = filter_lights_by_target(
+                individual_light_ids, step.target, hass.states.get
+            )
             if targeted:
+                targeted_set = set(targeted)
+                if targeted_set & batch_entities:
+                    await _apply_batch(hass, batch, clusters)
+                    batch = []
+                    batch_entities = set()
                 batch.append((targeted, step))
+                batch_entities |= targeted_set
             if step.delay > 0:
                 if batch:
-                    await _apply_batch(hass, batch)
+                    await _apply_batch(hass, batch, clusters)
                     batch = []
+                    batch_entities = set()
                 await asyncio.sleep(step.delay)
         if batch:
-            await _apply_batch(hass, batch)
+            await _apply_batch(hass, batch, clusters)
 
     if pattern.delay > 0:
         await asyncio.sleep(pattern.delay)
 
 
-def _build_step_calls(
-    hass: HomeAssistant,
-    entity_ids: list[str],
-    step: AlertStep,
-) -> list[Any]:
-    """Build a list of service-call coroutines for one step."""
+def _step_state_dict(step: AlertStep) -> dict[str, Any]:
+    """Build the target state dict for an alert step."""
     if step.state == "off":
-        return [
-            hass.services.async_call("light", "turn_off", {"entity_id": eid}, blocking=True)
-            for eid in entity_ids
-        ]
-    kwargs: dict[str, Any] = {"transition": 0}
+        return {"state": "off"}
+    d: dict[str, Any] = {"state": "on", "transition": 0}
     if step.brightness is not None:
-        kwargs["brightness"] = step.brightness
+        d["brightness"] = step.brightness
     if step.rgb_color is not None:
-        kwargs["rgb_color"] = list(step.rgb_color)
+        d["rgb_color"] = list(step.rgb_color)
     if step.color_temp_kelvin is not None:
-        kwargs["color_temp_kelvin"] = step.color_temp_kelvin
+        d["color_temp_kelvin"] = step.color_temp_kelvin
     if step.hs_color is not None:
-        kwargs["hs_color"] = list(step.hs_color)
+        d["hs_color"] = list(step.hs_color)
     if step.xy_color is not None:
-        kwargs["xy_color"] = list(step.xy_color)
+        d["xy_color"] = list(step.xy_color)
     if step.transition is not None:
-        kwargs["transition"] = step.transition
-    return [
-        hass.services.async_call("light", "turn_on", {"entity_id": eid, **kwargs}, blocking=True)
-        for eid in entity_ids
-    ]
+        d["transition"] = step.transition
+    return d
 
 
 async def _apply_batch(
     hass: HomeAssistant,
     batch: list[tuple[list[str], AlertStep]],
+    clusters: list[tuple[str, list[str]]],
 ) -> None:
-    """Execute all light commands in a batch concurrently."""
-    all_calls: list[Any] = []
-    for entity_ids, step in batch:
-        all_calls.extend(_build_step_calls(hass, entity_ids, step))
-    if all_calls:
-        await asyncio.gather(*all_calls)
+    """Execute all light commands in a batch concurrently.
+
+    Each (entity_ids, step) pair is expanded into per-light target
+    states, then ``select_dispatch_commands`` coalesces them into
+    cluster commands where possible.
+    """
+    # Build the unified entities dict across all steps in the batch.
+    entities: dict[str, dict[str, Any]] = {}
+    for targeted_ids, step in batch:
+        state_dict = _step_state_dict(step)
+        for eid in targeted_ids:
+            entities[eid] = state_dict
+
+    commands = select_dispatch_commands(entities, clusters)
+
+    calls: list[Any] = []
+    for entity_id, state_dict in commands:
+        if state_dict.get("state") == "off":
+            calls.append(
+                hass.services.async_call(
+                    "light", "turn_off", {"entity_id": entity_id}, blocking=True
+                )
+            )
+        else:
+            kwargs = {k: v for k, v in state_dict.items() if k != "state"}
+            calls.append(
+                hass.services.async_call(
+                    "light", "turn_on", {"entity_id": entity_id, **kwargs}, blocking=True
+                )
+            )
+    if calls:
+        await asyncio.gather(*calls)
 
 
 async def execute_alert(
@@ -205,9 +245,16 @@ async def execute_alert(
     6. Restore timer deadlines
     7. Clear _alert_active flag
     """
-    all_light_ids = [light.id for light in controller.area.all_lights]
-    if not all_light_ids:
+    # Classify on individual lights (not clusters) so target filtering
+    # sees per-entity supported_color_modes.  Cluster optimization is
+    # applied at dispatch time via select_dispatch_commands.
+    individual_light_ids = [light.id for light in controller.area.lights]
+    if not individual_light_ids:
         return
+
+    clusters: list[tuple[str, list[str]]] = [
+        (c.id, c.members) for c in controller.area.light_clusters
+    ]
 
     timer_deadlines: dict[str, Any] = {}
     timers = {
@@ -218,7 +265,7 @@ async def execute_alert(
 
     controller._alert_active = True
     try:
-        captured = capture_light_states(all_light_ids, hass.states.get)
+        captured = capture_light_states(individual_light_ids, hass.states.get)
 
         for name, timer in timers.items():
             if timer.is_active and timer.deadline_utc is not None:
@@ -232,7 +279,7 @@ async def execute_alert(
             len(timer_deadlines),
         )
 
-        await _execute_steps(hass, controller, pattern, all_light_ids)
+        await _execute_steps(hass, controller, pattern, individual_light_ids, clusters)
 
         if pattern.restore and captured:
 

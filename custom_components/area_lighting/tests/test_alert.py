@@ -118,7 +118,8 @@ def _make_mock_controller(light_ids: list[str]):
     """Build a mock controller with the minimal interface execute_alert needs."""
     ctrl = MagicMock()
     ctrl.area.id = "test_area"
-    ctrl.area.all_lights = [MagicMock(id=eid) for eid in light_ids]
+    ctrl.area.lights = [MagicMock(id=eid) for eid in light_ids]
+    ctrl.area.light_clusters = []  # no clusters in unit tests
     ctrl._alert_active = False
     for timer_name in ("_motion_timer", "_motion_night_timer", "_occupancy_timer"):
         timer = MagicMock()
