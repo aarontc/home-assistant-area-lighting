@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# Service names registered in services.py (from SERVICE_MAP + snapshot_scene).
+# Service names registered in services.py (from SERVICE_MAP + snapshot_scene + alert).
 REGISTERED_SERVICES = {
     "lighting_on",
     "lighting_off",
@@ -20,6 +20,7 @@ REGISTERED_SERVICES = {
     "lighting_lower",
     "lighting_circadian",
     "snapshot_scene",
+    "alert",
 }
 
 

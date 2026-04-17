@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
+from .alert import execute_alert
 from .const import DOMAIN
 from .controller import AreaLightingController
 from .scene_storage import SceneStorage
@@ -24,6 +26,13 @@ SNAPSHOT_SCHEMA = vol.Schema(
     {
         vol.Required("area_id"): cv.string,
         vol.Required("scene"): cv.string,
+    }
+)
+
+ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("area_id"): cv.string,
+        vol.Required("pattern"): cv.string,
     }
 )
 
@@ -115,4 +124,33 @@ async def async_register_services(hass: HomeAssistant) -> None:
         "snapshot_scene",
         _handle_snapshot,
         schema=SNAPSHOT_SCHEMA,
+    )
+
+    # Alert service
+    async def _handle_alert(call: ServiceCall) -> None:
+        area_id = call.data["area_id"]
+        pattern_name = call.data["pattern"]
+        _LOGGER.debug("Alert service invoked: area=%s pattern=%s", area_id, pattern_name)
+
+        config = hass.data[DOMAIN]["config"]
+        pattern = config.alert_patterns.get(pattern_name)
+        if pattern is None:
+            _LOGGER.warning("Alert pattern %r not found in config", pattern_name)
+            return
+
+        controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
+        if area_id == "all":
+            await asyncio.gather(
+                *(execute_alert(hass, ctrl, pattern) for ctrl in controllers.values())
+            )
+        else:
+            controller = _get_controller(hass, area_id)
+            if controller:
+                await execute_alert(hass, controller, pattern)
+
+    hass.services.async_register(
+        DOMAIN,
+        "alert",
+        _handle_alert,
+        schema=ALERT_SCHEMA,
     )

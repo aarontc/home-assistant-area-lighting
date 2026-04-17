@@ -90,6 +90,20 @@
           "description": "The scene slug to overwrite (e.g., daylight, evening, night, ambient)."
         }
       }
+    },
+    "alert": {
+      "name": "Alert",
+      "description": "Flash lights in an area using a named alert pattern.",
+      "fields": {
+        "area_id": {
+          "name": "Area ID",
+          "description": "The area ID, or \"all\" to alert every area."
+        },
+        "pattern": {
+          "name": "Pattern",
+          "description": "Name of the alert pattern defined in alert_patterns."
+        }
+      }
     }
   }
 }
