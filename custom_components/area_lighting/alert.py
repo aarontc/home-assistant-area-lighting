@@ -128,44 +128,66 @@ async def _execute_steps(
                 if majority_on == first_is_on:
                     effective_steps = list(reversed(steps))
 
+        # Batch consecutive delay-0 steps into a single concurrent dispatch
+        # so commands like "color on + white off" hit the bridge simultaneously,
+        # avoiding brief flashes from Hue bridge side effects on RGBW fixtures.
+        batch: list[tuple[list[str], AlertStep]] = []
         for step in effective_steps:
             targeted = filter_lights_by_target(all_light_ids, step.target, hass.states.get)
             if targeted:
-                await _apply_step(hass, targeted, step)
+                batch.append((targeted, step))
             if step.delay > 0:
+                if batch:
+                    await _apply_batch(hass, batch)
+                    batch = []
                 await asyncio.sleep(step.delay)
+        if batch:
+            await _apply_batch(hass, batch)
 
     if pattern.delay > 0:
         await asyncio.sleep(pattern.delay)
 
 
-async def _apply_step(
+def _build_step_calls(
     hass: HomeAssistant,
     entity_ids: list[str],
     step: AlertStep,
-) -> None:
-    """Apply a single alert step to the targeted lights."""
+) -> list[Any]:
+    """Build a list of service-call coroutines for one step."""
     if step.state == "off":
-        for eid in entity_ids:
-            await hass.services.async_call("light", "turn_off", {"entity_id": eid}, blocking=True)
-    else:
-        kwargs: dict[str, Any] = {"transition": 0}
-        if step.brightness is not None:
-            kwargs["brightness"] = step.brightness
-        if step.rgb_color is not None:
-            kwargs["rgb_color"] = list(step.rgb_color)
-        if step.color_temp_kelvin is not None:
-            kwargs["color_temp_kelvin"] = step.color_temp_kelvin
-        if step.hs_color is not None:
-            kwargs["hs_color"] = list(step.hs_color)
-        if step.xy_color is not None:
-            kwargs["xy_color"] = list(step.xy_color)
-        if step.transition is not None:
-            kwargs["transition"] = step.transition
-        for eid in entity_ids:
-            await hass.services.async_call(
-                "light", "turn_on", {"entity_id": eid, **kwargs}, blocking=True
-            )
+        return [
+            hass.services.async_call("light", "turn_off", {"entity_id": eid}, blocking=True)
+            for eid in entity_ids
+        ]
+    kwargs: dict[str, Any] = {"transition": 0}
+    if step.brightness is not None:
+        kwargs["brightness"] = step.brightness
+    if step.rgb_color is not None:
+        kwargs["rgb_color"] = list(step.rgb_color)
+    if step.color_temp_kelvin is not None:
+        kwargs["color_temp_kelvin"] = step.color_temp_kelvin
+    if step.hs_color is not None:
+        kwargs["hs_color"] = list(step.hs_color)
+    if step.xy_color is not None:
+        kwargs["xy_color"] = list(step.xy_color)
+    if step.transition is not None:
+        kwargs["transition"] = step.transition
+    return [
+        hass.services.async_call("light", "turn_on", {"entity_id": eid, **kwargs}, blocking=True)
+        for eid in entity_ids
+    ]
+
+
+async def _apply_batch(
+    hass: HomeAssistant,
+    batch: list[tuple[list[str], AlertStep]],
+) -> None:
+    """Execute all light commands in a batch concurrently."""
+    all_calls: list[Any] = []
+    for entity_ids, step in batch:
+        all_calls.extend(_build_step_calls(hass, entity_ids, step))
+    if all_calls:
+        await asyncio.gather(*all_calls)
 
 
 async def execute_alert(
