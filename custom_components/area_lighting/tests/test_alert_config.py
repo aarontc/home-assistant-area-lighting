@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.area_lighting.config_schema import parse_config
-from custom_components.area_lighting.models import AlertPattern, AlertStep
+from custom_components.area_lighting.models import AlertPattern
 
 
 @pytest.mark.unit

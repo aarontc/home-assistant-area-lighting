@@ -11,7 +11,12 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .binary_sensor import AreaOccupiedBinarySensor
-from .config_schema import ALERT_PATTERN_SCHEMA, AREA_SCHEMA, parse_config, validate_leader_follower_graph
+from .config_schema import (
+    ALERT_PATTERN_SCHEMA,
+    AREA_SCHEMA,
+    parse_config,
+    validate_leader_follower_graph,
+)
 from .const import DOMAIN
 from .controller import AreaLightingController
 from .diagnostics import AreaLightingDiagnosticSensor

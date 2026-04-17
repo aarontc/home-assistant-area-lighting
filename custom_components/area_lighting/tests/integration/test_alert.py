@@ -126,16 +126,16 @@ def _config_with_alert_patterns() -> dict:
 
 
 @pytest.mark.integration
-async def test_alert_service_triggers_alert(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_alert_service_triggers_alert(hass: HomeAssistant, helper_entities) -> None:
     """Calling area_lighting.alert executes the named pattern."""
     hass.states.async_set(
-        "light.network_room_overhead_1", "on",
+        "light.network_room_overhead_1",
+        "on",
         {"brightness": 150, "supported_color_modes": ["color_temp"]},
     )
     hass.states.async_set(
-        "light.network_room_overhead_2", "off",
+        "light.network_room_overhead_2",
+        "off",
         {"supported_color_modes": ["color_temp"]},
     )
     await _setup(hass, _config_with_alert_patterns())
@@ -169,16 +169,16 @@ async def test_alert_service_unknown_pattern_logs_warning(
 
 
 @pytest.mark.integration
-async def test_alert_service_all_areas(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_alert_service_all_areas(hass: HomeAssistant, helper_entities) -> None:
     """area_id 'all' dispatches to every controller."""
     hass.states.async_set(
-        "light.network_room_overhead_1", "on",
+        "light.network_room_overhead_1",
+        "on",
         {"brightness": 150, "supported_color_modes": ["color_temp"]},
     )
     hass.states.async_set(
-        "light.network_room_overhead_2", "off",
+        "light.network_room_overhead_2",
+        "off",
         {"supported_color_modes": ["color_temp"]},
     )
     await _setup(hass, _config_with_alert_patterns())
@@ -194,16 +194,16 @@ async def test_alert_service_all_areas(
 
 
 @pytest.mark.integration
-async def test_alert_preserves_timer_deadline(
-    hass: HomeAssistant, helper_entities
-) -> None:
+async def test_alert_preserves_timer_deadline(hass: HomeAssistant, helper_entities) -> None:
     """An active occupancy timer's deadline survives an alert."""
     hass.states.async_set(
-        "light.network_room_overhead_1", "on",
+        "light.network_room_overhead_1",
+        "on",
         {"brightness": 150, "supported_color_modes": ["color_temp"]},
     )
     hass.states.async_set(
-        "light.network_room_overhead_2", "off",
+        "light.network_room_overhead_2",
+        "off",
         {"supported_color_modes": ["color_temp"]},
     )
     hass.states.async_set("binary_sensor.network_room_motion_sensor_motion", "off")

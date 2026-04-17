@@ -59,9 +59,8 @@ def filter_lights_by_target(
         elif target == "color":
             if _is_color_capable(state):
                 result.append(eid)
-        elif target == "white":
-            if not _is_color_capable(state):
-                result.append(eid)
+        elif target == "white" and not _is_color_capable(state):
+            result.append(eid)
     return result
 
 
@@ -117,9 +116,7 @@ async def _execute_steps(
         effective_steps = steps
         if cycle == 0 and pattern.start_inverted and steps:
             first = steps[0]
-            targeted = filter_lights_by_target(
-                all_light_ids, first.target, hass.states.get
-            )
+            targeted = filter_lights_by_target(all_light_ids, first.target, hass.states.get)
             if targeted:
                 on_count = sum(
                     1
@@ -132,9 +129,7 @@ async def _execute_steps(
                     effective_steps = list(reversed(steps))
 
         for step in effective_steps:
-            targeted = filter_lights_by_target(
-                all_light_ids, step.target, hass.states.get
-            )
+            targeted = filter_lights_by_target(all_light_ids, step.target, hass.states.get)
             if targeted:
                 await _apply_step(hass, targeted, step)
             if step.delay > 0:
@@ -152,9 +147,7 @@ async def _apply_step(
     """Apply a single alert step to the targeted lights."""
     if step.state == "off":
         for eid in entity_ids:
-            await hass.services.async_call(
-                "light", "turn_off", {"entity_id": eid}, blocking=True
-            )
+            await hass.services.async_call("light", "turn_off", {"entity_id": eid}, blocking=True)
     else:
         kwargs: dict[str, Any] = {"transition": 0}
         if step.brightness is not None:
@@ -185,7 +178,7 @@ async def execute_alert(
     1. Set _alert_active flag (suppresses manual detection)
     2. Capture light states
     3. Snapshot + cancel timers
-    4. Execute steps × repeat
+    4. Execute steps x repeat
     5. Restore light states (if pattern.restore)
     6. Restore timer deadlines
     7. Clear _alert_active flag
@@ -220,10 +213,9 @@ async def execute_alert(
         await _execute_steps(hass, controller, pattern, all_light_ids)
 
         if pattern.restore and captured:
+
             async def _call(domain: str, service: str, **kwargs: Any) -> None:
-                await hass.services.async_call(
-                    domain, service, kwargs, blocking=True
-                )
+                await hass.services.async_call(domain, service, kwargs, blocking=True)
 
             await restore_light_states(captured, _call)
 

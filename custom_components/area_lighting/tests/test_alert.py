@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,8 +36,12 @@ def test_filter_all_returns_all_lights() -> None:
 def test_filter_color_returns_only_color_capable() -> None:
     light_ids = ["light.color", "light.white", "light.ct"]
     states = {
-        "light.color": _make_state("light.color", attributes={"supported_color_modes": ["hs", "color_temp"]}),
-        "light.white": _make_state("light.white", attributes={"supported_color_modes": ["brightness"]}),
+        "light.color": _make_state(
+            "light.color", attributes={"supported_color_modes": ["hs", "color_temp"]}
+        ),
+        "light.white": _make_state(
+            "light.white", attributes={"supported_color_modes": ["brightness"]}
+        ),
         "light.ct": _make_state("light.ct", attributes={"supported_color_modes": ["color_temp"]}),
     }
     result = filter_lights_by_target(light_ids, "color", states.get)
@@ -49,8 +52,12 @@ def test_filter_color_returns_only_color_capable() -> None:
 def test_filter_white_returns_non_color_capable() -> None:
     light_ids = ["light.color", "light.white", "light.ct"]
     states = {
-        "light.color": _make_state("light.color", attributes={"supported_color_modes": ["hs", "color_temp"]}),
-        "light.white": _make_state("light.white", attributes={"supported_color_modes": ["brightness"]}),
+        "light.color": _make_state(
+            "light.color", attributes={"supported_color_modes": ["hs", "color_temp"]}
+        ),
+        "light.white": _make_state(
+            "light.white", attributes={"supported_color_modes": ["brightness"]}
+        ),
         "light.ct": _make_state("light.ct", attributes={"supported_color_modes": ["color_temp"]}),
     }
     result = filter_lights_by_target(light_ids, "white", states.get)
@@ -71,10 +78,16 @@ def test_filter_skips_unavailable_lights() -> None:
 @pytest.mark.unit
 def test_capture_returns_state_dict_per_light() -> None:
     states = {
-        "light.a": _make_state("light.a", state="on", attributes={
-            "brightness": 200, "color_mode": "hs", "hs_color": (30.0, 80.0),
-            "supported_color_modes": ["hs"],
-        }),
+        "light.a": _make_state(
+            "light.a",
+            state="on",
+            attributes={
+                "brightness": 200,
+                "color_mode": "hs",
+                "hs_color": (30.0, 80.0),
+                "supported_color_modes": ["hs"],
+            },
+        ),
         "light.b": _make_state("light.b", state="off", attributes={}),
     }
     captured = capture_light_states(["light.a", "light.b"], states.get)
@@ -94,10 +107,10 @@ async def test_restore_replays_captured_states() -> None:
     await restore_light_states(captured, mock_call)
     calls = mock_call.call_args_list
     assert len(calls) == 2
-    on_call = [c for c in calls if c.kwargs.get("entity_id") == "light.a"][0]
+    on_call = next(c for c in calls if c.kwargs.get("entity_id") == "light.a")
     assert on_call.args == ("light", "turn_on")
     assert on_call.kwargs["brightness"] == 200
-    off_call = [c for c in calls if c.kwargs.get("entity_id") == "light.b"][0]
+    off_call = next(c for c in calls if c.kwargs.get("entity_id") == "light.b")
     assert off_call.args == ("light", "turn_off")
 
 
@@ -152,9 +165,10 @@ async def test_execute_alert_respects_repeat() -> None:
     with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
         await execute_alert(hass, ctrl, pattern)
 
-    # 3 repeats × 2 steps = 6 step calls + restore calls
+    # 3 repeats x 2 steps = 6 step calls + restore calls
     step_calls = [
-        c for c in hass.services.async_call.call_args_list
+        c
+        for c in hass.services.async_call.call_args_list
         if len(c.args) >= 2 and c.args[0] == "light"
     ]
     # 6 step calls + at least 1 restore call
