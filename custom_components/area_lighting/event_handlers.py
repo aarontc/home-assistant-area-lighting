@@ -447,6 +447,8 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
         new_state = event.data.get("new_state")
         if not new_state or new_state.state != STATE_OFF:
             return
+        if ctrl._alert_active:
+            return
         # Any light turning off → check if all lights are now off.
         for light in area.all_lights:
             st = hass.states.get(light.id)
@@ -690,6 +692,8 @@ def _make_occupancy_light_handler(hass: HomeAssistant, ctrl: AreaLightingControl
 
     @callback
     def _handler(event: Event) -> None:
+        if ctrl._alert_active:
+            return
         is_on = _any_on()
         if is_on == state["was_on"]:
             return

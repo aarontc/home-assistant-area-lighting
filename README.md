@@ -573,8 +573,9 @@ triggered via the `area_lighting.alert` service.
 During an alert:
 
 1. All light states in the area are captured for later restore
-2. Manual detection is suppressed (light changes from the alert are not
-   interpreted as user overrides)
+2. Manual detection, lights-off detection, and occupancy light tracking
+   are suppressed (light changes from the alert are not interpreted as
+   user overrides or scene transitions)
 3. Motion, motion-night, and occupancy timers are paused — if a timer
    would have fired during the alert, it fires immediately after the
    alert completes (against the restored light state)

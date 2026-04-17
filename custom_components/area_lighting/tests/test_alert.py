@@ -114,6 +114,69 @@ async def test_restore_replays_captured_states() -> None:
     assert off_call.args == ("light", "turn_off")
 
 
+@pytest.mark.unit
+async def test_restore_rgbw_light_restores_rgbw_color() -> None:
+    captured = {
+        "light.rgbw": {
+            "state": "on",
+            "brightness": 229,
+            "color_mode": "rgbw",
+            "hs_color": (27.0, 22.0),
+            "rgb_color": (255, 224, 198),
+            "rgbw_color": (73, 33, 0, 255),
+            "xy_color": (0.38, 0.353),
+        },
+    }
+    mock_call = AsyncMock()
+    await restore_light_states(captured, mock_call)
+    call = mock_call.call_args
+    assert call.args == ("light", "turn_on")
+    assert call.kwargs["rgbw_color"] == (73, 33, 0, 255)
+    assert call.kwargs["brightness"] == 229
+    assert "hs_color" not in call.kwargs
+    assert "rgb_color" not in call.kwargs
+    assert "xy_color" not in call.kwargs
+
+
+@pytest.mark.unit
+async def test_restore_rgbww_light_restores_rgbww_color() -> None:
+    captured = {
+        "light.rgbww": {
+            "state": "on",
+            "brightness": 200,
+            "color_mode": "rgbww",
+            "rgbww_color": (100, 50, 0, 200, 150),
+        },
+    }
+    mock_call = AsyncMock()
+    await restore_light_states(captured, mock_call)
+    call = mock_call.call_args
+    assert call.kwargs["rgbww_color"] == (100, 50, 0, 200, 150)
+    assert "rgbw_color" not in call.kwargs
+
+
+@pytest.mark.unit
+def test_capture_includes_rgbw_color() -> None:
+    states = {
+        "light.rgbw": _make_state(
+            "light.rgbw",
+            state="on",
+            attributes={
+                "brightness": 229,
+                "color_mode": "rgbw",
+                "rgbw_color": (73, 33, 0, 255),
+                "hs_color": (27.0, 22.0),
+                "rgb_color": (255, 224, 198),
+                "xy_color": (0.38, 0.353),
+                "supported_color_modes": ["rgbw"],
+            },
+        ),
+    }
+    captured = capture_light_states(["light.rgbw"], states.get)
+    assert captured["light.rgbw"]["rgbw_color"] == (73, 33, 0, 255)
+    assert captured["light.rgbw"]["color_mode"] == "rgbw"
+
+
 def _make_mock_controller(light_ids: list[str]):
     """Build a mock controller with the minimal interface execute_alert needs."""
     ctrl = MagicMock()

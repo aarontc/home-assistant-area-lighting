@@ -28,6 +28,8 @@ _CAPTURE_ATTRS = (
     "color_temp_kelvin",
     "hs_color",
     "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
     "xy_color",
 )
 
@@ -36,6 +38,8 @@ _RESTORE_ATTRS = (
     "color_temp_kelvin",
     "hs_color",
     "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
     "xy_color",
 )
 
@@ -96,7 +100,7 @@ async def restore_light_states(
             for attr in _RESTORE_ATTRS:
                 val = data.get(attr)
                 if val is not None:
-                    if attr in ("hs_color", "rgb_color", "xy_color"):
+                    if attr in ("hs_color", "rgb_color", "rgbw_color", "rgbww_color", "xy_color"):
                         if color_mode and attr.startswith(color_mode.split("_")[0]):
                             kwargs[attr] = val
                     else:
