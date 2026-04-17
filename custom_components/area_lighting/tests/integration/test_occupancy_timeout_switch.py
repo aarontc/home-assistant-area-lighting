@@ -223,3 +223,22 @@ async def test_switch_service_call_flips_controller_flag(
     )
     assert ctrl.occupancy_timeout_enabled is True
     assert ctrl._occupancy_timer.is_active  # re-armed on Off→On
+
+
+@pytest.mark.integration
+async def test_diagnostic_snapshot_includes_flag(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """diagnostic_snapshot exposes occupancy_timeout_enabled."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+    snap = ctrl.diagnostic_snapshot()
+    assert "occupancy_timeout_enabled" in snap
+    assert snap["occupancy_timeout_enabled"] is True
+
+    await ctrl.async_set_occupancy_timeout_enabled(False)
+    snap = ctrl.diagnostic_snapshot()
+    assert snap["occupancy_timeout_enabled"] is False

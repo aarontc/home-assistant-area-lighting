@@ -301,6 +301,7 @@ class AreaLightingController:
             "ambience_enabled": self._ambience_enabled,
             "night_mode": self._night_mode,
             "motion_override_ambient": self._motion_override_ambient,
+            "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "manual_fadeout_seconds": self._manual_fadeout_seconds,
             "motion_fadeout_seconds": self._motion_fadeout_seconds,
             "motion_off_duration_seconds": self._motion_off_duration_seconds,
