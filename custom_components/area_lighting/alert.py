@@ -125,9 +125,7 @@ async def _execute_steps(
         effective_steps = steps
         if cycle == 0 and pattern.start_inverted and steps:
             first = steps[0]
-            targeted = filter_lights_by_target(
-                individual_light_ids, first.target, hass.states.get
-            )
+            targeted = filter_lights_by_target(individual_light_ids, first.target, hass.states.get)
             if targeted:
                 on_count = sum(
                     1
@@ -147,9 +145,7 @@ async def _execute_steps(
         batch: list[tuple[list[str], AlertStep]] = []
         batch_entities: set[str] = set()
         for step in effective_steps:
-            targeted = filter_lights_by_target(
-                individual_light_ids, step.target, hass.states.get
-            )
+            targeted = filter_lights_by_target(individual_light_ids, step.target, hass.states.get)
             if targeted:
                 targeted_set = set(targeted)
                 if targeted_set & batch_entities:
