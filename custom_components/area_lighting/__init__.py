@@ -11,7 +11,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .binary_sensor import AreaOccupiedBinarySensor
-from .config_schema import AREA_SCHEMA, parse_config, validate_leader_follower_graph
+from .config_schema import ALERT_PATTERN_SCHEMA, AREA_SCHEMA, parse_config, validate_leader_follower_graph
 from .const import DOMAIN
 from .controller import AreaLightingController
 from .diagnostics import AreaLightingDiagnosticSensor
@@ -44,6 +44,9 @@ CONFIG_SCHEMA = vol.Schema(
         DOMAIN: vol.Schema(
             {
                 vol.Required("areas"): vol.All(cv.ensure_list, [AREA_SCHEMA]),
+                vol.Optional("alert_patterns", default={}): {
+                    cv.string: ALERT_PATTERN_SCHEMA,
+                },
                 # Ignored fields from templater.yaml kept for config compat
                 vol.Optional("base_url"): str,
             },

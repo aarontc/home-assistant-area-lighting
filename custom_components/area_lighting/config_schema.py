@@ -7,6 +7,8 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import ALL_ROLES, CIRCADIAN_BRIGHTNESS, CIRCADIAN_CT, CIRCADIAN_RGB
 from .models import (
+    AlertPattern,
+    AlertStep,
     AreaConfig,
     AreaLightingConfig,
     CircadianSwitchConfig,
@@ -122,6 +124,36 @@ LINKED_MOTION_ENTRY_SCHEMA = vol.Schema(
         vol.Required("remote_area"): cv.string,
         vol.Required("default"): LINKED_MOTION_MAPPING_SCHEMA,
         vol.Optional("when_remote_scene", default={}): {cv.string: LINKED_MOTION_MAPPING_SCHEMA},
+    }
+)
+
+ALERT_STEP_SCHEMA = vol.Schema(
+    {
+        vol.Required("target"): vol.In(["all", "color", "white"]),
+        vol.Required("state"): vol.In(["on", "off"]),
+        vol.Optional("delay", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Optional("brightness"): vol.All(int, vol.Range(min=0, max=255)),
+        vol.Optional("rgb_color"): vol.All(
+            vol.ExactSequence([int, int, int]),
+        ),
+        vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(min=1000, max=10000)),
+        vol.Optional("hs_color"): vol.All(
+            vol.ExactSequence([vol.Coerce(float), vol.Coerce(float)]),
+        ),
+        vol.Optional("xy_color"): vol.All(
+            vol.ExactSequence([vol.Coerce(float), vol.Coerce(float)]),
+        ),
+        vol.Optional("transition"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+    }
+)
+
+ALERT_PATTERN_SCHEMA = vol.Schema(
+    {
+        vol.Required("steps"): vol.All(cv.ensure_list, vol.Length(min=1), [ALERT_STEP_SCHEMA]),
+        vol.Optional("delay", default=0.0): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Optional("repeat", default=1): vol.All(int, vol.Range(min=1)),
+        vol.Optional("start_inverted", default=False): cv.boolean,
+        vol.Optional("restore", default=True): cv.boolean,
     }
 )
 
@@ -289,7 +321,31 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             )
         )
 
-    return AreaLightingConfig(areas=areas)
+    alert_patterns: dict[str, AlertPattern] = {}
+    for name, pat_raw in raw.get("alert_patterns", {}).items():
+        steps = [
+            AlertStep(
+                target=s["target"],
+                state=s["state"],
+                delay=s.get("delay", 0.0),
+                brightness=s.get("brightness"),
+                rgb_color=tuple(s["rgb_color"]) if "rgb_color" in s else None,
+                color_temp_kelvin=s.get("color_temp_kelvin"),
+                hs_color=tuple(s["hs_color"]) if "hs_color" in s else None,
+                xy_color=tuple(s["xy_color"]) if "xy_color" in s else None,
+                transition=s.get("transition"),
+            )
+            for s in pat_raw["steps"]
+        ]
+        alert_patterns[name] = AlertPattern(
+            steps=steps,
+            delay=pat_raw.get("delay", 0.0),
+            repeat=pat_raw.get("repeat", 1),
+            start_inverted=pat_raw.get("start_inverted", False),
+            restore=pat_raw.get("restore", True),
+        )
+
+    return AreaLightingConfig(areas=areas, alert_patterns=alert_patterns)
 
 
 def validate_leader_follower_graph(config: AreaLightingConfig) -> None:

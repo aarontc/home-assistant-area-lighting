@@ -130,6 +130,32 @@ class LinkedMotionConfig:
 
 
 @dataclass
+class AlertStep:
+    """One step in an alert pattern animation."""
+
+    target: str  # "all", "color", "white"
+    state: str  # "on", "off"
+    delay: float = 0.0
+    brightness: int | None = None
+    rgb_color: tuple[int, int, int] | None = None
+    color_temp_kelvin: int | None = None
+    hs_color: tuple[float, float] | None = None
+    xy_color: tuple[float, float] | None = None
+    transition: float | None = None
+
+
+@dataclass
+class AlertPattern:
+    """Named alert/flash pattern configuration."""
+
+    steps: list[AlertStep]
+    delay: float = 0.0
+    repeat: int = 1
+    start_inverted: bool = False
+    restore: bool = True
+
+
+@dataclass
 class AreaConfig:
     """Configuration for an area/room."""
 
@@ -222,6 +248,7 @@ class AreaLightingConfig:
     """Top-level configuration for the area_lighting integration."""
 
     areas: list[AreaConfig] = field(default_factory=list)
+    alert_patterns: dict[str, AlertPattern] = field(default_factory=dict)
 
     @property
     def enabled_areas(self) -> list[AreaConfig]:
