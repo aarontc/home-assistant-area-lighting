@@ -46,7 +46,8 @@ tag:auto:
         --source=. \
         --gitlab-url=$CI_SERVER_URL \
         --project-id=$CI_PROJECT_ID \
-        --token=env:PROJECT_ACCESS_TOKEN
+        --token=env:PROJECT_ACCESS_TOKEN \
+        --branch=$CI_COMMIT_BRANCH
   rules:
     - if: $CI_COMMIT_TAG
       when: never

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"dagger/area-lighting/internal/dagger"
@@ -100,8 +101,12 @@ func (m *AreaLighting) CommitsSinceTag(
 	return result.String(), nil
 }
 
-// CreateTag calculates the next version and creates a Git tag on the given
+// CreateTag calculates the next version, commits updated version strings
+// to manifest.json and pyproject.toml, then creates a Git tag on that
 // commit via the GitLab API. `token` needs `write_repository` scope.
+//
+// The version-bump commit uses [skip ci] to prevent a feedback loop
+// (the commit itself would otherwise trigger another tag:auto run).
 func (m *AreaLighting) CreateTag(
 	ctx context.Context,
 	// +defaultPath="."
@@ -112,29 +117,34 @@ func (m *AreaLighting) CreateTag(
 	projectID string,
 	// GitLab API token with write_repository scope
 	token *dagger.Secret,
+	// Branch to commit the version bump to (default: main)
+	// +optional
+	// +default="main"
+	branch string,
 ) (string, error) {
 	nextVersion, err := m.NextVersion(ctx, source)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate next version: %w", err)
 	}
 
-	commitSHA, err := gitContainer(source).
-		WithExec([]string{"git", "rev-parse", "HEAD"}).
-		Stdout(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get commit SHA: %w", err)
-	}
-	commitSHA = strings.TrimSpace(commitSHA)
-
 	tokenPlain, err := token.Plaintext(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to read token: %w", err)
 	}
 
-	if err := createGitLabTag(ctx, gitlabURL, projectID, tokenPlain, nextVersion, commitSHA); err != nil {
+	// Bump version files and commit via GitLab API.
+	bumpSHA, err := createVersionBumpCommit(
+		ctx, gitlabURL, projectID, tokenPlain, nextVersion, branch,
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to bump version files: %w", err)
+	}
+
+	// Tag the version-bump commit (not the original HEAD).
+	if err := createGitLabTag(ctx, gitlabURL, projectID, tokenPlain, nextVersion, bumpSHA); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Created tag %s", nextVersion), nil
+	return fmt.Sprintf("Created tag %s (version bump commit %s)", nextVersion, bumpSHA[:8]), nil
 }
 
 // -----------------------------------------------------------------------------
@@ -198,6 +208,177 @@ func getCommitsSinceTag(ctx context.Context, git *dagger.Container, tag string) 
 		}
 	}
 	return commits, nil
+}
+
+// Version files to bump. The regex matches the version string in each
+// file; the replacement uses the bare version (no "v" prefix).
+var versionFiles = []struct {
+	path    string
+	pattern *regexp.Regexp
+	format  string // fmt format string; receives the bare version
+}{
+	{
+		path:    "custom_components/area_lighting/manifest.json",
+		pattern: regexp.MustCompile(`"version"\s*:\s*"[^"]*"`),
+		format:  `"version": "%s"`,
+	},
+	{
+		path:    "pyproject.toml",
+		pattern: regexp.MustCompile(`(?m)^version\s*=\s*"[^"]*"`),
+		format:  `version = "%s"`,
+	},
+}
+
+// createVersionBumpCommit reads the version files from the repo via the
+// GitLab API, replaces the version string, and creates a commit with
+// [skip ci] so the push doesn't trigger another pipeline. Returns the
+// new commit SHA.
+func createVersionBumpCommit(
+	ctx context.Context,
+	gitlabURL, projectID, token, version, branch string,
+) (string, error) {
+	encodedProject := strings.ReplaceAll(projectID, "/", "%2F")
+	bareVersion := strings.TrimPrefix(version, "v")
+
+	type action struct {
+		Action   string `json:"action"`
+		FilePath string `json:"file_path"`
+		Content  string `json:"content"`
+	}
+
+	var actions []action
+	for _, vf := range versionFiles {
+		content, err := readGitLabFile(ctx, gitlabURL, encodedProject, token, vf.path, branch)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", vf.path, err)
+		}
+		updated := vf.pattern.ReplaceAllString(content, fmt.Sprintf(vf.format, bareVersion))
+		if updated == content {
+			continue // no change needed
+		}
+		actions = append(actions, action{
+			Action:   "update",
+			FilePath: vf.path,
+			Content:  updated,
+		})
+	}
+
+	if len(actions) == 0 {
+		// Nothing to bump — return HEAD of branch.
+		return readBranchHead(ctx, gitlabURL, encodedProject, token, branch)
+	}
+
+	payload := map[string]any{
+		"branch":         branch,
+		"commit_message": fmt.Sprintf("(Patch) release: bump version to %s [skip ci]", bareVersion),
+		"actions":        actions,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal commit payload: %w", err)
+	}
+
+	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/repository/commits", gitlabURL, encodedProject)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("PRIVATE-TOKEN", token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("call GitLab commits API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GitLab commits API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode commit response: %w", err)
+	}
+	return result.ID, nil
+}
+
+// readGitLabFile fetches a file's raw content from the GitLab repository
+// files API.
+func readGitLabFile(
+	ctx context.Context,
+	gitlabURL, encodedProject, token, filePath, ref string,
+) (string, error) {
+	encodedPath := strings.ReplaceAll(filePath, "/", "%2F")
+	apiURL := fmt.Sprintf(
+		"%s/api/v4/projects/%s/repository/files/%s/raw?ref=%s",
+		gitlabURL, encodedProject, encodedPath, ref,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("PRIVATE-TOKEN", token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GitLab files API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+// readBranchHead returns the HEAD commit SHA for a branch via the
+// GitLab branches API.
+func readBranchHead(
+	ctx context.Context,
+	gitlabURL, encodedProject, token, branch string,
+) (string, error) {
+	apiURL := fmt.Sprintf(
+		"%s/api/v4/projects/%s/repository/branches/%s",
+		gitlabURL, encodedProject, branch,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("PRIVATE-TOKEN", token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("GitLab branches API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Commit struct {
+			ID string `json:"id"`
+		} `json:"commit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	return result.Commit.ID, nil
 }
 
 func createGitLabTag(ctx context.Context, gitlabURL, projectID, token, tagName, ref string) error {
