@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import State
 
 from custom_components.area_lighting.alert import (
     capture_light_states,
+    execute_alert,
     filter_lights_by_target,
     restore_light_states,
 )
+from custom_components.area_lighting.models import AlertPattern, AlertStep
 
 
 def _make_state(entity_id: str, state: str = "on", attributes: dict | None = None) -> State:
@@ -96,3 +99,95 @@ async def test_restore_replays_captured_states() -> None:
     assert on_call.kwargs["brightness"] == 200
     off_call = [c for c in calls if c.kwargs.get("entity_id") == "light.b"][0]
     assert off_call.args == ("light", "turn_off")
+
+
+def _make_mock_controller(light_ids: list[str]):
+    """Build a mock controller with the minimal interface execute_alert needs."""
+    ctrl = MagicMock()
+    ctrl.area.id = "test_area"
+    ctrl.area.all_lights = [MagicMock(id=eid) for eid in light_ids]
+    ctrl._alert_active = False
+    for timer_name in ("_motion_timer", "_motion_night_timer", "_occupancy_timer"):
+        timer = MagicMock()
+        timer.deadline_utc = None
+        timer.is_active = False
+        setattr(ctrl, timer_name, timer)
+    return ctrl
+
+
+@pytest.mark.unit
+async def test_execute_alert_sets_and_clears_flag() -> None:
+    ctrl = _make_mock_controller(["light.a"])
+    pattern = AlertPattern(
+        steps=[AlertStep(target="all", state="on", brightness=255, delay=0.0)],
+    )
+    hass = MagicMock()
+    hass.states.get = lambda eid: _make_state(
+        eid, attributes={"supported_color_modes": ["brightness"]}
+    )
+    hass.services.async_call = AsyncMock()
+
+    with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
+        await execute_alert(hass, ctrl, pattern)
+
+    assert ctrl._alert_active is False
+
+
+@pytest.mark.unit
+async def test_execute_alert_respects_repeat() -> None:
+    ctrl = _make_mock_controller(["light.a"])
+    pattern = AlertPattern(
+        steps=[
+            AlertStep(target="all", state="on", delay=0.0),
+            AlertStep(target="all", state="off", delay=0.0),
+        ],
+        repeat=3,
+    )
+    hass = MagicMock()
+    hass.states.get = lambda eid: _make_state(
+        eid, attributes={"supported_color_modes": ["brightness"]}
+    )
+    hass.services.async_call = AsyncMock()
+
+    with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
+        await execute_alert(hass, ctrl, pattern)
+
+    # 3 repeats × 2 steps = 6 step calls + restore calls
+    step_calls = [
+        c for c in hass.services.async_call.call_args_list
+        if len(c.args) >= 2 and c.args[0] == "light"
+    ]
+    # 6 step calls + at least 1 restore call
+    assert len(step_calls) >= 6
+
+
+@pytest.mark.unit
+async def test_execute_alert_cancels_and_restores_timers() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    ctrl = _make_mock_controller(["light.a"])
+    ctrl._motion_timer.deadline_utc = future
+    ctrl._motion_timer.is_active = True
+    ctrl._motion_night_timer.deadline_utc = None
+    ctrl._motion_night_timer.is_active = False
+    ctrl._occupancy_timer.deadline_utc = future
+    ctrl._occupancy_timer.is_active = True
+
+    pattern = AlertPattern(
+        steps=[AlertStep(target="all", state="on", delay=0.0)],
+    )
+    hass = MagicMock()
+    hass.states.get = lambda eid: _make_state(
+        eid, attributes={"supported_color_modes": ["brightness"]}
+    )
+    hass.services.async_call = AsyncMock()
+
+    with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
+        await execute_alert(hass, ctrl, pattern)
+
+    ctrl._motion_timer.cancel.assert_called()
+    ctrl._occupancy_timer.cancel.assert_called()
+    ctrl._motion_timer.restore.assert_called_once_with(future)
+    ctrl._occupancy_timer.restore.assert_called_once_with(future)
+    ctrl._motion_night_timer.restore.assert_not_called()
