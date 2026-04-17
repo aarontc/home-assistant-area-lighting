@@ -27,3 +27,8 @@
   * `logo@2x.png` — (optional) max height 256
   
   Spec: https://github.com/home-assistant/brands#guideline. Validated by `hassfest` in the brands repo CI. After merge, the logo appears automatically in HA's "Add Integration" picker, the configured integration card (Settings → Devices & Services), and HACS's card + detail view.
+
+
+* Add "alert" feature to flash lights in an area or all areas for a short time
+* Add "party mode" features with color cycling effects
+
