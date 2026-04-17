@@ -505,6 +505,10 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             _skip("area state is circadian", entity_id)
             return
 
+        if ctrl._alert_active:
+            _skip("alert pattern active", entity_id)
+            return
+
         # Grace period: ignore all events in the window immediately
         # after a scene transition (covers intermediate Hue states
         # like old-brightness-before-new-target).

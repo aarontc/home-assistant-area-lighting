@@ -64,6 +64,7 @@ class AreaLightingController:
         self._night_mode: bool = False
         self._motion_override_ambient: bool = True
         self._occupancy_timeout_enabled: bool = True
+        self._alert_active: bool = False
         # Fadeout durations, split (T19):
         # - manual_fadeout_seconds: used by lighting_off (remote off
         #   button, off-scene activation)
@@ -302,6 +303,7 @@ class AreaLightingController:
             "night_mode": self._night_mode,
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
+            "alert_active": self._alert_active,
             "manual_fadeout_seconds": self._manual_fadeout_seconds,
             "motion_fadeout_seconds": self._motion_fadeout_seconds,
             "motion_off_duration_seconds": self._motion_off_duration_seconds,
