@@ -175,3 +175,51 @@ async def test_set_is_idempotent(hass: HomeAssistant, helper_entities) -> None:
 
     assert ctrl._occupancy_timer.is_active
     assert ctrl._occupancy_timer.deadline_utc == deadline_before
+
+
+@pytest.mark.integration
+async def test_switch_entity_registered_and_defaults_on(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """Entity switch.media_room_occupancy_timeout_enabled exists and reads 'on'."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    state = hass.states.get("switch.media_room_occupancy_timeout_enabled")
+    assert state is not None
+    assert state.state == "on"
+    assert state.attributes["friendly_name"] == "Media Room Occupancy Timeout Enabled"
+
+
+@pytest.mark.integration
+async def test_switch_service_call_flips_controller_flag(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """Calling switch.turn_off on the entity flips the controller flag."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._occupancy_timer.is_active
+
+    await hass.services.async_call(
+        "switch",
+        "turn_off",
+        {"entity_id": "switch.media_room_occupancy_timeout_enabled"},
+        blocking=True,
+    )
+    assert ctrl.occupancy_timeout_enabled is False
+    assert not ctrl._occupancy_timer.is_active  # cancelled on On→Off
+
+    await hass.services.async_call(
+        "switch",
+        "turn_on",
+        {"entity_id": "switch.media_room_occupancy_timeout_enabled"},
+        blocking=True,
+    )
+    assert ctrl.occupancy_timeout_enabled is True
+    assert ctrl._occupancy_timer.is_active  # re-armed on Off→On

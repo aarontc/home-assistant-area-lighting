@@ -23,6 +23,7 @@ SWITCH_DEFS = [
     # 'Shield off' conveys "the ambient guard is disabled" — motion is
     # allowed to take over ambient-like scenes.
     ("motion_override_ambient", "Motion Override Ambient", "mdi:shield-off-outline", False),
+    ("occupancy_timeout_enabled", "Occupancy Timeout Enabled", "mdi:timer-cog-outline", True),
 ]
 
 
@@ -74,6 +75,8 @@ class AreaLightingSwitch(SwitchEntity):
         )
         if self._attr_key == "ambience_enabled":
             await self._controller.async_set_ambience_enabled(True)
+        elif self._attr_key == "occupancy_timeout_enabled":
+            await self._controller.async_set_occupancy_timeout_enabled(True)
         else:
             setattr(self._controller, self._attr_key, True)
 
@@ -85,6 +88,8 @@ class AreaLightingSwitch(SwitchEntity):
         )
         if self._attr_key == "ambience_enabled":
             await self._controller.async_set_ambience_enabled(False)
+        elif self._attr_key == "occupancy_timeout_enabled":
+            await self._controller.async_set_occupancy_timeout_enabled(False)
         else:
             setattr(self._controller, self._attr_key, False)
 
