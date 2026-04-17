@@ -162,6 +162,8 @@ class AreaLightingController:
             self._motion_override_ambient = bool(data["motion_override_ambient"])
         elif "override_ambient" in data:
             self._motion_override_ambient = bool(data["override_ambient"])
+        if "occupancy_timeout_enabled" in data:
+            self._occupancy_timeout_enabled = bool(data["occupancy_timeout_enabled"])
         # Fadeout: prefer new split keys; fall back to the legacy single
         # key (which was used for motion timer expiry, so migrate to the
         # motion_fadeout value).
@@ -198,6 +200,7 @@ class AreaLightingController:
             "ambience_enabled": self._ambience_enabled,
             "night_mode": self._night_mode,
             "motion_override_ambient": self._motion_override_ambient,
+            "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "manual_fadeout_seconds": self._manual_fadeout_seconds,
             "motion_fadeout_seconds": self._motion_fadeout_seconds,
             "motion_off_duration_seconds": self._motion_off_duration_seconds,

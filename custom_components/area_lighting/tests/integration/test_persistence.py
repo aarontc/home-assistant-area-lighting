@@ -126,3 +126,42 @@ async def test_restore_no_deadlines_is_noop(
     await fresh.restore_timers()
     assert not fresh._motion_timer.is_active
     assert not fresh._occupancy_timer.is_active
+
+
+@pytest.mark.integration
+async def test_occupancy_timeout_enabled_round_trips(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    """state_dict persists occupancy_timeout_enabled; load_persisted_state restores it."""
+    await _setup_with_config(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+
+    # Flip the flag off and serialize
+    await ctrl.async_set_occupancy_timeout_enabled(False)
+    saved = ctrl.state_dict()
+    assert saved["occupancy_timeout_enabled"] is False
+
+    # Rehydrate into a fresh controller
+    from custom_components.area_lighting.controller import AreaLightingController
+
+    fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
+    assert fresh.occupancy_timeout_enabled is True  # default before load
+    fresh.load_persisted_state(saved)
+    assert fresh.occupancy_timeout_enabled is False
+
+
+@pytest.mark.integration
+async def test_occupancy_timeout_enabled_defaults_true_when_missing(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    """load_persisted_state treats missing key as True (upgrade path)."""
+    await _setup_with_config(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+
+    from custom_components.area_lighting.controller import AreaLightingController
+
+    fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
+    # Simulate a persistence dict saved before this feature existed
+    legacy = {"motion_light_enabled": False, "ambience_enabled": True}
+    fresh.load_persisted_state(legacy)
+    assert fresh.occupancy_timeout_enabled is True
