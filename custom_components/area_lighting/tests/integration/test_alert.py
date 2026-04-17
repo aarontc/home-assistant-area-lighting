@@ -113,6 +113,9 @@ def _config_with_alert_patterns() -> dict:
                         "off": "00:08:00",
                         "night_off": "00:05:00",
                     },
+                    "occupancy_light_sensor_ids": [
+                        "binary_sensor.network_room_motion_sensor_motion",
+                    ],
                     "occupancy_light_timer_durations": {
                         "off": "00:30:00",
                     },
@@ -188,3 +191,36 @@ async def test_alert_service_all_areas(
     )
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     assert ctrl._alert_active is False
+
+
+@pytest.mark.integration
+async def test_alert_preserves_timer_deadline(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """An active occupancy timer's deadline survives an alert."""
+    hass.states.async_set(
+        "light.network_room_overhead_1", "on",
+        {"brightness": 150, "supported_color_modes": ["color_temp"]},
+    )
+    hass.states.async_set(
+        "light.network_room_overhead_2", "off",
+        {"supported_color_modes": ["color_temp"]},
+    )
+    hass.states.async_set("binary_sensor.network_room_motion_sensor_motion", "off")
+    await _setup(hass, _config_with_alert_patterns())
+
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    await ctrl._activate_scene("daylight", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._occupancy_timer.is_active
+    deadline_before = ctrl._occupancy_timer.deadline_utc
+
+    await hass.services.async_call(
+        "area_lighting",
+        "alert",
+        {"area_id": "network_room", "pattern": "test_flash"},
+        blocking=True,
+    )
+
+    assert ctrl._occupancy_timer.is_active
+    assert ctrl._occupancy_timer.deadline_utc == deadline_before
