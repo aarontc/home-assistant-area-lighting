@@ -844,16 +844,18 @@ def _make_remote_handler(hass: HomeAssistant, config: AreaLightingConfig):
             if not ctrl:
                 continue
 
-            method = {
-                "on": ctrl.lighting_on,
-                "off": ctrl.lighting_off,
-                "favorite": ctrl.lighting_favorite,
-                "raise": ctrl.lighting_raise,
-                "lower": ctrl.lighting_lower,
-            }.get(button_slug)
-
-            if method:
-                hass.async_create_task(method())
+            if button_slug == "favorite":
+                cycle = remote.favorite_cycle or None
+                hass.async_create_task(ctrl.lighting_favorite(favorite_cycle=cycle))
+            else:
+                method = {
+                    "on": ctrl.lighting_on,
+                    "off": ctrl.lighting_off,
+                    "raise": ctrl.lighting_raise,
+                    "lower": ctrl.lighting_lower,
+                }.get(button_slug)
+                if method:
+                    hass.async_create_task(method())
 
             # Handle additional actions
             for svc_call in remote.additional_actions.get(button_slug, []):

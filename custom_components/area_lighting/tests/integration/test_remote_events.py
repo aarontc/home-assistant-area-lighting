@@ -153,3 +153,170 @@ async def test_remote_raise_press_dims(
 
     assert ctrl._state.dimmed
     assert ctrl._state.previous_scene == "evening"
+
+
+# ── Favorite override integration tests ──────────────────────────────────
+
+_OVERRIDE_REMOTE_ID = "fav_override_remote_001"
+
+
+@pytest.fixture
+def config_with_favorite_slug() -> dict:
+    """Config where the remote's favorite button overrides to 'evening'."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "network_room",
+                    "name": "Network Room",
+                    "event_handlers": True,
+                    "lights": [
+                        {
+                            "id": "light.network_room_overhead_1",
+                            "roles": ["dimming"],
+                        },
+                    ],
+                    "lutron_remotes": [
+                        {
+                            "id": _OVERRIDE_REMOTE_ID,
+                            "name": "Bedside Remote",
+                            "buttons": {"favorite": "evening"},
+                        }
+                    ],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "evening", "name": "Evening"},
+                        {"id": "night", "name": "Night"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def config_with_favorite_cycle() -> dict:
+    """Config where the remote's favorite button cycles reading -> night."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "network_room",
+                    "name": "Network Room",
+                    "event_handlers": True,
+                    "lights": [
+                        {
+                            "id": "light.network_room_overhead_1",
+                            "roles": ["dimming"],
+                        },
+                    ],
+                    "lutron_remotes": [
+                        {
+                            "id": _OVERRIDE_REMOTE_ID,
+                            "name": "Bedside Remote",
+                            "buttons": {"favorite": ["evening", "night"]},
+                        }
+                    ],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "evening", "name": "Evening"},
+                        {"id": "night", "name": "Night"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.fixture
+def config_with_favorite_scene_entity() -> dict:
+    """Config where the remote's favorite button calls scene.turn_on."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "network_room",
+                    "name": "Network Room",
+                    "event_handlers": True,
+                    "lights": [
+                        {
+                            "id": "light.network_room_overhead_1",
+                            "roles": ["dimming"],
+                        },
+                    ],
+                    "lutron_remotes": [
+                        {
+                            "id": _OVERRIDE_REMOTE_ID,
+                            "name": "Bedside Remote",
+                            "buttons": {"favorite": "scene.custom_reading"},
+                        }
+                    ],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "night", "name": "Night"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_favorite_override_slug_activates_scene(
+    hass: HomeAssistant, helper_entities, config_with_favorite_slug
+) -> None:
+    """Favorite button with a slug override activates that scene."""
+    await _setup(hass, config_with_favorite_slug)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    assert ctrl._state.is_off
+
+    _fire_lutron_button(hass, _OVERRIDE_REMOTE_ID, "stop")
+    await hass.async_block_till_done()
+
+    assert ctrl._state.scene_slug == "evening"
+
+
+@pytest.mark.integration
+async def test_favorite_override_cycle_progresses(
+    hass: HomeAssistant, helper_entities, config_with_favorite_cycle
+) -> None:
+    """Repeated favorite presses cycle through the configured list."""
+    await _setup(hass, config_with_favorite_cycle)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+
+    _fire_lutron_button(hass, _OVERRIDE_REMOTE_ID, "stop")
+    await hass.async_block_till_done()
+    assert ctrl._state.scene_slug == "evening"
+
+    _fire_lutron_button(hass, _OVERRIDE_REMOTE_ID, "stop")
+    await hass.async_block_till_done()
+    assert ctrl._state.scene_slug == "night"
+
+    _fire_lutron_button(hass, _OVERRIDE_REMOTE_ID, "stop")
+    await hass.async_block_till_done()
+    assert ctrl._state.scene_slug == "evening"
+
+
+@pytest.mark.integration
+async def test_favorite_override_scene_entity_calls_service(
+    hass: HomeAssistant, helper_entities, config_with_favorite_scene_entity
+) -> None:
+    """Favorite button with scene.entity calls scene.turn_on."""
+    from homeassistant.core import callback
+
+    calls: list[dict] = []
+
+    @callback
+    def _track_service(event) -> None:
+        if event.data.get("domain") == "scene" and event.data.get("service") == "turn_on":
+            calls.append(event.data)
+
+    hass.bus.async_listen("call_service", _track_service)
+
+    await _setup(hass, config_with_favorite_scene_entity)
+
+    _fire_lutron_button(hass, _OVERRIDE_REMOTE_ID, "stop")
+    await hass.async_block_till_done()
+
+    assert len(calls) == 1
+    assert calls[0]["service_data"]["entity_id"] == "scene.custom_reading"

@@ -160,6 +160,10 @@ stateDiagram-v2
 `AmbientLike` means either the literal `ambient` scene or a holiday scene that was activated because
 ambience was active.
 
+When a remote has `buttons.favorite` configured, the favorite edges above are
+replaced by `<any state> → <configured scene>: favorite / override set`.
+The default holiday/night cycling is skipped entirely.
+
 ## Event sources
 
 The easiest way to reason about the component is by event family rather than by raw state enum.
@@ -254,13 +258,42 @@ Status: `Implemented`
 
 `favorite` is the shortcut into special scenes.
 
-Behavior:
+**Default behavior** (when `buttons.favorite` is not configured):
 
 1. If a global holiday scene is configured and the area has a matching holiday scene, activate it
 2. Otherwise, if the area supports `night`, activate `night`
 3. Otherwise do nothing
 
 Repeated favorite presses alternate between holiday and `night` where both are available.
+
+**Per-remote override** via `buttons.favorite`:
+
+Each remote can override the favorite button target using `buttons.favorite`
+in the remote config. This accepts a single scene slug, a list of scene slugs
+(for cycling), or a Home Assistant scene entity ID:
+
+```yaml
+lutron_remotes:
+  - id: abc123
+    name: Bedside Remote
+    buttons:
+      favorite: reading              # always activate "reading"
+
+  - id: def456
+    name: Entry Remote
+    buttons:
+      favorite: [reading, night]     # cycle: reading → night → reading
+
+  - id: ghi789
+    name: Custom Remote
+    buttons:
+      favorite: scene.my_custom      # call scene.turn_on on a HA scene entity
+```
+
+When an override is set, the default holiday/night cycling is skipped entirely.
+Bare slugs are validated against the area's scenes at config time. Scene entity
+IDs (`scene.` prefix) are not validated at config time and cannot appear in a
+cycle list.
 
 #### `off`
 

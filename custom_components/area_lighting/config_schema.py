@@ -96,12 +96,18 @@ MOTION_LIGHT_CONDITION_SCHEMA = vol.All(
     _validate_motion_light_condition,
 )
 
+LUTRON_BUTTON_OVERRIDES_SCHEMA = vol.Schema(
+    {
+        vol.Optional("favorite"): vol.Any(cv.string, vol.All(cv.ensure_list, [cv.string])),
+    }
+)
+
 LUTRON_REMOTE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.string,
         vol.Required("name"): cv.string,
         vol.Optional("additional_actions", default={}): dict,
-        vol.Optional("buttons", default={}): dict,
+        vol.Optional("buttons", default={}): LUTRON_BUTTON_OVERRIDES_SCHEMA,
     }
 )
 
@@ -263,15 +269,39 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             for c in area_raw.get("motion_light_conditions", [])
         ]
 
-        remotes = [
-            LutronRemoteConfig(
-                id=r["id"],
-                name=r["name"],
-                additional_actions=r.get("additional_actions", {}),
-                buttons=r.get("buttons", {}),
+        scene_slugs = {s["id"] for s in area_raw.get("scenes", [])}
+
+        remotes = []
+        for r in area_raw.get("lutron_remotes", []):
+            buttons = r.get("buttons", {})
+            favorite_raw = buttons.get("favorite")
+            favorite_cycle: list[str] = []
+            if favorite_raw is not None:
+                targets = [favorite_raw] if isinstance(favorite_raw, str) else list(favorite_raw)
+                for slug in targets:
+                    if slug.startswith("scene."):
+                        if len(targets) > 1:
+                            raise vol.Invalid(
+                                f"remote '{r['name']}' in area '{area_id}': "
+                                f"scene entity IDs cannot appear in a favorite cycle list"
+                            )
+                    elif slug not in scene_slugs:
+                        raise vol.Invalid(
+                            f"remote '{r['name']}' in area '{area_id}': "
+                            f"buttons.favorite references scene slug '{slug}' "
+                            f"which is not defined on this area"
+                        )
+                favorite_cycle = targets
+
+            remotes.append(
+                LutronRemoteConfig(
+                    id=r["id"],
+                    name=r["name"],
+                    additional_actions=r.get("additional_actions", {}),
+                    buttons=buttons,
+                    favorite_cycle=favorite_cycle,
+                )
             )
-            for r in area_raw.get("lutron_remotes", [])
-        ]
 
         linked_motion = []
         for lm_raw in area_raw.get("linked_motion", []):

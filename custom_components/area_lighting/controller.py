@@ -1194,14 +1194,48 @@ class AreaLightingController:
     async def lighting_favorite(
         self,
         source: ActivationSource = ActivationSource.USER,
+        favorite_cycle: list[str] | None = None,
     ) -> None:
-        """Handle 'favorite' action."""
+        """Handle 'favorite' action.
+
+        When *favorite_cycle* is provided it overrides the default
+        holiday/night cycling.  A single ``scene.`` entry calls
+        ``scene.turn_on``; bare slugs cycle through the list on
+        repeated presses.
+        """
         _LOGGER.debug(
-            "Area %s: lighting_favorite source=%s current_scene=%s",
+            "Area %s: lighting_favorite source=%s current_scene=%s cycle=%s",
             self.area.id,
             source.value,
             self._state.scene_slug,
+            favorite_cycle,
         )
+
+        if favorite_cycle:
+            if len(favorite_cycle) == 1 and favorite_cycle[0].startswith("scene."):
+                entity_id = favorite_cycle[0]
+                _LOGGER.debug(
+                    "Area %s: favorite override → scene.turn_on %s",
+                    self.area.id,
+                    entity_id,
+                )
+                await self._call_service("scene.turn_on", entity_id=entity_id)
+                return
+
+            try:
+                idx = favorite_cycle.index(self._state.scene_slug)
+                target = favorite_cycle[(idx + 1) % len(favorite_cycle)]
+            except ValueError:
+                target = favorite_cycle[0]
+
+            _LOGGER.debug(
+                "Area %s: favorite override → activate %s",
+                self.area.id,
+                target,
+            )
+            await self._activate_scene(target, source)
+            return
+
         action = determine_favorite_action(
             current_scene=self._state.scene_slug,
             scene_slugs=self.area.scene_slugs,
