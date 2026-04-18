@@ -33,7 +33,7 @@ jobs:
           ref="${{ inputs.tag || github.ref_name }}"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ steps.tag.outputs.ref }}
