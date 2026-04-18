@@ -1,6 +1,6 @@
 [project]
 name = "area-lighting"
-version = "0.8.3"
+version = "0.8.4"
 description = "Area Lighting – Home Assistant custom component for multi-scene, motion-aware room lighting"
 requires-python = ">=3.13.2"
 dependencies = []
