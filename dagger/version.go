@@ -177,8 +177,10 @@ func (m *AreaLighting) CreateTag(
 		}
 		// Wait for the push mirror to sync the tag to GitHub so the
 		// release can reference it by name (avoids racing on
-		// target_commitish).
-		if err := waitForGitHubTag(ctx, githubRepo, ghTokenPlain, nextVersion, 3*time.Minute); err != nil {
+		// target_commitish). GitLab's mirror cron has been observed
+		// delivering tags 5+ minutes after creation, so give it a
+		// generous window — the poll exits as soon as the tag lands.
+		if err := waitForGitHubTag(ctx, githubRepo, ghTokenPlain, nextVersion, 15*time.Minute); err != nil {
 			return result, fmt.Errorf("wait for GitHub tag: %w", err)
 		}
 		relResult, err := createGitHubRelease(ctx, githubRepo, ghTokenPlain, nextVersion, "", body)
