@@ -31,13 +31,7 @@
 
 * ~~Add "alert" feature to flash lights in an area or all areas for a short time~~ **Done.** Alert patterns defined globally under `alert_patterns:` in config YAML. `area_lighting.alert` service takes `area_id` + `pattern`. Supports color/white target filtering, repeat, start_inverted, and restore. Cluster dispatch optimization. See README § Alerts.
 
-* **HACS version display: create GitHub releases from tags.** HACS reads versions from GitHub **releases**, not bare tags. The current `tag:auto` CI creates tags on GitLab and bumps `manifest.json`/`pyproject.toml`, but the GitHub mirror (read-only, used by HACS for installs) needs an actual GitHub release object created from each tag. Without it, HACS falls back to showing the commit hash in the update notification.
-
-  To fix:
-  1. Add a `GITHUB_TOKEN` CI/CD variable (Personal Access Token or fine-grained token with `contents: write` on the mirror repo `aarontc/home-assistant-area-lighting`)
-  2. Add a Dagger function (or CI job) that runs on tag pipelines and calls the GitHub Releases API (`POST /repos/{owner}/{repo}/releases`) with the tag name and a generated changelog
-  3. Ensure the GitLab → GitHub mirror push includes tags (verify mirror settings; GitLab push mirrors sync tags by default)
-  4. The release body can reuse the `commits-since-tag` output or a simple "See [changelog](gitlab-url/-/compare/prev..tag)" link
+* ~~**HACS version display: create GitHub releases from tags.**~~ **Done.** `release:github` GitLab CI job (added 2026-04-17) calls the GitHub Releases API on every tag pipeline via the `create-release` Dagger function. Requires the `GITHUB_TOKEN` CI/CD variable (fine-grained PAT with `contents: write` on the mirror repo). Release body is built from commit subjects between the previous tag and the new tag.
 
 * Add "party mode" features with color cycling effects
 

@@ -105,6 +105,32 @@ Access Tokens** and mark the variable **Masked** and **Protected**.
 The job is a no-op on pipelines triggered by tags themselves, so there's
 no feedback loop.
 
+### Publishing GitHub Releases
+
+HACS reads version numbers from GitHub **Releases**, not bare tags, so
+every GitLab tag also needs a matching release on the
+[GitHub mirror](https://github.com/aarontc/home-assistant-area-lighting).
+The `release:github` CI job runs on tag pipelines and calls the GitHub
+Releases API to create one.
+
+For this to work, a **project CI/CD variable `GITHUB_TOKEN`** must be
+set to a fine-grained Personal Access Token scoped to the mirror repo
+with **Contents: Read and write** permission. Create it at
+<https://github.com/settings/personal-access-tokens/new> (resource
+owner `aarontc`, only the `home-assistant-area-lighting` repo) and
+mark the GitLab variable **Masked** and **Protected**.
+
+Running the same step locally (e.g. to backfill a missed release):
+
+```sh
+export GITHUB_TOKEN=github_pat_…
+dagger call create-release \
+    --source=. \
+    --tag=v0.6.5 \
+    --repo=aarontc/home-assistant-area-lighting \
+    --token=env:GITHUB_TOKEN
+```
+
 ### Tagging manually
 
 You can also invoke the same Dagger function locally — useful for
