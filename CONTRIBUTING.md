@@ -84,6 +84,12 @@ Keep the subject under ~72 chars. An optional area prefix
 (`area_lighting:`, `ci:`, `docs:`, `test:`, …) may follow the severity
 marker. The highest marker across all commits since the last tag wins.
 
+Avoid the literal string `skip ci` (or `ci skip`) anywhere in the
+subject or body — GitLab matches those markers to suppress the
+pipeline, and `tag:auto` won't run. If you need to refer to the
+marker in prose, write it as `"skip&nbsp;ci"` or break it across
+words.
+
 ### Previewing the next release
 
 ```sh
