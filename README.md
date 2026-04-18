@@ -744,7 +744,9 @@ Current code notes:
    timeout enabled)
 2. Timer deadlines are persisted and restored across restarts — past-due
    timers fire immediately on startup
-3. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
+3. On startup, if persisted state is OFF but any physical light is on,
+   the area transitions to MANUAL so tracked state matches reality
+4. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
 
 ## Rules summary
 

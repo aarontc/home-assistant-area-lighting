@@ -183,6 +183,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 await ctrl.restore_timers()
         except Exception:
             _LOGGER.exception("Failed to restore timer deadlines")
+        # Reconcile persisted state vs actual light state
+        try:
+            for ctrl in hass.data[DOMAIN]["controllers"].values():
+                ctrl.reconcile_startup_state()
+        except Exception:
+            _LOGGER.exception("Failed to reconcile startup state")
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 

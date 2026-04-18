@@ -261,6 +261,26 @@ class AreaLightingController:
             self._pending_timer_restore = {}
         self._enforce_occupancy_timer()
 
+    def reconcile_startup_state(self) -> None:
+        """Reconcile persisted state with actual light state on startup.
+
+        If persisted state is OFF but any physical light is on, transition
+        to MANUAL so the tracked state matches reality.
+        """
+        if not self._state.is_off:
+            return
+        for light in self.area.lights:
+            state = self.hass.states.get(light.id)
+            if state is not None and state.state == "on":
+                _LOGGER.info(
+                    "Area %s: persisted state is OFF but %s is on — transitioning to manual",
+                    self.area.id,
+                    light.id,
+                )
+                self._state.transition_to_manual()
+                self._notify_state_change()
+                return
+
     @staticmethod
     def _timer_remaining_seconds(timer: TimerHandle) -> float | None:
         """Seconds until the timer fires, or None if inactive."""
