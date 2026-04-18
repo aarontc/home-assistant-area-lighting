@@ -15,6 +15,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, State
 
+from .area_state import AreaState
 from .cluster_dispatch import select_dispatch_commands
 from .models import AlertPattern, AlertStep
 
@@ -263,6 +264,9 @@ async def execute_alert(
         "_occupancy_timer": controller._occupancy_timer,
     }
 
+    saved_state = controller._state.to_dict()
+    saved_targets = dict(controller._active_scene_targets)
+
     controller._alert_active = True
     try:
         captured = capture_light_states(individual_light_ids, hass.states.get)
@@ -291,6 +295,10 @@ async def execute_alert(
     finally:
         for name, deadline in timer_deadlines.items():
             timers[name].restore(deadline)
+
+        controller._state = AreaState.from_dict(saved_state)
+        controller._active_scene_targets = saved_targets
+        controller._notify_state_change()
 
         controller._alert_active = False
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

@@ -13,6 +13,7 @@ from custom_components.area_lighting.alert import (
     filter_lights_by_target,
     restore_light_states,
 )
+from custom_components.area_lighting.area_state import ActivationSource, AreaState
 from custom_components.area_lighting.models import AlertPattern, AlertStep
 
 
@@ -177,13 +178,16 @@ def test_capture_includes_rgbw_color() -> None:
     assert captured["light.rgbw"]["color_mode"] == "rgbw"
 
 
-def _make_mock_controller(light_ids: list[str]):
+def _make_mock_controller(light_ids: list[str], state: AreaState | None = None):
     """Build a mock controller with the minimal interface execute_alert needs."""
     ctrl = MagicMock()
     ctrl.area.id = "test_area"
     ctrl.area.lights = [MagicMock(id=eid) for eid in light_ids]
     ctrl.area.light_clusters = []  # no clusters in unit tests
     ctrl._alert_active = False
+    ctrl._state = state or AreaState()
+    ctrl._active_scene_targets = {}
+    ctrl._notify_state_change = MagicMock()
     for timer_name in ("_motion_timer", "_motion_night_timer", "_occupancy_timer"):
         timer = MagicMock()
         timer.deadline_utc = None
@@ -269,3 +273,60 @@ async def test_execute_alert_cancels_and_restores_timers() -> None:
     ctrl._motion_timer.restore.assert_called_once_with(future)
     ctrl._occupancy_timer.restore.assert_called_once_with(future)
     ctrl._motion_night_timer.restore.assert_not_called()
+
+
+@pytest.mark.unit
+async def test_execute_alert_preserves_scene_state() -> None:
+    """Alert must not leave a lasting effect on the area's scene state."""
+    initial_state = AreaState()
+    initial_state.transition_to_circadian(ActivationSource.USER)
+    ctrl = _make_mock_controller(["light.a"], state=initial_state)
+    ctrl._active_scene_targets = {"light.a": {"brightness": 200}}
+
+    pattern = AlertPattern(
+        steps=[
+            AlertStep(target="all", state="on", brightness=255, delay=0.0),
+            AlertStep(target="all", state="off", delay=0.0),
+        ],
+    )
+    hass = MagicMock()
+    hass.states.get = lambda eid: _make_state(
+        eid, attributes={"supported_color_modes": ["brightness"]}
+    )
+    hass.services.async_call = AsyncMock()
+
+    with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
+        await execute_alert(hass, ctrl, pattern)
+
+    assert ctrl._state.is_circadian
+    assert ctrl._state.scene_slug == "circadian"
+    assert ctrl._state.source == ActivationSource.USER
+    assert ctrl._active_scene_targets == {"light.a": {"brightness": 200}}
+    ctrl._notify_state_change.assert_called()
+
+
+@pytest.mark.unit
+async def test_execute_alert_restores_state_after_corruption() -> None:
+    """Even if something transitions the state during the alert, it's restored."""
+    initial_state = AreaState()
+    initial_state.transition_to_circadian(ActivationSource.USER)
+    ctrl = _make_mock_controller(["light.a"], state=initial_state)
+
+    pattern = AlertPattern(
+        steps=[AlertStep(target="all", state="off", delay=0.0)],
+    )
+    hass = MagicMock()
+    hass.states.get = lambda eid: _make_state(
+        eid, attributes={"supported_color_modes": ["brightness"]}
+    )
+
+    async def _corrupt_state(*args, **kwargs):
+        ctrl._state.transition_to_off(ActivationSource.USER)
+
+    hass.services.async_call = AsyncMock(side_effect=_corrupt_state)
+
+    with patch("custom_components.area_lighting.alert.asyncio.sleep", AsyncMock()):
+        await execute_alert(hass, ctrl, pattern)
+
+    assert ctrl._state.is_circadian
+    assert ctrl._state.scene_slug == "circadian"
