@@ -31,7 +31,7 @@
 
 * ~~Add "alert" feature to flash lights in an area or all areas for a short time~~ **Done.** Alert patterns defined globally under `alert_patterns:` in config YAML. `area_lighting.alert` service takes `area_id` + `pattern`. Supports color/white target filtering, repeat, start_inverted, and restore. Cluster dispatch optimization. See README § Alerts.
 
-* ~~**HACS version display: create GitHub releases from tags.**~~ **Done.** `release:github` GitLab CI job (added 2026-04-17) calls the GitHub Releases API on every tag pipeline via the `create-release` Dagger function. Requires the `GITHUB_TOKEN` CI/CD variable (fine-grained PAT with `contents: write` on the mirror repo). Release body is built from commit subjects between the previous tag and the new tag.
+* ~~**HACS version display: create GitHub releases from tags.**~~ **Done.** GitHub Actions workflow `.github/workflows/release.yaml` on the GitHub mirror fires when the GitLab→GitHub push mirror delivers a `v*` tag, generates severity-grouped notes from `git log`, filters out the `[skip ci]` version-bump commit, and creates the release using the auto-provided `GITHUB_TOKEN`. Verified live with `v0.1.0`; subsequent releases publish automatically. Replaced an earlier in-`tag:auto` poll-and-release attempt that never produced a successful release. Spec at `docs/superpowers/specs/2026-04-17-github-release-publishing-design.md`.
 
 * Add "party mode" features with color cycling effects
 
