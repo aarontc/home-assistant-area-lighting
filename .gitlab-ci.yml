@@ -16,7 +16,11 @@ stages:
 # format produced by `createVersionBumpCommit` in `dagger/version.go`.
 workflow:
   rules:
-    - if: '$CI_COMMIT_TITLE =~ /^\(Patch\) release: bump version to /'
+    # Match only the exact bump-commit title format emitted by
+    # `createVersionBumpCommit` in dagger/version.go — anchored to
+    # require a trailing `X.Y.Z` version so commit bodies that merely
+    # mention the phrase cannot trigger the filter.
+    - if: '$CI_COMMIT_TITLE =~ /^\(Patch\) release: bump version to [0-9]+\.[0-9]+\.[0-9]+$/'
       when: never
     - if: $CI_COMMIT_TAG
       when: never
