@@ -26,17 +26,8 @@ check:
 
 # Auto-tag pushes to the default branch. The severity is derived from commit
 # subjects carrying `(Major)`, `(Minor)`, or `(Patch)` prefixes — see
-# CONTRIBUTING.md#versioning.
-#
-# Required CI/CD variables:
-#   PROJECT_ACCESS_TOKEN  GitLab token with `write_repository` scope
-#   GITHUB_TOKEN          Fine-grained GitHub PAT with `contents: write`
-#                         on the mirror repo (publishes the release HACS
-#                         reads)
-#
-# The release step has to run in this same job — the version-bump
-# commit's `[skip ci]` marker also suppresses the tag's own pipeline,
-# so a dedicated `$CI_COMMIT_TAG` job would never fire.
+# CONTRIBUTING.md#versioning. Requires the `PROJECT_ACCESS_TOKEN` CI/CD
+# variable to be set to a token with `write_repository` scope.
 tag:auto:
   stage: tag
   image: docker:27
@@ -56,9 +47,7 @@ tag:auto:
         --gitlab-url=$CI_SERVER_URL \
         --project-id=$CI_PROJECT_ID \
         --token=env:PROJECT_ACCESS_TOKEN \
-        --branch=$CI_COMMIT_BRANCH \
-        --github-token=env:GITHUB_TOKEN \
-        --github-repo=aarontc/home-assistant-area-lighting
+        --branch=$CI_COMMIT_BRANCH
   rules:
     - if: $CI_COMMIT_TAG
       when: never
