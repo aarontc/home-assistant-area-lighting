@@ -1,0 +1,106 @@
+name: Publish GitHub release on tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re)publish (e.g. v0.6.4)'
+        required: true
+        type: string
+      replace:
+        description: 'Overwrite notes if a release already exists'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          ref="${{ inputs.tag || github.ref_name }}"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.tag.outputs.ref }}
+
+      - name: Build release notes
+        env:
+          TAG: ${{ steps.tag.outputs.ref }}
+        run: |
+          set -euo pipefail
+          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          range="${prev:+${prev}..}${TAG}"
+
+          subjects="$(git log "$range" --format='%s' \
+            | grep -vE '^\(Patch\) release: bump version to ' || true)"
+
+          {
+            for sev in Major Minor Patch; do
+              entries="$(echo "$subjects" | grep -E "^\(${sev}\) " || true)"
+              if [ -n "$entries" ]; then
+                echo "### ${sev}"
+                echo "$entries" | sed -E "s/^\(${sev}\) /- /"
+                echo
+              fi
+            done
+
+            other="$(echo "$subjects" | grep -vE '^\((Major|Minor|Patch)\) ' || true)"
+            if [ -n "$other" ]; then
+              echo "### Other"
+              echo "$other" | sed 's/^/- /'
+              echo
+            fi
+
+            if [ -n "$prev" ]; then
+              echo "[Compare on GitLab](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/compare/${prev}...${TAG})"
+            fi
+          } > /tmp/notes.md
+
+      - name: Detect prerelease
+        id: pre
+        env:
+          TAG: ${{ steps.tag.outputs.ref }}
+        run: |
+          if [[ "$TAG" == *-* ]]; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.ref }}
+          REPLACE: ${{ inputs.replace || 'false' }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "$REPLACE" = "true" ]; then
+              gh release edit "$TAG" \
+                --notes-file /tmp/notes.md \
+                ${{ steps.pre.outputs.flag }}
+              echo "Updated existing release $TAG"
+            else
+              echo "Release $TAG already exists; skipping (workflow_dispatch with replace=true to overwrite)"
+            fi
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/notes.md \
+              ${{ steps.pre.outputs.flag }}
+          fi
