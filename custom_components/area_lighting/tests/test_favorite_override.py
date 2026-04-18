@@ -293,9 +293,7 @@ def test_schema_rejects_unknown_slug() -> None:
         "areas": [
             _area_with_remotes(
                 scenes=["circadian", "night", "off"],
-                remotes=[
-                    {"id": "abc", "name": "Remote", "buttons": {"favorite": "nonexistent"}}
-                ],
+                remotes=[{"id": "abc", "name": "Remote", "buttons": {"favorite": "nonexistent"}}],
             )
         ]
     }
