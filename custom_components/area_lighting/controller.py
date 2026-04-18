@@ -65,6 +65,7 @@ class AreaLightingController:
         self._motion_override_ambient: bool = True
         self._occupancy_timeout_enabled: bool = True
         self._alert_active: bool = False
+        self._state_was_persisted: bool = False
         # Fadeout durations, split (T19):
         # - manual_fadeout_seconds: used by lighting_off (remote off
         #   button, off-scene activation)
@@ -151,6 +152,7 @@ class AreaLightingController:
             return
         if "area_state" in data:
             self._state = AreaState.from_dict(data["area_state"])
+            self._state_was_persisted = True
         if "motion_light_enabled" in data:
             self._motion_light_enabled = bool(data["motion_light_enabled"])
         if "ambience_enabled" in data:
@@ -265,9 +267,11 @@ class AreaLightingController:
         """Reconcile persisted state with actual light state on startup.
 
         If persisted state is OFF but any physical light is on, transition
-        to MANUAL so the tracked state matches reality.
+        to MANUAL so the tracked state matches reality.  Only runs when
+        state was actually loaded from persistence (not on first-ever
+        startup with default OFF).
         """
-        if not self._state.is_off:
+        if not self._state_was_persisted or not self._state.is_off:
             return
         for light in self.area.lights:
             state = self.hass.states.get(light.id)

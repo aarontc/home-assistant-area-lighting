@@ -17,12 +17,17 @@ def _make_light(entity_id: str) -> MagicMock:
     return light
 
 
-def _make_controller(light_ids: list[str], state: AreaState | None = None) -> MagicMock:
+def _make_controller(
+    light_ids: list[str],
+    state: AreaState | None = None,
+    persisted: bool = True,
+) -> MagicMock:
     ctrl = MagicMock(spec=AreaLightingController)
     ctrl.area = MagicMock()
     ctrl.area.id = "test_area"
     ctrl.area.lights = [_make_light(eid) for eid in light_ids]
     ctrl._state = state or AreaState()
+    ctrl._state_was_persisted = persisted
     ctrl._notify_state_change = MagicMock()
     ctrl.hass = MagicMock()
     ctrl.reconcile_startup_state = AreaLightingController.reconcile_startup_state.__get__(ctrl)
@@ -96,6 +101,17 @@ def test_reconcile_off_with_unavailable_lights_stays_off() -> None:
 def test_reconcile_off_with_unknown_light_stays_off() -> None:
     ctrl = _make_controller(["light.a"])
     ctrl.hass.states.get = lambda eid: None
+
+    ctrl.reconcile_startup_state()
+
+    assert ctrl._state.is_off
+    ctrl._notify_state_change.assert_not_called()
+
+
+@pytest.mark.unit
+def test_reconcile_skips_when_state_not_persisted() -> None:
+    ctrl = _make_controller(["light.a"], persisted=False)
+    ctrl.hass.states.get = lambda eid: State(eid, "on")
 
     ctrl.reconcile_startup_state()
 
