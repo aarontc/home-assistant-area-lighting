@@ -14,6 +14,8 @@
 Its purpose is to replace large collections of ad hoc automations, scripts, scenes, helpers, and
 device-specific logic with one consistent behavioral model.
 
+> **Configuration reference:** every key in `area_lighting.yaml` is documented in [`CONFIGURATION.md`](CONFIGURATION.md).
+
 ## Getting Started
 
 ### Installation via HACS
