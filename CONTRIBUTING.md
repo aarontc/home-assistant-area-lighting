@@ -110,8 +110,14 @@ no feedback loop.
 HACS reads version numbers from GitHub **Releases**, not bare tags, so
 every GitLab tag also needs a matching release on the
 [GitHub mirror](https://github.com/aarontc/home-assistant-area-lighting).
-The `release:github` CI job runs on tag pipelines and calls the GitHub
-Releases API to create one.
+The `tag:auto` job handles this in the same step it creates the tag:
+after tagging, it waits for the push mirror to sync the tag to GitHub,
+then POSTs to the GitHub Releases API.
+
+The release step is part of `tag:auto` (not a separate job) because the
+version-bump commit carries `[skip ci]` — which also suppresses the
+tag's own pipeline, so a dedicated `$CI_COMMIT_TAG` job would never
+fire.
 
 For this to work, a **project CI/CD variable `GITHUB_TOKEN`** must be
 set to a fine-grained Personal Access Token scoped to the mirror repo
@@ -120,7 +126,8 @@ with **Contents: Read and write** permission. Create it at
 owner `aarontc`, only the `home-assistant-area-lighting` repo) and
 mark the GitLab variable **Masked** and **Protected**.
 
-Running the same step locally (e.g. to backfill a missed release):
+To backfill a release for an existing tag (e.g. one that pre-dates
+this setup), run the standalone function locally:
 
 ```sh
 export GITHUB_TOKEN=github_pat_…
@@ -144,3 +151,6 @@ dagger call create-tag \
     --project-id=aaron/home-assistant-area-lighting \
     --token=env:GITLAB_TOKEN
 ```
+
+Pass `--github-token=env:GITHUB_TOKEN --github-repo=aarontc/home-assistant-area-lighting`
+as well to also publish the GitHub release.

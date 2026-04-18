@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"dagger/area-lighting/internal/dagger"
 	"dagger/area-lighting/versioning"
@@ -107,6 +108,14 @@ func (m *AreaLighting) CommitsSinceTag(
 //
 // The version-bump commit uses [skip ci] to prevent a feedback loop
 // (the commit itself would otherwise trigger another tag:auto run).
+// That same marker also suppresses the tag's own pipeline, so any
+// post-tag work (e.g. publishing the GitHub release) must happen in
+// this job — not a separate `$CI_COMMIT_TAG` job.
+//
+// If `githubToken` and `githubRepo` are both supplied, the function
+// additionally polls the GitHub mirror until it observes the tag (the
+// push mirror runs async) and then POSTs a release to the GitHub
+// Releases API so HACS can read the version.
 func (m *AreaLighting) CreateTag(
 	ctx context.Context,
 	// +defaultPath="."
@@ -121,6 +130,13 @@ func (m *AreaLighting) CreateTag(
 	// +optional
 	// +default="main"
 	branch string,
+	// GitHub token with contents:write on githubRepo. If set together
+	// with githubRepo, a GitHub Release is created after tagging.
+	// +optional
+	githubToken *dagger.Secret,
+	// GitHub owner/repo, e.g. aarontc/home-assistant-area-lighting
+	// +optional
+	githubRepo string,
 ) (string, error) {
 	nextVersion, err := m.NextVersion(ctx, source)
 	if err != nil {
@@ -144,7 +160,34 @@ func (m *AreaLighting) CreateTag(
 	if err := createGitLabTag(ctx, gitlabURL, projectID, tokenPlain, nextVersion, bumpSHA); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Created tag %s (version bump commit %s)", nextVersion, bumpSHA[:8]), nil
+	result := fmt.Sprintf("Created tag %s (version bump commit %s)", nextVersion, bumpSHA[:8])
+
+	if githubToken != nil && githubRepo != "" {
+		ghTokenPlain, err := githubToken.Plaintext(ctx)
+		if err != nil {
+			return result, fmt.Errorf("read github token: %w", err)
+		}
+		git := gitContainer(source)
+		prev, err := resolvePrevTag(ctx, git, "HEAD")
+		var body string
+		if err != nil {
+			body = "Initial release."
+		} else {
+			body = buildReleaseBody(ctx, git, prev, "HEAD")
+		}
+		// Wait for the push mirror to sync the tag to GitHub so the
+		// release can reference it by name (avoids racing on
+		// target_commitish).
+		if err := waitForGitHubTag(ctx, githubRepo, ghTokenPlain, nextVersion, 3*time.Minute); err != nil {
+			return result, fmt.Errorf("wait for GitHub tag: %w", err)
+		}
+		relResult, err := createGitHubRelease(ctx, githubRepo, ghTokenPlain, nextVersion, "", body)
+		if err != nil {
+			return result, fmt.Errorf("create github release: %w", err)
+		}
+		result += "\n" + relResult
+	}
+	return result, nil
 }
 
 // CreateRelease creates a GitHub Release for `tag` on the mirror repo.
@@ -182,46 +225,98 @@ func (m *AreaLighting) CreateRelease(
 	}
 	sha = strings.TrimSpace(sha)
 
-	body := buildReleaseBody(ctx, git, tag)
+	prev, err := resolvePrevTag(ctx, git, tag+"^")
+	var body string
+	if err != nil {
+		body = "Initial release."
+	} else {
+		body = buildReleaseBody(ctx, git, prev, tag)
+	}
 
 	return createGitHubRelease(ctx, repo, tokenPlain, tag, sha, body)
 }
 
-// buildReleaseBody lists commit subjects between the previous tag and
-// `tag`. Returns a fallback message if the range can't be determined
-// (e.g. first release).
-func buildReleaseBody(ctx context.Context, git *dagger.Container, tag string) string {
-	prev, err := git.
-		WithExec([]string{"git", "describe", "--tags", "--abbrev=0", tag + "^"}).
+// resolvePrevTag returns the closest tag ancestor of `ref` (via
+// `git describe --tags --abbrev=0 <ref>`). Callers pass `tag^` when
+// `ref` is itself the new tag, or `HEAD` when the new tag hasn't been
+// fetched into the local clone.
+func resolvePrevTag(ctx context.Context, git *dagger.Container, ref string) (string, error) {
+	out, err := git.
+		WithExec([]string{"git", "describe", "--tags", "--abbrev=0", ref}).
 		Stdout(ctx)
 	if err != nil {
-		return "Initial release."
+		return "", err
 	}
-	prev = strings.TrimSpace(prev)
+	return strings.TrimSpace(out), nil
+}
 
+// buildReleaseBody returns a markdown body listing commit subjects in
+// the `prevTag..ref` range. Falls back to a short placeholder when the
+// range is empty or git fails.
+func buildReleaseBody(ctx context.Context, git *dagger.Container, prevTag, ref string) string {
 	log, err := git.
-		WithExec([]string{"git", "log", fmt.Sprintf("%s..%s", prev, tag), "--format=- %s"}).
+		WithExec([]string{"git", "log", fmt.Sprintf("%s..%s", prevTag, ref), "--format=- %s"}).
 		Stdout(ctx)
 	if err != nil {
-		return fmt.Sprintf("Changes since %s.", prev)
+		return fmt.Sprintf("Changes since %s.", prevTag)
 	}
 	log = strings.TrimSpace(log)
 	if log == "" {
-		return fmt.Sprintf("No changes since %s.", prev)
+		return fmt.Sprintf("No changes since %s.", prevTag)
 	}
-	return fmt.Sprintf("## Changes since %s\n\n%s", prev, log)
+	return fmt.Sprintf("## Changes since %s\n\n%s", prevTag, log)
 }
 
-// createGitHubRelease POSTs to the Releases API. Returns the release
-// HTML URL on success.
+// waitForGitHubTag polls `GET /repos/{repo}/git/ref/tags/{tag}` until
+// it returns 200 or `timeout` elapses. Used to bridge the async push
+// mirror gap: the tag exists on GitLab immediately but arrives on
+// GitHub only after the mirror fires.
+func waitForGitHubTag(ctx context.Context, repo, token, tag string, timeout time.Duration) error {
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/git/ref/tags/%s", repo, tag)
+	deadline := time.Now().Add(timeout)
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			status := "unknown"
+			if resp != nil {
+				status = resp.Status
+			}
+			return fmt.Errorf("tag %s did not appear on %s within %s (last status: %s)", tag, repo, timeout, status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// createGitHubRelease POSTs to the Releases API. If the tag already
+// exists on GitHub (e.g. the mirror has synced), `sha` can be empty
+// and GitHub attaches the release to the existing tag.
 func createGitHubRelease(ctx context.Context, repo, token, tag, sha, body string) (string, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases", repo)
 
 	payload := map[string]any{
-		"tag_name":         tag,
-		"name":             tag,
-		"target_commitish": sha,
-		"body":             body,
+		"tag_name": tag,
+		"name":     tag,
+		"body":     body,
+	}
+	if sha != "" {
+		payload["target_commitish"] = sha
 	}
 	reqBody, err := json.Marshal(payload)
 	if err != nil {

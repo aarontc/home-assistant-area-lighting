@@ -1,7 +1,6 @@
 stages:
   - check
   - tag
-  - release
   - nightly
 
 # Install Dagger CLI (version from .tool-versions)
@@ -27,8 +26,17 @@ check:
 
 # Auto-tag pushes to the default branch. The severity is derived from commit
 # subjects carrying `(Major)`, `(Minor)`, or `(Patch)` prefixes — see
-# CONTRIBUTING.md#versioning. Requires the `PROJECT_ACCESS_TOKEN` CI/CD
-# variable to be set to a token with `write_repository` scope.
+# CONTRIBUTING.md#versioning.
+#
+# Required CI/CD variables:
+#   PROJECT_ACCESS_TOKEN  GitLab token with `write_repository` scope
+#   GITHUB_TOKEN          Fine-grained GitHub PAT with `contents: write`
+#                         on the mirror repo (publishes the release HACS
+#                         reads)
+#
+# The release step has to run in this same job — the version-bump
+# commit's `[skip ci]` marker also suppresses the tag's own pipeline,
+# so a dedicated `$CI_COMMIT_TAG` job would never fire.
 tag:auto:
   stage: tag
   image: docker:27
@@ -48,38 +56,13 @@ tag:auto:
         --gitlab-url=$CI_SERVER_URL \
         --project-id=$CI_PROJECT_ID \
         --token=env:PROJECT_ACCESS_TOKEN \
-        --branch=$CI_COMMIT_BRANCH
+        --branch=$CI_COMMIT_BRANCH \
+        --github-token=env:GITHUB_TOKEN \
+        --github-repo=aarontc/home-assistant-area-lighting
   rules:
     - if: $CI_COMMIT_TAG
       when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# Publish a GitHub Release on the read-only mirror whenever a tag lands on
-# GitLab. HACS reads versions from GitHub Releases, so without this job
-# HACS shows a commit hash instead of the version number. Requires the
-# `GITHUB_TOKEN` CI/CD variable set to a fine-grained PAT with
-# `contents: write` on `aarontc/home-assistant-area-lighting`.
-release:github:
-  stage: release
-  image: docker:27
-  services:
-    - docker:27-dind
-  variables:
-    DAGGER_NO_NAG: "1"
-    # Full history + tags so the release body can diff against the
-    # previous tag.
-    GIT_DEPTH: "0"
-  before_script:
-    - *dagger-setup
-  script:
-    - |
-      dagger call create-release \
-        --source=. \
-        --tag=$CI_COMMIT_TAG \
-        --repo=aarontc/home-assistant-area-lighting \
-        --token=env:GITHUB_TOKEN
-  rules:
-    - if: $CI_COMMIT_TAG
 
 nightly:
   stage: nightly
