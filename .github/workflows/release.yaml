@@ -1,17 +1,17 @@
-name: Publish GitHub release on tag
+name: Publish GitHub releases
 
 on:
-  push:
-    tags:
-      - 'v*'
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to (re)publish (e.g. v0.6.4)'
-        required: true
+        description: 'Specific tag to (re)publish; leave blank to scan all tags'
+        required: false
         type: string
+        default: ''
       replace:
-        description: 'Overwrite notes if a release already exists'
+        description: 'Overwrite notes when a release already exists (only honored when `tag` is set)'
         required: false
         type: boolean
         default: false
@@ -20,87 +20,86 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-sync
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve tag
-        id: tag
-        run: |
-          ref="${{ inputs.tag || github.ref_name }}"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          ref: ${{ steps.tag.outputs.ref }}
-
-      - name: Build release notes
-        env:
-          TAG: ${{ steps.tag.outputs.ref }}
-        run: |
-          set -euo pipefail
-          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          range="${prev:+${prev}..}${TAG}"
-
-          subjects="$(git log "$range" --format='%s' \
-            | grep -vE '^\(Patch\) release: bump version to ' || true)"
-
-          {
-            for sev in Major Minor Patch; do
-              entries="$(echo "$subjects" | grep -E "^\(${sev}\) " || true)"
-              if [ -n "$entries" ]; then
-                echo "### ${sev}"
-                echo "$entries" | sed -E "s/^\(${sev}\) /- /"
-                echo
-              fi
-            done
-
-            other="$(echo "$subjects" | grep -vE '^\((Major|Minor|Patch)\) ' || true)"
-            if [ -n "$other" ]; then
-              echo "### Other"
-              echo "$other" | sed 's/^/- /'
-              echo
-            fi
-
-            if [ -n "$prev" ]; then
-              echo "[Compare on GitLab](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/compare/${prev}...${TAG})"
-            fi
-          } > /tmp/notes.md
-
-      - name: Detect prerelease
-        id: pre
-        env:
-          TAG: ${{ steps.tag.outputs.ref }}
-        run: |
-          if [[ "$TAG" == *-* ]]; then
-            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create or update release
+      - name: Clone repo with full history
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.ref }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q --tags origin
+          git -c advice.detachedHead=false reset -q --hard origin/main
+
+      - name: Publish missing releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SINGLE_TAG: ${{ inputs.tag }}
           REPLACE: ${{ inputs.replace || 'false' }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            if [ "$REPLACE" = "true" ]; then
-              gh release edit "$TAG" \
-                --notes-file /tmp/notes.md \
-                ${{ steps.pre.outputs.flag }}
-              echo "Updated existing release $TAG"
-            else
-              echo "Release $TAG already exists; skipping (workflow_dispatch with replace=true to overwrite)"
-            fi
+
+          if [ -n "${SINGLE_TAG:-}" ]; then
+            tags="$SINGLE_TAG"
           else
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file /tmp/notes.md \
-              ${{ steps.pre.outputs.flag }}
+            tags="$(git tag --list 'v*' --sort=v:refname)"
           fi
+
+          if [ -z "$tags" ]; then
+            echo "No tags to process."
+            exit 0
+          fi
+
+          for TAG in $tags; do
+            exists=false
+            gh release view "$TAG" >/dev/null 2>&1 && exists=true
+
+            if $exists && { [ -z "${SINGLE_TAG:-}" ] || [ "$REPLACE" != "true" ]; }; then
+              echo "Skipping $TAG (release exists; workflow_dispatch with replace=true regenerates)"
+              continue
+            fi
+
+            prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            range="${prev:+${prev}..}${TAG}"
+            subjects="$(git log "$range" --format='%s' \
+              | grep -vE '^\(Patch\) release: bump version to ' || true)"
+
+            {
+              for sev in Major Minor Patch; do
+                entries="$(echo "$subjects" | grep -E "^\(${sev}\) " || true)"
+                if [ -n "$entries" ]; then
+                  echo "### ${sev}"
+                  echo "$entries" | sed -E "s/^\(${sev}\) /- /"
+                  echo
+                fi
+              done
+
+              other="$(echo "$subjects" | grep -vE '^\((Major|Minor|Patch)\) ' || true)"
+              if [ -n "$other" ]; then
+                echo "### Other"
+                echo "$other" | sed 's/^/- /'
+                echo
+              fi
+
+              if [ -n "$prev" ]; then
+                echo "[Compare on GitLab](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/compare/${prev}...${TAG})"
+              fi
+            } > /tmp/notes.md
+
+            flag=""
+            case "$TAG" in *-*) flag="--prerelease" ;; esac
+
+            if $exists; then
+              gh release edit "$TAG" --notes-file /tmp/notes.md $flag
+              echo "Updated release $TAG"
+            else
+              gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md $flag
+              echo "Created release $TAG"
+            fi
+          done

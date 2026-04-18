@@ -26,23 +26,36 @@ on the mirror that fires when the mirror itself delivers the tag.
 
 ## Solution
 
-A GitHub Actions workflow on the GitHub mirror, triggered by the tag
-push the mirror itself performs. The workflow runs only when the tag
-arrives on GitHub (so it can never race the mirror), takes seconds,
-and uses the built-in `GITHUB_TOKEN` — no cross-system token plumbing,
-no polling, no idle CI runners. The wait for the mirror sync still
-exists, but it's silent: nothing is consuming a runner during it.
+A GitHub Actions workflow on the GitHub mirror, running on a
+**5-minute cron schedule**. Each run enumerates `v*` tags, checks
+which have no matching release, and creates one for each missing
+tag. Idempotent, race-free (only ever acts on tags that already
+exist on GitHub), self-healing (a missed tag is picked up on the
+next scan). Uses the built-in `GITHUB_TOKEN` — no cross-system
+token plumbing, no polling, no idle CI runners.
 
 `tag:auto` becomes responsible only for what it can actually do
 synchronously and locally: bump version files and create the GitLab
-tag. The downstream chain (mirror → workflow → release) runs without
-holding any of `tag:auto`'s resources.
+tag. The downstream chain (mirror → scheduled scan → release) runs
+without holding any of `tag:auto`'s resources.
 
 This re-introduces a narrow GitHub Actions surface, deliberately
 scoped to release publishing. Test/lint CI continues to live in
 GitLab (`5eae7ea` removed Actions for that purpose; this workflow
-addresses a different concern that's natively event-driven on
-GitHub).
+addresses a different concern that's natively a GitHub-side scan).
+
+### Trigger evolution (why schedule, not `push: tags`)
+
+The first implementation of this design used `push: tags: ['v*']`
+on the assumption that mirror-delivered tag refs would trigger
+workflow events on GitHub. Empirically they did not — tested with
+both HTTPS+fine-grained-PAT and SSH+deploy-key mirror auth, tags
+landed correctly on GitHub but GitHub never synthesized `push`
+events for them. GitHub's behaviour here is under-documented and
+appears specific to pushes from GitLab's mirror process. Since the
+pull-based design (scheduled scan) is strictly more robust and the
+latency cost is small (≤5 min to HACS's update view), we switched
+rather than fight the event pipeline.
 
 ## Architecture
 
@@ -58,14 +71,13 @@ reviewed, and visible alongside the rest of the project.
 
 ### Triggers
 
-- `push: tags: ['v*']` — fires when the mirror lands a new
-  semver-style tag.
-- `workflow_dispatch` — manual trigger for backfilling existing
-  un-released tags and for regenerating notes after a logic change.
-  Inputs:
-  - `tag` (required): the tag to (re)publish, e.g. `v0.6.4`.
-  - `replace` (optional, default false): overwrite the existing
-    release's notes if a release already exists.
+- `schedule: cron: '*/5 * * * *'` — fires every 5 minutes. Each
+  run scans tags and publishes any that are missing a release.
+- `workflow_dispatch` — manual trigger. Inputs:
+  - `tag` (optional): specific tag to (re)publish. Leave blank to
+    behave exactly like a scheduled run (scan all tags).
+  - `replace` (optional, default false): only honored when `tag`
+    is set. Regenerates notes on an existing release.
 
 ### Permissions
 
@@ -74,27 +86,28 @@ auto-provided `GITHUB_TOKEN` — no PAT, no secret to manage.
 
 ### Concurrency
 
-`group: release-${{ inputs.tag || github.ref_name }}`,
-`cancel-in-progress: false`. Prevents a manual dispatch and an
-inbound mirror push from racing on the same tag.
+`group: release-sync`, `cancel-in-progress: false`. A single fixed
+group serializes all runs (scheduled + manual), so a long-running
+scan never collides with the next cron tick; the follow-up just
+queues behind.
 
 ## Workflow
 
 ```yaml
-name: Publish GitHub release on tag
+name: Publish GitHub releases
 
 on:
-  push:
-    tags:
-      - 'v*'
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to (re)publish (e.g. v0.6.4)'
-        required: true
+        description: 'Specific tag to (re)publish; leave blank to scan all tags'
+        required: false
         type: string
+        default: ''
       replace:
-        description: 'Overwrite notes if a release already exists'
+        description: 'Overwrite notes when a release already exists (only honored when `tag` is set)'
         required: false
         type: boolean
         default: false
@@ -103,90 +116,89 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-sync
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve tag
-        id: tag
-        run: |
-          ref="${{ inputs.tag || github.ref_name }}"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ steps.tag.outputs.ref }}
-
-      - name: Build release notes
-        env:
-          TAG: ${{ steps.tag.outputs.ref }}
-        run: |
-          set -euo pipefail
-          prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          range="${prev:+${prev}..}${TAG}"
-
-          subjects="$(git log "$range" --format='%s' \
-            | grep -vE '^\(Patch\) release: bump version to ' || true)"
-
-          {
-            for sev in Major Minor Patch; do
-              entries="$(echo "$subjects" | grep -E "^\(${sev}\) " || true)"
-              if [ -n "$entries" ]; then
-                echo "### ${sev}"
-                echo "$entries" | sed -E "s/^\(${sev}\) /- /"
-                echo
-              fi
-            done
-
-            other="$(echo "$subjects" | grep -vE '^\((Major|Minor|Patch)\) ' || true)"
-            if [ -n "$other" ]; then
-              echo "### Other"
-              echo "$other" | sed 's/^/- /'
-              echo
-            fi
-
-            if [ -n "$prev" ]; then
-              echo "[Compare on GitLab](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/compare/${prev}...${TAG})"
-            fi
-          } > /tmp/notes.md
-
-      - name: Detect prerelease
-        id: pre
-        env:
-          TAG: ${{ steps.tag.outputs.ref }}
-        run: |
-          if [[ "$TAG" == *-* ]]; then
-            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create or update release
+      - name: Clone repo with full history
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.ref }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q --tags origin
+          git -c advice.detachedHead=false reset -q --hard origin/main
+
+      - name: Publish missing releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SINGLE_TAG: ${{ inputs.tag }}
           REPLACE: ${{ inputs.replace || 'false' }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            if [ "$REPLACE" = "true" ]; then
-              gh release edit "$TAG" \
-                --notes-file /tmp/notes.md \
-                ${{ steps.pre.outputs.flag }}
-              echo "Updated existing release $TAG"
-            else
-              echo "Release $TAG already exists; skipping (workflow_dispatch with replace=true to overwrite)"
-            fi
+
+          if [ -n "${SINGLE_TAG:-}" ]; then
+            tags="$SINGLE_TAG"
           else
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file /tmp/notes.md \
-              ${{ steps.pre.outputs.flag }}
+            tags="$(git tag --list 'v*' --sort=v:refname)"
           fi
+
+          if [ -z "$tags" ]; then
+            echo "No tags to process."
+            exit 0
+          fi
+
+          for TAG in $tags; do
+            exists=false
+            gh release view "$TAG" >/dev/null 2>&1 && exists=true
+
+            if $exists && { [ -z "${SINGLE_TAG:-}" ] || [ "$REPLACE" != "true" ]; }; then
+              echo "Skipping $TAG (release exists; workflow_dispatch with replace=true regenerates)"
+              continue
+            fi
+
+            prev="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            range="${prev:+${prev}..}${TAG}"
+            subjects="$(git log "$range" --format='%s' \
+              | grep -vE '^\(Patch\) release: bump version to ' || true)"
+
+            {
+              for sev in Major Minor Patch; do
+                entries="$(echo "$subjects" | grep -E "^\(${sev}\) " || true)"
+                if [ -n "$entries" ]; then
+                  echo "### ${sev}"
+                  echo "$entries" | sed -E "s/^\(${sev}\) /- /"
+                  echo
+                fi
+              done
+
+              other="$(echo "$subjects" | grep -vE '^\((Major|Minor|Patch)\) ' || true)"
+              if [ -n "$other" ]; then
+                echo "### Other"
+                echo "$other" | sed 's/^/- /'
+                echo
+              fi
+
+              if [ -n "$prev" ]; then
+                echo "[Compare on GitLab](https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting/-/compare/${prev}...${TAG})"
+              fi
+            } > /tmp/notes.md
+
+            flag=""
+            case "$TAG" in *-*) flag="--prerelease" ;; esac
+
+            if $exists; then
+              gh release edit "$TAG" --notes-file /tmp/notes.md $flag
+              echo "Updated release $TAG"
+            else
+              gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md $flag
+              echo "Created release $TAG"
+            fi
+          done
 ```
 
 ## Release notes format
@@ -266,87 +278,91 @@ back. The workflow then keeps running in parallel; no harm.
 
 ## Decisions
 
-- **Idempotency:** skip if the release already exists. Mirror
-  retries, accidental re-pushes, and double-dispatches become no-ops.
-  `workflow_dispatch` with `replace=true` is the explicit escape
-  hatch for regenerating notes.
+- **Idempotency:** skip any tag that already has a release. The
+  whole point of the scan design — every scheduled run is safe
+  to re-invoke. `workflow_dispatch` with `tag=<X>` and
+  `replace=true` is the one escape hatch for regenerating notes
+  on an already-released tag.
 - **Prerelease:** auto-flag any tag containing `-` (e.g.,
   `v0.7.0-rc1`) as prerelease. Cheap, future-proof.
 - **Title:** bare tag (`v0.6.4`). GitLab tag messages use
   "Release vX.Y.Z" — minor inconsistency but `gh`'s default is the
   tag name, and HACS doesn't render the title prominently.
-- **Notes script location:** inline in the workflow (~25 lines). If
-  it grows or needs sharing with a Dagger function, extract to
-  `scripts/build-release-notes.sh`. Not yet.
+- **Notes script location:** inline in the workflow (~40 lines
+  including the loop). If it grows or needs sharing with a Dagger
+  function, extract to `scripts/build-release-notes.sh`. Not yet.
+- **Schedule interval:** 5 minutes. Faster feels wasteful (most
+  runs find nothing to do); slower pushes the latency to HACS past
+  the subjectively-acceptable mark. GitHub may skew cron by up to
+  ~15 min during peak load — not a blocker, just noting that "every
+  5 minutes" is a best-effort floor.
 
 ## Error handling
 
-- **Mirror sync race (tag arrives before its commit):**
-  `actions/checkout` with `ref: <tag>` fails loudly. Acceptable —
-  GitLab push mirrors send commits before tags, so this should never
-  happen; if it does, we want to know and the failure is non-silent.
-- **`gh release create` failure (other than "exists"):** job fails
-  and is retryable via `workflow_dispatch`.
+- **Mirror sync in-flight:** the scan only processes tags
+  `git tag --list` reports, which means tags already on GitHub.
+  A tag mid-flight through the mirror just isn't seen this round
+  and is picked up on the next. No runner waits for anything.
+- **`gh release create` failure:** the step fails, the job fails,
+  the next scheduled run retries. If the same tag fails twice in
+  a row, there's a real problem (malformed notes, API outage) —
+  rerun via `workflow_dispatch` with `tag=X` to get a focused log.
 - **No previous tag (first release ever):** the script handles
   `prev=""` and produces notes against the full history. Edge case
-  for backfilling `v0.1.0`.
+  that matters only for `v0.1.0`.
 - **Empty notes (no qualifying commits):** the file ends up
   containing just the GitLab compare link (or empty if no previous
   tag). `gh release create` accepts this.
+- **Scheduled-workflow suspension:** GitHub disables scheduled
+  workflows on repos with no activity for 60 days. The mirror
+  itself is frequently updated by GitLab's mirror cron even without
+  user activity, but if the repo ever does go dormant, schedules
+  will need re-enabling via the Actions UI. Not something this
+  design can prevent.
 
 ## Pre-conditions (verify before first run)
 
 - The GitLab project's push mirror to
-  `aarontc/home-assistant-area-lighting` is enabled, push-mode, and
-  includes tags. **Already proven** — the existing 15-minute poll
-  in `waitForGitHubTag` does eventually find tags on GitHub, just
-  slowly. Re-verify at execution time with:
-
-  ```sh
-  git ls-remote https://github.com/aarontc/home-assistant-area-lighting refs/tags/v0.8.1
-  ```
-
-  Should return the same SHA as `git rev-parse v0.8.1` locally.
-
-- GitHub Actions is enabled on the mirror repo (default for new
-  repos; verify in repo Settings → Actions). The mirror has had a
-  workflow file in the past (`b52cb9e` added one, `5eae7ea` removed
-  it), so Actions runs there — but confirm anyway.
+  `aarontc/home-assistant-area-lighting` is enabled and includes
+  tags. Proven in practice — both HTTPS+fine-grained-PAT and
+  SSH+deploy-key mirror setups successfully replicated tags.
+- GitHub Actions is enabled on the mirror repo (Settings → Actions).
+- The repo's "Actions permissions" allow `actions/*` (GitHub-owned
+  actions) *or* the workflow uses only inline shell for
+  checkout/API — this design uses inline `git` + `gh` CLI to avoid
+  depending on `actions/checkout`, keeping the workflow compatible
+  with strict action allowlists.
 
 ## Test plan
 
 ### Local verification (before commit)
 
 1. Extract the notes-building bash into a tmp script.
-2. Run against `v0.6.4`, `v0.6.3`, `v0.6.2`, `v0.6.1`, `v0.6.0`,
-   `v0.5.2` — sample of tags with varying commit counts and severity
-   distributions.
+2. Run against a handful of existing tags with varying histories
+   (e.g., `v0.6.4`, `v0.6.1`, `v0.6.0`, `v0.5.0`).
 3. Hand-inspect output for: bump commit dropped, severities grouped
    correctly, "Other" catches unprefixed commits, compare URL
    correct.
-4. Verify `prev=""` path on `v0.1.0` (first tag, no predecessor).
+4. Verify `prev=""` path on `v0.1.0` (first tag, no predecessor —
+   produces notes with no compare link).
 
 ### Live verification (after commit + mirror sync)
 
 5. Confirm the workflow file appears on the GitHub mirror
    (`.github/workflows/release.yaml`).
-6. Run `workflow_dispatch` with `tag=v0.1.0` first (oldest, smallest
-   blast radius — and it has no release yet, so it's a real backfill).
+6. Run `workflow_dispatch` with `tag` blank (scan mode) or with
+   a specific tag to quickly populate releases without waiting
+   for the next cron tick.
 7. Inspect the resulting GitHub release for formatting.
-8. Backfill remaining tags (`v0.2.0` through `v0.8.1`) via
-   `workflow_dispatch`. 17 tags, mechanical. (Zero releases exist
-   today, so all historical tags are backfills.)
-9. The next real release (when `tag:auto` cuts a new tag) should
-   trigger the workflow automatically and produce a release within
-   ~30 seconds of the mirror push *delivering* the tag (which itself
-   may take several minutes — but no CI runner is held during that
-   window).
+8. Wait ~10 minutes (one or two cron ticks) and confirm the
+   scheduled scan is idempotent — no duplicate releases, no
+   failures, and new tags (if any) get picked up automatically.
 
 ### Regression coverage
 
 - The notes script is too small to warrant a dedicated test
   framework. Local verification on existing tags is the test.
-- If the script ever grows beyond ~30 lines, extract to
+- If the script ever grows beyond ~40 lines, extract to
   `scripts/build-release-notes.sh` and add a Bats / shell-test
   harness.
 
