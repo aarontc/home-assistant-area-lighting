@@ -105,13 +105,17 @@ func (m *AreaLighting) CommitsSinceTag(
 // to manifest.json and pyproject.toml, then creates a Git tag on that
 // commit via the GitLab API. `token` needs `write_repository` scope.
 //
-// The version-bump commit uses [skip ci] to prevent a feedback loop
-// (the commit itself would otherwise trigger another tag:auto run).
-// The same marker also suppresses the tag's own pipeline, so the
-// `$CI_COMMIT_TAG` event never fires for this repo. Publishing the
-// GitHub release is handled separately by the GitHub Actions workflow
-// at `.github/workflows/release.yaml`, which is triggered when the
-// GitLab → GitHub push mirror delivers the new tag.
+// The version-bump commit and the tag ref both need to exist on the
+// default branch without triggering another `tag:auto` run (which would
+// loop). Suppression lives in `.gitlab-ci.yml`'s `workflow:rules`:
+// bump-commit titles matching `^(Patch) release: bump version to ` and
+// any tag push are filtered out before a pipeline is even created —
+// keeping those events out of the pipeline history so the project
+// status badge stays accurate.
+//
+// Publishing the GitHub release is handled separately by the GitHub
+// Actions workflow at `.github/workflows/release.yaml`, which scans for
+// tags missing a release every 5 minutes.
 func (m *AreaLighting) CreateTag(
 	ctx context.Context,
 	// +defaultPath="."
@@ -235,9 +239,11 @@ var versionFiles = []struct {
 }
 
 // createVersionBumpCommit reads the version files from the repo via the
-// GitLab API, replaces the version string, and creates a commit with
-// [skip ci] so the push doesn't trigger another pipeline. Returns the
-// new commit SHA.
+// GitLab API, replaces the version string, and commits the result.
+// Returns the new commit SHA. The commit's title format is load-bearing:
+// `.gitlab-ci.yml`'s `workflow:rules` filters pipelines by matching
+// `^(Patch) release: bump version to ` on the commit title, so the
+// push doesn't trigger another `tag:auto` run.
 func createVersionBumpCommit(
 	ctx context.Context,
 	gitlabURL, projectID, token, version, branch string,
@@ -275,7 +281,7 @@ func createVersionBumpCommit(
 
 	payload := map[string]any{
 		"branch":         branch,
-		"commit_message": fmt.Sprintf("(Patch) release: bump version to %s [skip ci]", bareVersion),
+		"commit_message": fmt.Sprintf("(Patch) release: bump version to %s", bareVersion),
 		"actions":        actions,
 	}
 	body, err := json.Marshal(payload)

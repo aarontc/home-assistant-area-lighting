@@ -3,6 +3,27 @@ stages:
   - tag
   - nightly
 
+# Suppress pipeline creation entirely for events that would otherwise show
+# up as "skipped" pipelines — those break the status badge because it
+# reflects the latest pipeline regardless of stage content.
+#
+#   - Version-bump chore commits created by `tag:auto` carry no changes
+#     that need CI (the upstream push already ran).
+#   - Tag pushes are produced by `tag:auto` from a pipeline that already
+#     ran; the tag ref itself doesn't need its own pipeline.
+#
+# The bump-commit title pattern here must stay in sync with the message
+# format produced by `createVersionBumpCommit` in `dagger/version.go`.
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TITLE =~ /^\(Patch\) release: bump version to /'
+      when: never
+    - if: $CI_COMMIT_TAG
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
 # Install Dagger CLI (version from .tool-versions)
 .dagger-setup: &dagger-setup
   - apk add --no-cache curl
@@ -49,8 +70,6 @@ tag:auto:
         --token=env:PROJECT_ACCESS_TOKEN \
         --branch=$CI_COMMIT_BRANCH
   rules:
-    - if: $CI_COMMIT_TAG
-      when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 nightly:
