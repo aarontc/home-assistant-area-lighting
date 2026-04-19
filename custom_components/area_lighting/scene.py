@@ -147,7 +147,10 @@ class AreaLightingScene(Scene):
                 service_data["transition"] = transition
 
             if target_state == "on":
-                # Apply stored attributes
+                # Apply stored attributes. Skip keys whose value is None —
+                # Hue's 2025 deprecation warns when `effect=None` is passed
+                # to light.turn_on, and None is never meaningful for any of
+                # these attributes anyway.
                 for attr in (
                     "brightness",
                     "color_temp_kelvin",
@@ -157,7 +160,7 @@ class AreaLightingScene(Scene):
                     "xy_color",
                     "effect",
                 ):
-                    if attr in state_data:
+                    if attr in state_data and state_data[attr] is not None:
                         service_data[attr] = state_data[attr]
                 _LOGGER.debug(
                     "Area %s: scene_apply light.turn_on %s",
