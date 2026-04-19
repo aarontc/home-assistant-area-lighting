@@ -178,6 +178,22 @@ scenes:
 | `cycle`         | list of scene slugs       | no       | —       | Defines a favorite-button cycle sequence. Parsed but not yet wired to the on-button cycler (tracked in `TODO.md`). |
 | `entities`      | free-form dict            | no       | —       | Per-light target state (`brightness`, `rgb_color`, `color_temp_kelvin`, …). Same shape HA uses for its own scene entities. |
 
+#### Reserved scene slugs
+
+A handful of scene slugs have special semantics in the integration. They are **not implicit** — if you want the behavior, you must declare a scene with that slug (the integration only recognizes scenes you actually list here). Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
+
+| Slug                   | Must declare? | Effect if declared |
+|------------------------|---------------|--------------------|
+| `circadian`            | Strongly recommended. Required if you want circadian behavior. Also the default scene that `linked_motion` falls back to (`controller.py:1448`) — areas with `linked_motion` configured but no `circadian` scene declared will error at activation time. | Picked as the "normal on" scene by the default-scene resolver and most state transitions. Gets default icon `mdi:theme-light-dark`. |
+| `off`                  | Strongly recommended. | Gives users a real scene entity to target for "turn area off". Without it, off transitions still work internally but there's no `scene.{area}_off` entity to call. |
+| `night`                | Only if using night mode. | Selected automatically when night mode is active; targeted by lights with the `night` role. |
+| `ambient`              | Only if using ambient zones. | Activated by `ambient_lighting_zone` gating. |
+| `daylight` + `evening` | Only as an alternative to `circadian`. Must declare **both together**. | The scene-machine uses them as a sun-position-driven fallback when `circadian` is not declared (`scene_machine.py:71-72`). |
+| `christmas`, `halloween` | Only if using holiday mode. | Selected when `input_select.holiday_mode` is set to the matching value. |
+| `off_internal`, `manual` | **Do not declare.** | Internal state slugs the controller uses to track non-user-activated states. Declaring them is ignored at best, confusing at worst. |
+
+The default-scene resolver cascade (from `scene_machine.py`) is: `night` (if night mode) → `circadian` → `daylight`+`evening` (sun-position) → first generic scene alphabetically → no-op. So an area without any of these still loads, it just doesn't have an obvious "home" scene.
+
 ### `lutron_remotes`
 
 Pico remotes associated with this area.
