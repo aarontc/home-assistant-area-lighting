@@ -74,7 +74,7 @@ entry in that list.
 | `id`                        | string                | **yes**  | —       | Unique area slug. Used to form entity IDs (`scene.{id}_{slug}`, `switch.{id}_motion_light_enabled`, etc.) — keep it snake_case. |
 | `name`                      | string                | **yes**  | —       | Human-readable label shown in the UI. |
 | `enabled`                   | boolean               | no       | `true`  | `false` parses the area but creates no controller, entities, or handlers. |
-| `event_handlers`            | boolean               | no       | `false` | Wires motion/occupancy/remote/external-change listeners. Typically `true` for live areas, `false` for test fixtures. |
+| `event_handlers`            | boolean               | no       | `true`  | Wires motion/occupancy/remote/external-change listeners. Set to `false` only for areas you want to load quietly (test fixtures, transition states during migration) — disabling it turns the area into a no-op for most of what `area_lighting` does. |
 | `icon`                      | string                | no       | —       | MDI icon name (e.g. `mdi:bedroom-outline`). |
 | `special`                   | string                | no       | —       | Free-form marker used to exclude the area from bulk operations (e.g. `"global"`). |
 | `ambient_lighting_zone`     | string                | no       | —       | Name of an `input_boolean.lighting_<zone>_ambient` helper that gates ambient activation for this area. |

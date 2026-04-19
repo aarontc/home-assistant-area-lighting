@@ -163,7 +163,7 @@ class AreaConfig:
     id: str
     name: str
     enabled: bool = True
-    event_handlers: bool = False  # Whether to register motion/remote/light event handlers
+    event_handlers: bool = True  # Whether to register motion/remote/light event handlers
     icon: str | None = None
     special: str | None = None
     ambient_lighting_zone: str | None = None
