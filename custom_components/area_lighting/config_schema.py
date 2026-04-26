@@ -278,6 +278,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             favorite_cycle: list[str] = []
             if favorite_raw is not None:
                 targets = [favorite_raw] if isinstance(favorite_raw, str) else list(favorite_raw)
+                self_area_prefix = f"scene.{area_id}_"
                 for slug in targets:
                     if slug.startswith("scene."):
                         if len(targets) > 1:
@@ -285,6 +286,18 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                                 f"remote '{r['name']}' in area '{area_id}': "
                                 f"scene entity IDs cannot appear in a favorite cycle list"
                             )
+                        # If the entity_id targets this same area, validate
+                        # the suffix against the area's defined scenes.
+                        # Otherwise scene.turn_on silently no-ops at runtime
+                        # when the entity is missing.
+                        if slug.startswith(self_area_prefix):
+                            suffix = slug[len(self_area_prefix) :]
+                            if suffix not in scene_slugs:
+                                raise vol.Invalid(
+                                    f"remote '{r['name']}' in area '{area_id}': "
+                                    f"buttons.favorite references '{slug}' but scene "
+                                    f"'{suffix}' is not defined on this area"
+                                )
                     elif slug not in scene_slugs:
                         raise vol.Invalid(
                             f"remote '{r['name']}' in area '{area_id}': "

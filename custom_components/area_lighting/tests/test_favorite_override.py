@@ -288,6 +288,71 @@ def test_schema_accepts_scene_entity_id() -> None:
 
 
 @pytest.mark.unit
+def test_schema_accepts_self_area_scene_entity_with_known_suffix() -> None:
+    raw = {
+        "areas": [
+            _area_with_remotes(
+                area_id="bedroom",
+                scenes=["circadian", "night", "off"],
+                remotes=[
+                    {
+                        "id": "abc",
+                        "name": "Remote",
+                        "buttons": {"favorite": "scene.bedroom_night"},
+                    }
+                ],
+            )
+        ]
+    }
+    cfg = parse_config(raw)
+    remote = cfg.enabled_areas[0].lutron_remotes[0]
+    assert remote.favorite_cycle == ["scene.bedroom_night"]
+
+
+@pytest.mark.unit
+def test_schema_rejects_self_area_scene_entity_with_unknown_suffix() -> None:
+    raw = {
+        "areas": [
+            _area_with_remotes(
+                area_id="bedroom",
+                scenes=["circadian", "night", "off"],
+                remotes=[
+                    {
+                        "id": "abc",
+                        "name": "Remote",
+                        "buttons": {"favorite": "scene.bedroom_nonexistent"},
+                    }
+                ],
+            )
+        ]
+    }
+    with pytest.raises(vol.Invalid, match="nonexistent"):
+        parse_config(raw)
+
+
+@pytest.mark.unit
+def test_schema_accepts_cross_area_scene_entity() -> None:
+    raw = {
+        "areas": [
+            _area_with_remotes(
+                area_id="bedroom",
+                scenes=["circadian", "night", "off"],
+                remotes=[
+                    {
+                        "id": "abc",
+                        "name": "Remote",
+                        "buttons": {"favorite": "scene.kitchen_dinner"},
+                    }
+                ],
+            )
+        ]
+    }
+    cfg = parse_config(raw)
+    remote = cfg.enabled_areas[0].lutron_remotes[0]
+    assert remote.favorite_cycle == ["scene.kitchen_dinner"]
+
+
+@pytest.mark.unit
 def test_schema_rejects_unknown_slug() -> None:
     raw = {
         "areas": [
