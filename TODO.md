@@ -35,3 +35,5 @@
 
 * Add "party mode" features with color cycling effects
 
+* **Hot reload of `lutron_remotes` config.** `area_lighting.reload` swaps `hass.data[DOMAIN]["config"]` but the bus listener registered for `lutron_caseta_button_event` in `event_handlers.py:_make_remote_handler` captures `config` by closure at startup, so changes to `lutron_remotes[].buttons.favorite`, `additional_actions`, etc. do not take effect until a full HA restart. Fix: either have the listener read the current config from `hass.data[DOMAIN]["config"]` per-event, or re-register the bus listener inside `_handle_reload` (calling `async_unsub_listen` on the old one first). Same pattern affects every handler built with captured config inside `async_setup_event_handlers`, so audit them together. Surfaced 2026-04-27 when migrating main_bedroom bedside remote favorites from a single `scene.X` to a list-form cycle: the YAML change was correct and `area_lighting.reload` returned success, but pressing the favorite button still ran the old single-scene path until HA was restarted.
+
