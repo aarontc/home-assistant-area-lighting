@@ -34,6 +34,18 @@ lighting_off_fade:
       selector:
         text:
 
+lighting_force_off:
+  name: Force off area lighting
+  description: Turns off lighting for an area unconditionally, bypassing the ambient/holiday fallback logic. Used by global "lights out" workflows that must guarantee the area goes dark regardless of ambience configuration.
+  fields:
+    area_id:
+      name: Area ID
+      description: The area ID.
+      required: true
+      example: kitchen
+      selector:
+        text:
+
 lighting_favorite:
   name: Activate favorite scene
   description: Activates the favorite scene for an area. Cycles between the active holiday scene (if any) and the night scene.

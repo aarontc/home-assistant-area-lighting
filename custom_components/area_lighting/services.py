@@ -40,6 +40,7 @@ SERVICE_MAP = {
     "lighting_on": "lighting_on",
     "lighting_off": "lighting_off",
     "lighting_off_fade": "lighting_off_fade",
+    "lighting_force_off": "lighting_force_off",
     "lighting_favorite": "lighting_favorite",
     "lighting_raise": "lighting_raise",
     "lighting_lower": "lighting_lower",
