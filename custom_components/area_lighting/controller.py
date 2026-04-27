@@ -1194,6 +1194,24 @@ class AreaLightingController:
             transition=self._motion_fade_seconds(),
         )
 
+    async def lighting_force_off(
+        self,
+        source: ActivationSource = ActivationSource.USER,
+    ) -> None:
+        """Force off, bypassing ambient/holiday fallback logic.
+
+        Used by the global 'lights out' workflow: caller has already
+        decided the area must go dark regardless of ambience configuration,
+        per-area ambience_enabled, holiday mode, or ambient_scene_mode.
+        """
+        _LOGGER.debug(
+            "Area %s: lighting_force_off source=%s current_scene=%s",
+            self.area.id,
+            source.value,
+            self._state.scene_slug,
+        )
+        await self._activate_scene(SCENE_OFF_INTERNAL, source)
+
     async def lighting_favorite(
         self,
         source: ActivationSource = ActivationSource.USER,
