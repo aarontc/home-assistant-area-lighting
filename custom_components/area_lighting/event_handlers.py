@@ -400,31 +400,42 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
             return
 
         service_data = event.data.get("service_data", {})
-        entity_id = service_data.get("entity_id", "")
-        if isinstance(entity_id, list):
-            entity_id = entity_id[0] if entity_id else ""
+        raw = service_data.get("entity_id", "")
+        # scene.turn_on accepts a single entity_id or a list (HA normalizes
+        # `target.entity_id: [...]` into service_data.entity_id). Dispatch
+        # to every targeted area — taking only the first would leave
+        # subsequent areas' state machines stuck in `off` while the scenes'
+        # async_activate still physically turned their lights on.
+        if isinstance(raw, str):
+            entity_ids = [raw] if raw else []
+        else:
+            entity_ids = list(raw)
 
-        if not entity_id.startswith("scene."):
-            return
-
-        # Parse area_id and scene_slug from entity_id
-        # Format: scene.{area_id}_{scene_slug}
-        short = entity_id.removeprefix("scene.")
         controllers = _controllers(hass)
 
-        for area_id, ctrl in controllers.items():
-            prefix = f"{area_id}_"
-            if short.startswith(prefix):
-                scene_slug = short[len(prefix) :]
-                if scene_slug:
-                    _LOGGER.debug(
-                        "Area %s: scene_activated entity=%s slug=%s",
-                        area_id,
-                        entity_id,
-                        scene_slug,
-                    )
-                    hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
-                break
+        for entity_id in entity_ids:
+            if not entity_id.startswith("scene."):
+                continue
+
+            # Parse area_id and scene_slug from entity_id
+            # Format: scene.{area_id}_{scene_slug}
+            short = entity_id.removeprefix("scene.")
+
+            for area_id, ctrl in controllers.items():
+                prefix = f"{area_id}_"
+                if short.startswith(prefix):
+                    scene_slug = short[len(prefix) :]
+                    if scene_slug:
+                        _LOGGER.debug(
+                            "Area %s: scene_activated entity=%s slug=%s",
+                            area_id,
+                            entity_id,
+                            scene_slug,
+                        )
+                        hass.async_create_task(
+                            ctrl.handle_scene_activated(scene_slug)
+                        )
+                    break
 
     return _handler
 
