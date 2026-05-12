@@ -429,9 +429,7 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
                             entity_id,
                             scene_slug,
                         )
-                        hass.async_create_task(
-                            ctrl.handle_scene_activated(scene_slug)
-                        )
+                        hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
                     break
 
     return _handler
