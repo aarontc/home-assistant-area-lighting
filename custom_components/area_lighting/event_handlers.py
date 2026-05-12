@@ -406,10 +406,7 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
         # to every targeted area — taking only the first would leave
         # subsequent areas' state machines stuck in `off` while the scenes'
         # async_activate still physically turned their lights on.
-        if isinstance(raw, str):
-            entity_ids = [raw] if raw else []
-        else:
-            entity_ids = list(raw)
+        entity_ids = [raw] if isinstance(raw, str) else list(raw)
 
         controllers = _controllers(hass)
 
