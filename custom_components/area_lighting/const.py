@@ -90,3 +90,7 @@ CIRCADIAN_DAYLIGHT_ENABLED_ENTITY = "input_boolean.lighting_circadian_daylight_l
 
 # Global motion lighting enabled entity
 GLOBAL_MOTION_LIGHT_ENABLED_ENTITY = "input_boolean.motion_light_enabled"
+
+# Circadian kelvin routing
+CIRCADIAN_KELVIN_HYSTERESIS = 25
+DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS = 2.0
