@@ -16,6 +16,7 @@ from .config_schema import (
     ALERT_PATTERN_SCHEMA,
     AREA_SCHEMA,
     parse_config,
+    validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
 )
 from .const import DOMAIN
@@ -74,6 +75,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         validate_leader_follower_graph(area_config)
     except vol.Invalid as err:
         _LOGGER.error("Area Lighting: invalid leader/follower config: %s", err)
+        return False
+    try:
+        validate_circadian_kelvin_routes(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid circadian_kelvin_routes config: %s", err)
         return False
 
     # Initialize scene storage
@@ -145,6 +151,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             validate_leader_follower_graph(new_config)
         except vol.Invalid as err:
             _LOGGER.error("area_lighting reload: invalid config: %s", err)
+            return
+        try:
+            validate_circadian_kelvin_routes(new_config)
+        except vol.Invalid as err:
+            _LOGGER.error("area_lighting reload: invalid circadian_kelvin_routes config: %s", err)
             return
         hass.data[DOMAIN]["config"] = new_config
         _LOGGER.info(

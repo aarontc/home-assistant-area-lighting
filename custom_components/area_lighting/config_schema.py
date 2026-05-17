@@ -474,3 +474,74 @@ def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
                 f"already follows '{leader.leader_area_id}' — leader/follower "
                 f"relationships cannot be chained"
             )
+
+
+def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
+    """Enforce semantic rules on circadian_kelvin_routes and resolve `source`.
+
+    For each area that declares `circadian_kelvin_routes`:
+      - exactly one route must omit `kelvin_range` (the fallback)
+      - banded ranges must satisfy lo <= hi
+      - no two banded ranges may overlap (touching endpoints overlap)
+      - every entity id in `routes[].lights` must appear in the area's
+        `lights` or `light_clusters`
+      - no entity id may appear in more than one route
+      - `source` defaults to the area's sole circadian switch when one
+        is configured; otherwise it must be supplied explicitly
+    """
+    for area in config.areas:
+        ckr = area.circadian_kelvin_routes
+        if ckr is None:
+            continue
+
+        fallbacks = [r for r in ckr.routes if r.is_fallback]
+        if len(fallbacks) != 1:
+            raise vol.Invalid(
+                f"area '{area.id}': circadian_kelvin_routes must have "
+                f"exactly one fallback route (got {len(fallbacks)})"
+            )
+
+        banded = [r for r in ckr.routes if not r.is_fallback]
+        for r in banded:
+            lo, hi = r.kelvin_range  # type: ignore[misc]
+            if lo > hi:
+                raise vol.Invalid(
+                    f"area '{area.id}': circadian_kelvin_routes: "
+                    f"kelvin_range lo ({lo}) must be <= hi ({hi})"
+                )
+        for i, a in enumerate(banded):
+            for b in banded[i + 1 :]:
+                a_lo, a_hi = a.kelvin_range  # type: ignore[misc]
+                b_lo, b_hi = b.kelvin_range  # type: ignore[misc]
+                if a_lo <= b_hi and b_lo <= a_hi:
+                    raise vol.Invalid(
+                        f"area '{area.id}': circadian_kelvin_routes: "
+                        f"ranges [{a_lo}, {a_hi}] and [{b_lo}, {b_hi}] overlap"
+                    )
+
+        declared = {light.id for light in area.all_lights}
+        seen: set[str] = set()
+        for r in ckr.routes:
+            for entity_id in r.lights:
+                if entity_id not in declared:
+                    raise vol.Invalid(
+                        f"area '{area.id}': circadian_kelvin_routes: "
+                        f"light '{entity_id}' is not declared in area's "
+                        f"lights or light_clusters"
+                    )
+                if entity_id in seen:
+                    raise vol.Invalid(
+                        f"area '{area.id}': circadian_kelvin_routes: "
+                        f"light '{entity_id}' appears in more than one route"
+                    )
+                seen.add(entity_id)
+
+        if not ckr.source:
+            if len(area.circadian_switches) == 1:
+                ckr.source = area.circadian_switches[0].entity_id
+            else:
+                raise vol.Invalid(
+                    f"area '{area.id}': circadian_kelvin_routes must "
+                    f"specify 'source' when the area declares "
+                    f"{len(area.circadian_switches)} circadian switches"
+                )
