@@ -5,12 +5,20 @@ from __future__ import annotations
 import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
 
-from .const import ALL_ROLES, CIRCADIAN_BRIGHTNESS, CIRCADIAN_CT, CIRCADIAN_RGB
+from .const import (
+    ALL_ROLES,
+    CIRCADIAN_BRIGHTNESS,
+    CIRCADIAN_CT,
+    CIRCADIAN_RGB,
+    DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+)
 from .models import (
     AlertPattern,
     AlertStep,
     AreaConfig,
     AreaLightingConfig,
+    CircadianKelvinRouteConfig,
+    CircadianKelvinRoutesConfig,
     CircadianSwitchConfig,
     LightConfig,
     LinkedMotionConfig,
@@ -51,6 +59,32 @@ SCENE_SCHEMA = vol.Schema(
         vol.Optional("cycle"): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional("entities"): dict,  # Per-light state data for the scene
         vol.Optional("icon"): cv.icon,
+    }
+)
+
+CIRCADIAN_KELVIN_ROUTE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("kelvin_range"): vol.All(
+            vol.ExactSequence(
+                [
+                    vol.All(int, vol.Range(min=1000, max=10000)),
+                    vol.All(int, vol.Range(min=1000, max=10000)),
+                ]
+            ),
+        ),
+        vol.Required("lights"): vol.All(cv.ensure_list, vol.Length(min=1), [cv.entity_id]),
+    }
+)
+
+CIRCADIAN_KELVIN_ROUTES_SCHEMA = vol.Schema(
+    {
+        vol.Optional("source"): cv.entity_id,
+        vol.Optional("crossfade_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+        vol.Required("routes"): vol.All(
+            cv.ensure_list,
+            vol.Length(min=2),
+            [CIRCADIAN_KELVIN_ROUTE_SCHEMA],
+        ),
     }
 )
 
@@ -195,6 +229,7 @@ AREA_SCHEMA = vol.Schema(
         vol.Optional("linked_motion", default=[]): vol.All(
             cv.ensure_list, [LINKED_MOTION_ENTRY_SCHEMA]
         ),
+        vol.Optional("circadian_kelvin_routes"): CIRCADIAN_KELVIN_ROUTES_SCHEMA,
         # Dashboard fields (ignored by component, kept for config compatibility)
         vol.Optional("overview"): dict,
     }
@@ -337,6 +372,26 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 )
             )
 
+        ckr_raw = area_raw.get("circadian_kelvin_routes")
+        if ckr_raw is None:
+            circadian_kelvin_routes = None
+        else:
+            parsed_routes = [
+                CircadianKelvinRouteConfig(
+                    lights=list(r["lights"]),
+                    kelvin_range=(tuple(r["kelvin_range"]) if "kelvin_range" in r else None),
+                )
+                for r in ckr_raw["routes"]
+            ]
+            circadian_kelvin_routes = CircadianKelvinRoutesConfig(
+                routes=parsed_routes,
+                source=ckr_raw.get("source", ""),
+                crossfade_seconds=ckr_raw.get(
+                    "crossfade_seconds",
+                    DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+                ),
+            )
+
         areas.append(
             AreaConfig(
                 id=area_id,
@@ -361,6 +416,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 linked_motion=linked_motion,
                 leader_area_id=area_raw.get("leader_area_id"),
                 follow_leader_deactivation=area_raw.get("follow_leader_deactivation", False),
+                circadian_kelvin_routes=circadian_kelvin_routes,
             )
         )
 
