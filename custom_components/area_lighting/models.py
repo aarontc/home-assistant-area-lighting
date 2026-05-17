@@ -131,6 +131,48 @@ class LinkedMotionConfig:
 
 
 @dataclass
+class CircadianKelvinRouteConfig:
+    """A single route within a CircadianKelvinRoutesConfig.
+
+    Banded routes have a (lo, hi) kelvin_range; the fallback route
+    leaves kelvin_range as None and is selected when no banded route
+    matches the current colortemp.
+    """
+
+    lights: list[str]
+    kelvin_range: tuple[int, int] | None = None
+
+    @property
+    def is_fallback(self) -> bool:
+        return self.kelvin_range is None
+
+
+@dataclass
+class CircadianKelvinRoutesConfig:
+    """Per-area circadian kelvin routing config.
+
+    While the area's active scene is `circadian`, the controller's
+    router subscribes to `source` and dispatches the lights listed
+    across `routes` based on the source's `colortemp` attribute.
+    """
+
+    routes: list[CircadianKelvinRouteConfig]
+    source: str
+    crossfade_seconds: float
+
+    @property
+    def fallback_route(self) -> CircadianKelvinRouteConfig:
+        return next(r for r in self.routes if r.is_fallback)
+
+    @property
+    def all_route_lights(self) -> set[str]:
+        out: set[str] = set()
+        for r in self.routes:
+            out.update(r.lights)
+        return out
+
+
+@dataclass
 class AlertStep:
     """One step in an alert pattern animation."""
 
@@ -190,6 +232,7 @@ class AreaConfig:
     occupancy_light_timer_durations: dict[str, str] = field(default_factory=dict)
 
     linked_motion: list[LinkedMotionConfig] = field(default_factory=list)
+    circadian_kelvin_routes: CircadianKelvinRoutesConfig | None = None
 
     @property
     def all_lights(self) -> list[LightConfig]:
