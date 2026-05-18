@@ -383,9 +383,16 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 )
                 for r in ckr_raw["routes"]
             ]
+            raw_source = ckr_raw.get("source")
+            if raw_source:
+                resolved_source = raw_source
+            elif len(circadian_switches) == 1:
+                resolved_source = circadian_switches[0].entity_id
+            else:
+                resolved_source = ""  # validator will reject empty source
             circadian_kelvin_routes = CircadianKelvinRoutesConfig(
                 routes=parsed_routes,
-                source=ckr_raw.get("source", ""),
+                source=resolved_source,
                 crossfade_seconds=ckr_raw.get(
                     "crossfade_seconds",
                     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
@@ -537,11 +544,8 @@ def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
                 seen.add(entity_id)
 
         if not ckr.source:
-            if len(area.circadian_switches) == 1:
-                ckr.source = area.circadian_switches[0].entity_id
-            else:
-                raise vol.Invalid(
-                    f"area '{area.id}': circadian_kelvin_routes must "
-                    f"specify 'source' when the area declares "
-                    f"{len(area.circadian_switches)} circadian switches"
-                )
+            raise vol.Invalid(
+                f"area '{area.id}': circadian_kelvin_routes must "
+                f"specify 'source' when the area declares "
+                f"{len(area.circadian_switches)} circadian switches"
+            )

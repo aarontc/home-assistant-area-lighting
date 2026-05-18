@@ -240,7 +240,7 @@ def test_validator_rejects_light_in_two_routes():
         validate_circadian_kelvin_routes(config)
 
 
-def test_validator_defaults_source_to_only_circadian_switch():
+def test_parse_defaults_source_to_only_circadian_switch():
     config = _parsed_config(
         circadian_kelvin_routes={
             "routes": [
@@ -252,11 +252,11 @@ def test_validator_defaults_source_to_only_circadian_switch():
             ]
         }
     )
-    validate_circadian_kelvin_routes(config)
     assert (
         config.areas[0].circadian_kelvin_routes.source
         == "switch.circadian_lighting_kitchen_kitchen_circadian"
     )
+    validate_circadian_kelvin_routes(config)  # validator should no-op
 
 
 def test_validator_requires_explicit_source_when_two_switches():
