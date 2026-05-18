@@ -121,16 +121,33 @@ class CircadianKelvinRouter:
             if new_index == self._current_index:
                 return
 
-            _LOGGER.debug(
-                "Area %s: kelvin-router selecting route %d (colortemp=%s, prev=%s)",
-                self._area_id,
-                new_index,
-                colortemp,
-                self._current_index,
-            )
+            prev_index = self._current_index
             self._current_index = new_index
             active = self._config.routes[new_index]
             inactive_lights = self._config.all_route_lights - set(active.lights)
+
+            # Diff against current HA state: only issue calls for lights that
+            # need to change, so reconciliation is truly idempotent.
+            off_calls_to_issue = [
+                eid
+                for eid in sorted(inactive_lights)
+                if (s := self._hass.states.get(eid)) is not None and s.state == "on"
+            ]
+            on_calls_to_issue = [
+                eid
+                for eid in sorted(active.lights)
+                if (s := self._hass.states.get(eid)) is None or s.state != "on"
+            ]
+
+            _LOGGER.info(
+                "Area %s: kelvin_router routing -> %s (colortemp=%s, prev=%s, turn_off=%d, turn_on=%d)",
+                self._area_id,
+                self._describe_route(new_index),
+                colortemp,
+                self._describe_route(prev_index) if prev_index is not None else "none",
+                len(off_calls_to_issue),
+                len(on_calls_to_issue),
+            )
 
             tasks: list = [
                 self._hass.services.async_call(
@@ -138,11 +155,11 @@ class CircadianKelvinRouter:
                     "turn_off",
                     {
                         "entity_id": entity_id,
-                        "transition": self._config.crossfade_seconds,
+                        "transition": int(self._config.crossfade_seconds),
                     },
                     blocking=True,
                 )
-                for entity_id in sorted(inactive_lights)
+                for entity_id in off_calls_to_issue
             ]
             tasks.extend(
                 self._hass.services.async_call(
@@ -150,14 +167,22 @@ class CircadianKelvinRouter:
                     "turn_on",
                     {
                         "entity_id": entity_id,
-                        "transition": self._config.crossfade_seconds,
+                        "transition": int(self._config.crossfade_seconds),
                     },
                     blocking=True,
                 )
-                for entity_id in sorted(active.lights)
+                for entity_id in on_calls_to_issue
             )
             if tasks:
                 await asyncio.gather(*tasks)
+
+    def _describe_route(self, index: int) -> str:
+        """Return a human-readable label for a route by index."""
+        route = self._config.routes[index]
+        if route.is_fallback:
+            return f"fallback[{','.join(sorted(route.lights))}]"
+        lo, hi = route.kelvin_range  # type: ignore[misc]
+        return f"banded[{lo}-{hi}K]"
 
     def _read_colortemp(self) -> float | None:
         state = self._hass.states.get(self._config.source)

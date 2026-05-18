@@ -126,11 +126,10 @@ async def test_entering_circadian_activates_route_for_current_colortemp(
         if call.domain == "light" and call.service == "turn_off"
     }
     assert "light.kitchen_fluorescent" in on_targets
-    assert {
-        "light.kitchen_strip_1",
-        "light.kitchen_strip_2",
-        "light.kitchen_strip_3",
-    } <= off_targets
+    # Strips were already "off" in stubbed state, so no turn_off calls are needed.
+    assert "light.kitchen_strip_1" not in off_targets
+    assert "light.kitchen_strip_2" not in off_targets
+    assert "light.kitchen_strip_3" not in off_targets
 
 
 @pytest.mark.integration
@@ -151,6 +150,8 @@ async def test_colortemp_change_swaps_active_route(
     ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
+    # Simulate the result of the turn_on call so the state-diff sees it as on.
+    hass.states.async_set("light.kitchen_fluorescent", "on", {})
 
     service_calls.clear()
     hass.states.async_set(
@@ -170,7 +171,9 @@ async def test_colortemp_change_swaps_active_route(
         for call in service_calls
         if call.domain == "light" and call.service == "turn_off"
     }
+    # Fluorescent is "on", so the state-diff issues a turn_off for it.
     assert "light.kitchen_fluorescent" in off_targets
+    # Strips are still "off" from stub, so all three need turn_on.
     assert {
         "light.kitchen_strip_1",
         "light.kitchen_strip_2",
@@ -249,7 +252,8 @@ async def test_source_unavailable_selects_fallback(
         "light.kitchen_strip_2",
         "light.kitchen_strip_3",
     } <= on_targets
-    assert "light.kitchen_fluorescent" in off_targets
+    # Fluorescent was already "off" in stubbed state, so no turn_off call is needed.
+    assert "light.kitchen_fluorescent" not in off_targets
 
 
 @pytest.mark.integration
@@ -315,15 +319,12 @@ async def test_crossfade_passed_as_transition(
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
 
+    # After state-diff, only the fluorescent (off -> turn_on) fires; strips are
+    # already off so no turn_off is issued. Filter to the one call that does fire.
     routed_calls = [
         call
         for call in service_calls
-        if call.domain == "light"
-        and call.data.get("entity_id")
-        in {
-            "light.kitchen_fluorescent",
-            "light.kitchen_strip_1",
-        }
+        if call.domain == "light" and call.data.get("entity_id") == "light.kitchen_fluorescent"
     ]
     assert routed_calls
     assert all(call.data.get("transition") == 1.0 for call in routed_calls)
