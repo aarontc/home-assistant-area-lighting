@@ -813,6 +813,7 @@ An area configuration generally needs to define:
 9. Optional `brightness_step_pct` per-area override (default 12)
 10. Optional `night_fadeout_seconds` per-area override
 11. Optional global `alert_patterns` defining named flash/strobe effects
+12. Optional `circadian_kelvin_routes` for fixtures mixing lights at different native color temperatures — while the `circadian` scene is active, dispatches a configured set of lights between mutually-exclusive routes based on the live target kelvin (see [`CONFIGURATION.md`](CONFIGURATION.md))
 
 This README intentionally describes behavior first. The exact YAML or storage format can evolve as long
 as these behavioral guarantees remain true.
