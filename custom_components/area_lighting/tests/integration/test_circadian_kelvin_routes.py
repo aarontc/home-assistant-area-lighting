@@ -327,3 +327,61 @@ async def test_crossfade_passed_as_transition(
     ]
     assert routed_calls
     assert all(call.data.get("transition") == 1.0 for call in routed_calls)
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("_stub_kitchen_entities")
+async def test_routes_without_circadian_scene_logs_warning(
+    hass: HomeAssistant,
+    helper_entities,
+    caplog,
+) -> None:
+    """An area with routes but no `circadian` scene logs a warning at startup."""
+    cfg = {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "kitchen",
+                    "name": "Kitchen",
+                    "event_handlers": True,
+                    "circadian_switches": [{"name": "Kitchen"}],
+                    "lights": [
+                        {
+                            "id": "light.kitchen_fluorescent",
+                            "circadian_switch": "Kitchen",
+                            "circadian_type": "ct",
+                        },
+                        {
+                            "id": "light.kitchen_strip_1",
+                            "circadian_switch": "Kitchen",
+                            "circadian_type": "ct",
+                        },
+                    ],
+                    "scenes": [
+                        {"id": "daylight", "name": "Daylight"},
+                        {"id": "evening", "name": "Evening"},
+                        {"id": "off", "name": "Off"},
+                    ],
+                    "circadian_kelvin_routes": {
+                        "routes": [
+                            {
+                                "kelvin_range": [4500, 5500],
+                                "lights": ["light.kitchen_fluorescent"],
+                            },
+                            {"lights": ["light.kitchen_strip_1"]},
+                        ]
+                    },
+                }
+            ]
+        }
+    }
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="custom_components.area_lighting")
+    await _setup(hass, cfg)
+    assert any(
+        "circadian_kelvin_routes" in record.message
+        and "no `circadian` scene" in record.message
+        and "kitchen" in record.message
+        for record in caplog.records
+    )

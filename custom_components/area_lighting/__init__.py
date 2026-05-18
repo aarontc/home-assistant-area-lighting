@@ -82,6 +82,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         _LOGGER.error("Area Lighting: invalid circadian_kelvin_routes config: %s", err)
         return False
 
+    for area in area_config.areas:
+        if area.circadian_kelvin_routes is None:
+            continue
+        if "circadian" not in area.scene_slugs:
+            _LOGGER.warning(
+                "Area Lighting: area '%s' has circadian_kelvin_routes "
+                "but no `circadian` scene declared — routing will be "
+                "inert until a circadian scene is added",
+                area.id,
+            )
+
     # Initialize scene storage
     scene_storage = SceneStorage(hass)
     await scene_storage.async_load()
