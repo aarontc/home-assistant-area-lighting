@@ -234,6 +234,13 @@ An area with `circadian_kelvin_routes` but no `circadian` scene logs a
 `WARNING` at startup — the routing is inert until a `circadian` scene
 is added.
 
+#### Reload behavior
+
+Reloading `area_lighting` (e.g. via the `area_lighting.reload` service or
+HA YAML reload) does not rebuild existing controllers. Edits to
+`circadian_kelvin_routes` take effect only after a full Home Assistant
+restart. This matches the rest of the integration's per-area config.
+
 ### `scenes`
 
 Each scene declared here produces a `scene.{area_id}_{id}` entity.
