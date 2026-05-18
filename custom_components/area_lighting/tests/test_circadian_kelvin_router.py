@@ -95,3 +95,13 @@ def test_fallback_only_when_one_route():
     # selector should not crash.
     routes = [CircadianKelvinRouteConfig(lights=["light.x"])]
     assert select_route(routes, colortemp=5000, current_index=None) == 0
+
+
+def test_selects_banded_route_at_lower_boundary_exact():
+    """colortemp == lo should select the banded route (range is inclusive)."""
+    assert select_route(_routes(), colortemp=4500, current_index=None) == 0
+
+
+def test_selects_banded_route_at_upper_boundary_exact():
+    """colortemp == hi should select the banded route (range is inclusive)."""
+    assert select_route(_routes(), colortemp=5500, current_index=None) == 0
