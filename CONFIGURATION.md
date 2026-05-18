@@ -152,6 +152,88 @@ Valid role names (from `const.py`):
 
 A light can carry any combination of roles.
 
+### Circadian kelvin routes
+
+Optional. When set, the listed lights are dispatched between
+mutually-exclusive routes based on the current circadian target color
+temperature — but only while the area's active scene is `circadian`.
+Other scenes apply their `entities:` block as usual and ignore routing.
+
+Use case: a fixture that mixes light sources with very different native
+color temperatures (e.g. fluorescent tubes near 5000K and warm Hue
+strips). The fluorescent runs when circadian's target is near its
+native CT; the strips take over outside that band.
+
+```yaml
+circadian_kelvin_routes:
+  source: switch.circadian_lighting_kitchen_kitchen_circadian   # optional
+  crossfade_seconds: 2.0                                        # optional, default 2.0
+  routes:
+    - kelvin_range: [4500, 5500]
+      lights: [light.kitchen_fluorescent]
+    - lights:
+        - light.kitchen_strip_1
+        - light.kitchen_strip_2
+        - light.kitchen_strip_3
+```
+
+| Key                  | Type                       | Required | Default                                                   | Notes |
+|----------------------|----------------------------|----------|-----------------------------------------------------------|-------|
+| `source`             | entity_id                  | conditionally | the area's sole circadian switch                  | Entity whose `colortemp` attribute drives route selection. Required when the area declares 2+ circadian switches or zero. |
+| `crossfade_seconds`  | float `>= 0`               | no       | `2.0`                                                     | Passed as `transition` to the `light.turn_on` / `light.turn_off` calls when the active route changes. `0` snaps. |
+| `routes`             | list of [route](#route)     | **yes**  | —                                                         | Mutually-exclusive route definitions. Must have ≥ 2 entries (one banded + one fallback). |
+
+#### Route
+
+| Key            | Type                       | Required | Notes |
+|----------------|----------------------------|----------|-------|
+| `kelvin_range` | `[lo, hi]` of ints `1000..10000` | no | Inclusive both ends. Required for banded routes; omit for the fallback. |
+| `lights`       | list of entity_id (≥ 1)    | **yes**  | Lights driven by this route. Each must also appear in the area's `lights` or `light_clusters`. |
+
+#### Semantics
+
+- Routing is active **only while the area's scene is `circadian`.** Any
+  other scene applies its `entities:` block exactly as today and
+  bypasses the router. Re-entering circadian re-evaluates from the
+  current source state.
+- The router reads `state.attributes['colortemp']` on `source`. The
+  first banded route whose `kelvin_range` contains that value is
+  selected; if none match, the fallback is selected. A small
+  hardcoded hysteresis (±25K) is applied around the currently-active
+  banded route to suppress flapping at the boundary.
+- When the active route changes, lights in the now-inactive route
+  receive `light.turn_off` and lights in the now-active route receive
+  `light.turn_on`, both with `transition: crossfade_seconds`. The
+  `circadian_lighting` switch then catches the new-on event and
+  applies the current CT and brightness.
+- Lights listed in any route are excluded from the controller's
+  default per-light circadian initialization — the router fully owns
+  their on/off state while the circadian scene is active.
+- If `source` is `unavailable` / `unknown` / lacks the `colortemp`
+  attribute, the fallback is selected.
+
+#### Validation rules (parse-time `vol.Invalid`)
+
+1. `routes` must contain **exactly one** entry without `kelvin_range`
+   (the fallback).
+2. Banded `kelvin_range: [lo, hi]` requires `1000 ≤ lo ≤ hi ≤ 10000`.
+3. Two banded ranges within one `routes` list may not overlap.
+   Touching endpoints (`[4500, 5500]` and `[5500, 6500]`) overlap at
+   5500 and are rejected.
+4. Every entity id in `routes[].lights` must also appear in the
+   area's `lights` or `light_clusters`.
+5. A light may appear in at most one route.
+6. `source` is required when the area declares 2+ circadian switches
+   or zero. With exactly one switch, `source` defaults to that
+   switch's entity id.
+7. `crossfade_seconds` is a float `≥ 0`.
+
+#### Soft warning
+
+An area with `circadian_kelvin_routes` but no `circadian` scene logs a
+`WARNING` at startup — the routing is inert until a `circadian` scene
+is added.
+
 ### `scenes`
 
 Each scene declared here produces a `scene.{area_id}_{id}` entity.
