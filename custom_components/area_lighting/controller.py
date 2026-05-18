@@ -14,6 +14,7 @@ from .area_state import (
     ActivationSource,
     AreaState,
 )
+from .circadian_kelvin_router import CircadianKelvinRouter
 from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
@@ -143,6 +144,14 @@ class AreaLightingController:
         # leaders without followers keep `followers == []`.
         self.leader: AreaLightingController | None = None
         self.followers: list[AreaLightingController] = []
+
+        self._kelvin_router: CircadianKelvinRouter | None = None
+        if area.circadian_kelvin_routes is not None:
+            self._kelvin_router = CircadianKelvinRouter(
+                hass,
+                area.id,
+                area.circadian_kelvin_routes,
+            )
 
     # ── Persistence ────────────────────────────────────────────────────
 
@@ -574,6 +583,12 @@ class AreaLightingController:
             callback()
         self._schedule_save()
 
+    async def _sync_kelvin_router(self) -> None:
+        """Tell the kelvin router about the current scene. No-op if absent."""
+        if self._kelvin_router is None:
+            return
+        await self._kelvin_router.sync_to_state(self._state.scene_slug)
+
     def _log_state_snapshot_if_changed(self) -> None:
         """Log a single line when primary state/scene/source changes.
 
@@ -690,6 +705,7 @@ class AreaLightingController:
             self._state.transition_to_off(source)
             self._enforce_occupancy_timer()
             self._notify_state_change()
+            await self._sync_kelvin_router()
             if source != ActivationSource.LEADER:
                 self._propagate_to_followers(None, LeaderReason.OFF)
             return
@@ -712,6 +728,7 @@ class AreaLightingController:
         self._state.transition_to_scene(scene_slug, source)
         self._enforce_occupancy_timer()
         self._notify_state_change()
+        await self._sync_kelvin_router()
 
         if source != ActivationSource.LEADER:
             if scene_slug in ("ambient", "christmas", "halloween"):
@@ -735,6 +752,11 @@ class AreaLightingController:
 
         tasks: list = []
         for light in self.area.all_lights:
+            if (
+                self.area.circadian_kelvin_routes is not None
+                and light.id in self.area.circadian_kelvin_routes.all_route_lights
+            ):
+                continue
             if not light.circadian_switch:
                 continue
             cs = self.area.circadian_switch_for_light(light)
@@ -755,6 +777,7 @@ class AreaLightingController:
             tasks.append(self._call_service("light.turn_on", **data))
         if tasks:
             await asyncio.gather(*tasks)
+        await self._sync_kelvin_router()
 
     async def _apply_scene_data(
         self,
@@ -1365,6 +1388,7 @@ class AreaLightingController:
             self._active_scene_targets = self._resolve_scene_targets(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()
+        await self._sync_kelvin_router()
 
     async def handle_lights_all_off(self) -> None:
         """All lights in area turned off externally.
@@ -1380,6 +1404,7 @@ class AreaLightingController:
         self._motion_night_timer.cancel()
         self._occupancy_timer.cancel()
         self._notify_state_change()
+        await self._sync_kelvin_router()
 
     async def handle_manual_light_change(self) -> None:
         """A light was manually adjusted outside the scene system.
@@ -1398,6 +1423,7 @@ class AreaLightingController:
             self._state.transition_to_manual()
             self._enforce_occupancy_timer()
             self._notify_state_change()
+            await self._sync_kelvin_router()
             from .area_state import LeaderReason
 
             self._propagate_to_followers(None, LeaderReason.MANUAL)
