@@ -940,15 +940,36 @@ class AreaLightingController:
             if actual_ct is not None and abs(int(target_ct) - int(actual_ct)) > 100:
                 return False
 
+        # Color: when the bulb's native color space is xy (Philips Hue and
+        # similar), compare in xy. The hs ↔ xy round trip is lossy at the
+        # edges of the bulb's gamut — e.g. an hs target of (0, 100), CIE
+        # pure red, is outside Hue's gamut C, so the bridge clamps to its
+        # red corner xy ≈ (0.6915, 0.3083); HA inverts that to hs ≈ (10.1,
+        # 100), which used to exceed the 10° hue tolerance every time even
+        # though the bulb was doing exactly what was asked.
+        target_xy = target.get("xy_color")
         target_hs = target.get("hs_color")
-        if target_hs is not None:
-            actual_hs = attrs.get("hs_color")
-            if actual_hs is not None:
-                hue_diff = abs(float(target_hs[0]) - float(actual_hs[0]))
-                hue_diff = min(hue_diff, 360 - hue_diff)
-                sat_diff = abs(float(target_hs[1]) - float(actual_hs[1]))
-                if hue_diff > 10 or sat_diff > 10:
-                    return False
+        actual_xy = attrs.get("xy_color")
+        actual_hs = attrs.get("hs_color")
+
+        have_color_target = target_xy is not None or target_hs is not None
+        actual_is_xy_native = attrs.get("color_mode") == "xy" and actual_xy is not None
+
+        if have_color_target and actual_is_xy_native:
+            if target_xy is None:
+                from homeassistant.util.color import color_hs_to_xy
+
+                target_xy = color_hs_to_xy(float(target_hs[0]), float(target_hs[1]))
+            dx = float(target_xy[0]) - float(actual_xy[0])
+            dy = float(target_xy[1]) - float(actual_xy[1])
+            if (dx * dx + dy * dy) ** 0.5 > 0.025:
+                return False
+        elif target_hs is not None and actual_hs is not None:
+            hue_diff = abs(float(target_hs[0]) - float(actual_hs[0]))
+            hue_diff = min(hue_diff, 360 - hue_diff)
+            sat_diff = abs(float(target_hs[1]) - float(actual_hs[1]))
+            if hue_diff > 10 or sat_diff > 10:
+                return False
 
         return True
 
