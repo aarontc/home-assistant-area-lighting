@@ -951,17 +951,20 @@ class AreaLightingController:
         target_hs = target.get("hs_color")
         actual_xy = attrs.get("xy_color")
         actual_hs = attrs.get("hs_color")
-
-        have_color_target = target_xy is not None or target_hs is not None
         actual_is_xy_native = attrs.get("color_mode") == "xy" and actual_xy is not None
 
-        if have_color_target and actual_is_xy_native:
-            if target_xy is None:
+        effective_target_xy: tuple[float, float] | None = None
+        if actual_is_xy_native:
+            if target_xy is not None:
+                effective_target_xy = (float(target_xy[0]), float(target_xy[1]))
+            elif target_hs is not None:
                 from homeassistant.util.color import color_hs_to_xy
 
-                target_xy = color_hs_to_xy(float(target_hs[0]), float(target_hs[1]))
-            dx = float(target_xy[0]) - float(actual_xy[0])
-            dy = float(target_xy[1]) - float(actual_xy[1])
+                effective_target_xy = color_hs_to_xy(float(target_hs[0]), float(target_hs[1]))
+
+        if effective_target_xy is not None and actual_xy is not None:
+            dx = effective_target_xy[0] - float(actual_xy[0])
+            dy = effective_target_xy[1] - float(actual_xy[1])
             if (dx * dx + dy * dy) ** 0.5 > 0.025:
                 return False
         elif target_hs is not None and actual_hs is not None:
