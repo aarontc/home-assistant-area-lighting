@@ -684,6 +684,23 @@ class AreaLightingController:
         for follower in self.followers:
             self.hass.async_create_task(follower.handle_leader_change(new_slug, reason))
 
+    def _stamp_targets_with_command_metadata(self, transition: float | None) -> None:
+        """Record commanded_at + transition on every active scene target.
+
+        Manual detection reads these to distinguish a real divergence
+        from a bulb that's still settling into a commanded fade. The
+        entries are replaced (not mutated) so the originating scene
+        config dicts handed back by _resolve_scene_targets stay clean.
+        """
+        now = time.monotonic()
+        tx = float(transition) if transition is not None else 0.0
+        for entity_id, target in list(self._active_scene_targets.items()):
+            self._active_scene_targets[entity_id] = {
+                **target,
+                "commanded_at": now,
+                "transition": tx,
+            }
+
     async def _activate_scene(
         self,
         scene_slug: str,
@@ -724,6 +741,7 @@ class AreaLightingController:
         # overriding the scene's color/brightness, then apply + transition.
         await self._disable_circadian_switches()
         self._active_scene_targets = self._resolve_scene_targets(scene_slug)
+        self._stamp_targets_with_command_metadata(transition)
         await self._apply_scene_data(scene_slug, transition)
         self._state.transition_to_scene(scene_slug, source)
         self._enforce_occupancy_timer()

@@ -538,6 +538,25 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 )
                 return
 
+        # Per-entity transition window: a scene activation may carry a
+        # fade duration (e.g. a 60 s motion off-fade). Until the
+        # transition completes the bulb's reports will diverge from
+        # the post-fade endpoint — treat that as still settling, not
+        # a manual override.
+        target = ctrl._active_scene_targets.get(entity_id)
+        if target is not None:
+            commanded_at = target.get("commanded_at")
+            transition = target.get("transition")
+            if commanded_at is not None and transition is not None:
+                age = _time.monotonic() - commanded_at
+                window = transition + MANUAL_DETECTION_GRACE_SECONDS
+                if age < window:
+                    _skip(
+                        f"transition in progress ({age:.1f}s < {window:.1f}s)",
+                        entity_id,
+                    )
+                    return
+
         # Compare against scene targets: if the light's current state
         # matches what the scene instructed, this is a late bridge
         # report or convergence, not a manual override.

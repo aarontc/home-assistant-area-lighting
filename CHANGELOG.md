@@ -17,6 +17,17 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Spurious manual detection during long fade transitions** — when a scene
+  activation carried a long fade (e.g. `lighting_off_fade` with a 60 s
+  motion fadeout), the area-wide 4 s grace window expired well before the
+  fade did. The bulb kept reporting `state=on` with brightness gradually
+  decreasing toward the fade endpoint; `state_matches_scene_target` saw
+  the divergence and demoted the area to `manual` mid-transition, breaking
+  the next remote / motion cycle. Every entry in `_active_scene_targets`
+  now carries a `commanded_at` monotonic timestamp and the `transition`
+  duration that went with it, and manual detection consults those per-entity
+  values to skip comparisons until the commanded transition has elapsed
+  (plus the existing 4 s buffer).
 - **Spurious manual detection on xy-native bulbs** — when a scene targeted
   `hs_color` and the bulb's native color space is xy (Philips Hue and
   similar), the hs ↔ xy round trip across the bridge's gamut clamping shifted
