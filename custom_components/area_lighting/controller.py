@@ -1559,9 +1559,18 @@ class AreaLightingController:
         return local_scene, remote_activations
 
     async def _activate_linked_areas(self, remote_activations: list[tuple[str, str]]) -> None:
-        """Activate scenes in remote areas via their controllers."""
+        """Activate scenes in remote areas via their controllers.
+
+        Merges into ``_linked_activated_scenes`` rather than replacing it. A
+        later motion event can resolve to no remote activation — e.g. the remote
+        area is already in the linked scene, so its mapping returns
+        ``remote_scene=None`` — and that must NOT discard a still-pending
+        activation, or ``_cleanup_linked_areas`` would have nothing to turn off
+        and the remote area would be stranded on. Stale entries are harmless:
+        cleanup only acts when the remote area is still in the recorded scene,
+        and it clears the dict once it runs.
+        """
         controllers = self.hass.data.get(DOMAIN, {}).get("controllers", {})
-        self._linked_activated_scenes.clear()
 
         for remote_area_id, remote_scene in remote_activations:
             remote_ctrl = controllers.get(remote_area_id)

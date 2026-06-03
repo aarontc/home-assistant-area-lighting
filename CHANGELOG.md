@@ -17,6 +17,17 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Linked-motion remote area stranded on after re-triggered motion** — a
+  remote area lit by `linked_motion` (e.g. the theater raised to its pass-through
+  scene by stairs motion) would never turn back off when the source area's
+  motion re-triggered while the remote was still in the linked scene. That
+  re-trigger resolves to no remote activation (the remote's current scene maps
+  to `remote_scene: null`), and `_activate_linked_areas` cleared the
+  pending-cleanup tracking unconditionally — so the later motion-timer expiry
+  had nothing to turn off. `_activate_linked_areas` now merges into the tracking
+  instead of replacing it; cleanup still guards on the remote's current scene,
+  so stale entries are harmless.
+
 - **Spurious manual detection during long fade transitions** — when a scene
   activation carried a long fade (e.g. `lighting_off_fade` with a 60 s
   motion fadeout), the area-wide 4 s grace window expired well before the

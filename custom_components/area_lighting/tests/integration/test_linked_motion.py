@@ -261,3 +261,47 @@ async def test_linked_invalid_remote_area(hass: HomeAssistant, helper_entities) 
     # Stairs still activates (falls back to default local_scene since resolve
     # can't find the remote controller, but doesn't crash)
     assert stairs_ctrl._state.scene_slug == "circadian" or stairs_ctrl._state.is_circadian
+
+
+@pytest.mark.integration
+async def test_linked_retrigger_then_cleanup_turns_theater_off(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """Re-trigger while theater is still in the linked scene -> cleanup still
+    turns theater off.
+
+    Regression: _activate_linked_areas() must not discard the pending-cleanup
+    tracking when a later motion event resolves to no remote activation. The
+    second stairs motion-on happens while the theater is still in "stairs"
+    (the linked scene), which resolves to the default mapping (remote_scene
+    null). If that wipes _linked_activated_scenes, the subsequent timer expiry
+    no-ops and the theater is stranded on.
+    """
+    hass.states.async_set("light.theater_overhead", "off")
+    hass.states.async_set("light.stairs_upper", "off")
+    hass.states.async_set("binary_sensor.theater_motion", "off")
+    hass.states.async_set("binary_sensor.stairs_motion", "off")
+    await _setup(hass, _two_area_config())
+
+    stairs_ctrl = hass.data["area_lighting"]["controllers"]["stairs"]
+    theater_ctrl = hass.data["area_lighting"]["controllers"]["theater"]
+
+    # First stairs motion: theater is off -> theater activated to "stairs".
+    await stairs_ctrl.handle_motion_on()
+    await hass.async_block_till_done()
+    assert theater_ctrl._state.scene_slug == "stairs"
+
+    # Stairs motion re-fires while theater is STILL in "stairs" (no manual
+    # override). Resolution yields no remote activation; the tracking that
+    # cleanup relies on must survive.
+    await stairs_ctrl.handle_motion_on()
+    await hass.async_block_till_done()
+    assert theater_ctrl._state.scene_slug == "stairs"
+
+    # Motion stops and the stairs timer expires -> theater must turn off.
+    await stairs_ctrl.handle_motion_off()
+    await hass.async_block_till_done()
+    await stairs_ctrl._on_motion_timer()
+    await hass.async_block_till_done()
+
+    assert theater_ctrl._state.is_off
