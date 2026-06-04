@@ -44,9 +44,7 @@ def test_scene_with_rgbww_color_passes():
 
 def test_scene_with_hs_color_passes():
     SCENE_SCHEMA(
-        _scene(
-            {"light.theater_center": {"state": "on", "brightness": 128, "hs_color": [0, 100]}}
-        )
+        _scene({"light.theater_center": {"state": "on", "brightness": 128, "hs_color": [0, 100]}})
     )
 
 
