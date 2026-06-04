@@ -17,6 +17,22 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Scene `rgbw_color` / `rgbww_color` silently dropped** — the scene-apply
+  allowlist omitted `rgbw_color` and `rgbww_color`, so a scene specifying them
+  (e.g. a christmas scene driving WiZ `rgbww` bulbs) turned the lights on but
+  never changed their color — only `brightness`/`state` were applied. Both keys
+  are now forwarded to `light.turn_on`, letting Home Assistant convert them to
+  the bulb's native color mode (e.g. `rgbw` → `rgbww`). The honored scene
+  attributes now live in a single `SCENE_LIGHT_ON_ATTRIBUTES` allowlist shared
+  by the apply paths and the config schema, so the two can't drift again.
+
+  To prevent this class of silent failure, a scene's per-light `entities` block
+  is now **strictly validated**: only supported attributes (`state` plus the
+  allowlist) are accepted, so an unsupported key — e.g. `color_mode`, which is
+  read-only on a light and was never applied — now raises at startup instead of
+  being silently ignored. **Action required:** remove any `color_mode` (or other
+  non-`light.turn_on`) keys from scene `entities`.
+
 - **Linked-motion remote area stranded on after re-triggered motion** — a
   remote area lit by `linked_motion` (e.g. the theater raised to its pass-through
   scene by stairs motion) would never turn back off when the source area's

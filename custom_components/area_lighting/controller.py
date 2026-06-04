@@ -25,6 +25,7 @@ from .const import (
     HOLIDAY_MODE_NONE,
     HOLIDAY_SCENES,
     SCENE_CIRCADIAN,
+    SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF_INTERNAL,
 )
 from .models import AreaConfig, AreaLightingConfig, SceneConfig
@@ -658,6 +659,8 @@ class AreaLightingController:
             "color_temp",
             "rgb_color",
             "hs_color",
+            "rgbw_color",
+            "rgbww_color",
             "xy_color",
             "effect",
             "transition",
@@ -867,18 +870,12 @@ class AreaLightingController:
             svc_data["transition"] = int(transition)
 
         if target_state == "on":
-            # Skip keys whose value is None — Hue's 2025 deprecation warns
-            # when `effect=None` is passed to light.turn_on, and None is
-            # never meaningful for any of these attributes anyway.
-            for attr in (
-                "brightness",
-                "color_temp_kelvin",
-                "color_temp",
-                "hs_color",
-                "rgb_color",
-                "xy_color",
-                "effect",
-            ):
+            # Pass the allowlisted attributes straight through so HA can do any
+            # color-mode conversion it needs (e.g. rgbw_color on an rgbww bulb).
+            # Skip keys whose value is None — Hue's 2025 deprecation warns when
+            # `effect=None` is passed to light.turn_on, and None is never
+            # meaningful for any of these attributes anyway.
+            for attr in SCENE_LIGHT_ON_ATTRIBUTES:
                 if attr in state_data and state_data[attr] is not None:
                     svc_data[attr] = state_data[attr]
             await self._call_service("light.turn_on", **svc_data)

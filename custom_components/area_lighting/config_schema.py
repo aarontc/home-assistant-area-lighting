@@ -11,6 +11,7 @@ from .const import (
     CIRCADIAN_CT,
     CIRCADIAN_RGB,
     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+    SCENE_LIGHT_ON_ATTRIBUTES,
 )
 from .models import (
     AlertPattern,
@@ -51,13 +52,28 @@ LIGHT_SCHEMA = vol.Schema(
     }
 )
 
+# Per-entity target state inside a scene's `entities` block. Strict by design:
+# only the attributes Area Lighting actually applies are allowed, so an
+# unsupported key (e.g. `color_mode`, which is read-only on a light and was
+# silently dropped, or a typo like `rgwb_color`) raises at config validation /
+# startup instead of failing silently at apply time. The allowed color/brightness
+# keys come from SCENE_LIGHT_ON_ATTRIBUTES so this allowlist and the apply paths
+# share one source of truth.
+SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("state"): vol.In(["on", "off"]),
+        **{vol.Optional(attr): object for attr in SCENE_LIGHT_ON_ATTRIBUTES},
+    }
+)
+
 SCENE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.string,
         vol.Required("name"): cv.string,
         vol.Optional("group_exclude", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
         vol.Optional("cycle"): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional("entities"): dict,  # Per-light state data for the scene
+        # Per-light state data for the scene, keyed by entity_id.
+        vol.Optional("entities"): {cv.entity_id: SCENE_ENTITY_STATE_SCHEMA},
         vol.Optional("icon"): cv.icon,
     }
 )

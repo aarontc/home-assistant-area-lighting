@@ -74,6 +74,35 @@ async def test_apply_light_state_forwards_real_effect_value():
 
 
 @pytest.mark.asyncio
+async def test_apply_light_state_forwards_rgbw_and_rgbww_color():
+    """rgbw_color / rgbww_color must be forwarded to light.turn_on.
+
+    Regression: they were absent from the apply allowlist and silently dropped,
+    so a scene specifying rgbw_color (e.g. the theater christmas scene) turned
+    bulbs on but never changed their color. Forwarding lets HA convert the value
+    to the bulb's native mode (e.g. rgbw -> rgbww).
+    """
+    ctrl = _make_controller()
+    ctrl._call_service = AsyncMock()
+
+    await ctrl._apply_light_state(
+        "light.study_main",
+        {"state": "on", "brightness": 255, "rgbw_color": [255, 0, 0, 0]},
+    )
+    _, kwargs = ctrl._call_service.call_args
+    assert kwargs["rgbw_color"] == [255, 0, 0, 0]
+    assert kwargs["brightness"] == 255
+
+    ctrl._call_service.reset_mock()
+    await ctrl._apply_light_state(
+        "light.study_main",
+        {"state": "on", "rgbww_color": [0, 255, 0, 0, 0]},
+    )
+    _, kwargs = ctrl._call_service.call_args
+    assert kwargs["rgbww_color"] == [0, 255, 0, 0, 0]
+
+
+@pytest.mark.asyncio
 async def test_apply_light_state_off_state_ignores_attrs():
     """state=off must call turn_off and never forward any attrs."""
     ctrl = _make_controller()

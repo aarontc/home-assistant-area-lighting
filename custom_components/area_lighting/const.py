@@ -94,3 +94,23 @@ GLOBAL_MOTION_LIGHT_ENABLED_ENTITY = "input_boolean.motion_light_enabled"
 # Circadian kelvin routing
 CIRCADIAN_KELVIN_HYSTERESIS = 25
 DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS = 2.0
+
+# Scene light attributes — the allowlist of per-light keys honored in a scene's
+# `entities` block. Each of these is passed straight through to light.turn_on,
+# so Home Assistant performs any needed color-mode conversion (e.g. rgbw_color
+# on an rgbww-only bulb). This is the SINGLE source of truth: the config schema
+# validates scene entity state against this same set, so an unsupported key
+# (e.g. color_mode, or a typo) fails loudly at startup instead of being silently
+# dropped at apply time. "state" is allowed in scene config too but handled
+# separately (it selects turn_on vs turn_off rather than being a turn_on arg).
+SCENE_LIGHT_ON_ATTRIBUTES = (
+    "brightness",
+    "color_temp_kelvin",
+    "color_temp",
+    "hs_color",
+    "rgb_color",
+    "rgbw_color",
+    "rgbww_color",
+    "xy_color",
+    "effect",
+)
