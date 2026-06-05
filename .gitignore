@@ -14,3 +14,4 @@ dagger/dagger.gen.go
 dagger/internal/
 dagger/go.sum
 /.idea/
+/.claude-credentials
