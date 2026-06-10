@@ -25,6 +25,9 @@ from .const import (
     HOLIDAY_MODE_NONE,
     HOLIDAY_SCENES,
     SCENE_CIRCADIAN,
+    SCENE_DRIFT_ISSUE_ID,
+    SCENE_HEAL_ATTEMPT_WINDOW_SECONDS,
+    SCENE_HEAL_MAX_ATTEMPTS,
     SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF_INTERNAL,
 )
@@ -132,6 +135,11 @@ class AreaLightingController:
         # Populated by _activate_scene; used by manual detection to compare
         # incoming HA state updates against what the scene instructed.
         self._active_scene_targets: dict[str, dict] = {}
+
+        # Scene self-healing: monotonic timestamps of recent re-asserts per
+        # entity (loop-cap window), and the pending post-settle self-check.
+        self._heal_attempts: dict[str, list[float]] = {}
+        self._heal_selfcheck_unsub = None
 
         # Seed the manual-detection grace clock so the first 10s after
         # controller construction (including post-restart) are protected
@@ -1471,6 +1479,72 @@ class AreaLightingController:
             from .area_state import LeaderReason
 
             self._propagate_to_followers(None, LeaderReason.MANUAL)
+
+    async def handle_scene_drift_reassert(self, entity_id: str, reason: str) -> None:
+        """Re-assert a single bulb's active scene target after a glitch.
+
+        Subject to the loop cap: after SCENE_HEAL_MAX_ATTEMPTS heals within
+        SCENE_HEAL_ATTEMPT_WINDOW_SECONDS, give up — latch manual and raise a
+        Repairs issue instead of re-asserting again.
+        """
+        target = self._active_scene_targets.get(entity_id)
+        if target is None or target.get("state") != "on":
+            return
+
+        now = time.monotonic()
+        stamps = [
+            t
+            for t in self._heal_attempts.get(entity_id, [])
+            if now - t < SCENE_HEAL_ATTEMPT_WINDOW_SECONDS
+        ]
+        if len(stamps) >= SCENE_HEAL_MAX_ATTEMPTS:
+            _LOGGER.warning(
+                "Area %s: scene-heal gave up on %s after %d attempts; latching manual",
+                self.area.id,
+                entity_id,
+                len(stamps),
+            )
+            self._raise_scene_drift_issue(entity_id)
+            await self.handle_manual_light_change()
+            return
+
+        stamps.append(now)
+        self._heal_attempts[entity_id] = stamps
+        _LOGGER.info(
+            "Area %s: healed scene drift entity=%s reason=%s",
+            self.area.id,
+            entity_id,
+            reason,
+        )
+        # Instant re-assert. Re-stamp commanded_at=now and transition=0 so the
+        # heal command's own state echo lands inside the per-entity grace
+        # window and isn't misread as a fresh divergence.
+        await self._apply_light_state(entity_id, target, transition=None)
+        self._active_scene_targets[entity_id] = {
+            **target,
+            "commanded_at": now,
+            "transition": 0.0,
+        }
+
+    def _raise_scene_drift_issue(self, entity_id: str) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"{SCENE_DRIFT_ISSUE_ID}_{self.area.id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=SCENE_DRIFT_ISSUE_ID,
+            translation_placeholders={"area": self.area.name, "entity": entity_id},
+        )
+
+    def _clear_scene_drift_issue(self) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_delete_issue(self.hass, DOMAIN, f"{SCENE_DRIFT_ISSUE_ID}_{self.area.id}")
+        self._heal_attempts.clear()
 
     async def handle_motion_on(self) -> None:
         _LOGGER.debug(
