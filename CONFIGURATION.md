@@ -27,7 +27,7 @@ area_lighting:
 |-------------------|-----------------------------------|----------|-------------|
 | `areas`           | list of [area](#area)              | **yes**  | One entry per area/room managed by this integration. |
 | `alert_patterns`  | dict of [pattern](#alert-pattern)  | no (default `{}`) | Named flash/alert animations invocable from remotes, automations, or the `area_lighting.alert` service. |
-| `scene_self_heal` | boolean                            | no (default `true`) | When `true`, out-of-band bulb divergences that look like glitches (Hue power-on defaults, RF dropouts, `unavailable` recovery) are silently re-asserted to the active scene target instead of latching the area to `manual`. Set to `false` to disable — all divergences latch `manual` as before. See "Scene self-healing" in [`README.md`](README.md). |
+| `scene_self_heal` | boolean                            | no (default `true`) | When `true`, out-of-band bulb divergences that look like glitches (Hue power-on defaults, RF dropouts, `unavailable` recovery) are silently re-asserted to the active scene target instead of latching the area to `manual`. Set to `false` to disable — all divergences latch `manual` as before. Changing this value takes effect on a Home Assistant **restart** (it is read when controllers are constructed; `area_lighting.reload` does not re-read it). See "Scene self-healing" in [`README.md`](README.md). |
 
 Any other top-level key is rejected (`vol.PREVENT_EXTRA`).
 
