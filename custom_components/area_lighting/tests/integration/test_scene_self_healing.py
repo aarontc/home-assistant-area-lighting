@@ -213,3 +213,40 @@ async def test_kill_switch_off_falls_back_to_manual(
 
     assert ctrl._state.is_manual
     assert not _light_turn_on_calls(service_calls, eid)
+
+
+@pytest.mark.integration
+async def test_post_settle_selfcheck_heals_during_fade_glitch(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A glitch that lands during the fade (ignored by the event path as
+    'settling') is healed by the one-shot post-settle self-check."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    # Target commanded "now"; bulb currently sits at a divergent value.
+    ctrl._active_scene_targets = {eid: _on_target(commanded_offset=0.0)}
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    # Fire the self-check callback directly (the scheduling is asserted below).
+    ctrl._run_post_settle_selfcheck()
+    await hass.async_block_till_done()
+
+    assert _light_turn_on_calls(service_calls, eid), "self-check should heal the drift"
+
+
+@pytest.mark.integration
+async def test_activating_scene_schedules_selfcheck(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    """A visual-scene activation schedules exactly one pending self-check."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    await ctrl._activate_scene("daylight", ActivationSource.USER, transition=5.0)
+    assert ctrl._heal_selfcheck_handle is not None
+    # Tidy up the pending loop.call_later so it doesn't fire after the test.
+    ctrl._heal_selfcheck_handle.cancel()
+    ctrl._heal_selfcheck_handle = None
