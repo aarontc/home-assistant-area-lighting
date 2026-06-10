@@ -78,7 +78,7 @@ entry in that list.
 | `icon`                      | string                | no       | —       | MDI icon name (e.g. `mdi:bedroom-outline`). |
 | `special`                   | string                | no       | —       | Free-form marker used to exclude the area from bulk operations (e.g. `"global"`). |
 | `ambient_lighting_zone`     | string                | no       | —       | Name of an `input_boolean.lighting_<zone>_ambient` helper that gates ambient activation for this area. |
-| `brightness_step_pct`       | int, `1..100`         | no       | — (uses global default, 12) | Percentage per raise/lower button press. Override for areas that want finer or coarser steps. |
+| `brightness_step_pct`       | int, `1..100`         | no       | — (uses global default, 12) | Percentage stepped per raise/lower press when lights are already on. Also the minimum dimming level every area light is brought up to when raise/lower fires in a fully-dark area. Override for areas that want finer or coarser steps. |
 | `night_fadeout_seconds`     | float, `>= 0`         | no       | — (uses global default) | Per-area override for the night-mode fade transition duration. |
 | `leader_area_id`            | string                | no       | —       | Slug of another area whose scene this area mirrors. Not chainable (see [leader/follower rules](#leaderfollower-rules)). |
 | `follow_leader_deactivation`| boolean               | no       | `false` | When following a leader, also mirror its off/ambient transitions (default only mirrors active scenes). |

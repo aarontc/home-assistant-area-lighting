@@ -1079,19 +1079,25 @@ class AreaLightingController:
                 ]
             )
 
-    async def _scale_on_lights_to_pct(self, pct: int) -> None:
-        """Set every currently-on light to an absolute brightness percentage."""
+    async def _set_all_lights_to_pct(self, pct: int) -> None:
+        """Turn on EVERY light in the area at an absolute brightness percentage.
+
+        Unlike a step adjustment (which only touches lights already on), this
+        targets all area lights, including ones currently off and ones outside
+        the active scene, so a dark area lights up uniformly at its minimum
+        dimming level.
+        """
         brightness = max(1, min(255, round(255 * pct / 100)))
-        entity_ids = self._on_light_entity_ids()
-        if entity_ids:
+        lights = self.area.all_lights
+        if lights:
             await asyncio.gather(
                 *[
                     self._call_service(
                         "light.turn_on",
-                        entity_id=entity_id,
+                        entity_id=light.id,
                         brightness=brightness,
                     )
-                    for entity_id in entity_ids
+                    for light in lights
                 ]
             )
 
@@ -1345,59 +1351,78 @@ class AreaLightingController:
         await self._activate_circadian(source)
 
     async def lighting_raise(self) -> None:
-        """Raise brightness of currently-on lights (D2)."""
+        """Raise brightness (D2).
+
+        Only lights that are currently on are stepped up. If no lights are
+        on, every light in the area is brought up to the minimum (step)
+        brightness instead (shared with lighting_lower).
+        """
         _LOGGER.debug(
             "Area %s: lighting_raise current_scene=%s dimmed=%s",
             self.area.id,
             self._state.scene_slug,
             self._state.dimmed,
         )
-        step = self._brightness_step_pct()
-
-        if self._state.is_off:
-            # From off: restore the remembered previous scene (or default),
-            # then scale those lights to the step percentage.
-            target_scene = self._state.previous_scene
-            if not target_scene or target_scene not in self.area.scene_slugs:
-                await self.lighting_on()
-                target_scene = self._state.scene_slug
-            else:
-                await self._activate_scene(target_scene, ActivationSource.USER)
-            await self._scale_on_lights_to_pct(step)
-            self._state.mark_dimmed()
-            self._notify_state_change()
-            return
-
-        if self._state.is_circadian:
-            await self._disable_circadian_switches()
-
-        await self._step_on_lights_pct(+step)
-
-        if not self._state.is_manual:
-            self._state.mark_dimmed()
-            self._notify_state_change()
+        await self._adjust_brightness(+1)
 
     async def lighting_lower(self) -> None:
-        """Lower brightness of currently-on lights (D2)."""
+        """Lower brightness (D2).
+
+        Only lights that are currently on are stepped down. If no lights are
+        on, every light in the area is brought up to the minimum (step)
+        brightness instead (shared with lighting_raise).
+        """
         _LOGGER.debug(
             "Area %s: lighting_lower current_scene=%s dimmed=%s",
             self.area.id,
             self._state.scene_slug,
             self._state.dimmed,
         )
-        if self._state.is_off:
-            return  # explicit no-op per README §"Remote `lower`" item 1
+        await self._adjust_brightness(-1)
 
+    async def _adjust_brightness(self, sign: int) -> None:
+        """Shared raise/lower brightness logic (D2).
+
+        - If any lights in the area are currently on, only those are stepped
+          by the per-area brightness step (sign = +1 raise, -1 lower); lights
+          that are off stay off.
+        - If no lights are on, every light in the area is turned on at the
+          minimum (step) brightness, restoring the remembered scene for
+          color/state context. Raise and lower behave identically here.
+        """
         step = self._brightness_step_pct()
+
+        if not self._on_light_entity_ids():
+            await self._bring_dark_area_to_min(step)
+            return
 
         if self._state.is_circadian:
             await self._disable_circadian_switches()
 
-        await self._step_on_lights_pct(-step)
+        await self._step_on_lights_pct(sign * step)
 
         if not self._state.is_manual:
             self._state.mark_dimmed()
             self._notify_state_change()
+
+    async def _bring_dark_area_to_min(self, step: int) -> None:
+        """Light a fully-dark area to its minimum dimming level (D2).
+
+        Restores scene context for color and next-`on`-press behavior, then
+        brings EVERY area light up to the step brightness and marks the area
+        dimmed. Used by both raise and lower when no lights are on.
+        """
+        target_scene = self._state.previous_scene
+        if target_scene and target_scene in self.area.scene_slugs:
+            await self._activate_scene(target_scene, ActivationSource.USER)
+        elif self._state.is_scene and self._state.scene_slug in self.area.scene_slugs:
+            # Nominally in a concrete scene but physically dark: restore it.
+            await self._activate_scene(self._state.scene_slug, ActivationSource.USER)
+        else:
+            await self.lighting_on()
+        await self._set_all_lights_to_pct(step)
+        self._state.mark_dimmed()
+        self._notify_state_change()
 
     # ── Event handlers ────────────────────────────────────────────────
 

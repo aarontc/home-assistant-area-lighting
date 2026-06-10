@@ -15,6 +15,17 @@ readable companion that highlights user-facing changes.
   temperature. Solves the "fluorescent + Hue strip" mixed-fixture problem.
   See [`CONFIGURATION.md`](CONFIGURATION.md) § "Circadian kelvin routes".
 
+### Changed
+
+- **`raise` / `lower` brightness behavior clarified** — dim up and dim down
+  (Lutron `raise` / `lower`) now only adjust lights that are currently on,
+  stepping each by `brightness_step_pct`; lights that are off stay off. When
+  **no** lights in the area are on, both buttons instead bring **every** area
+  light up to the minimum dimming level (the brightness step), restoring the
+  remembered scene for color and next-`on`-press context. This makes `lower`
+  from a dark area light the room (previously a no-op) and brings a dark area
+  up uniformly rather than only restoring the previous scene's member lights.
+
 ### Fixed
 
 - **Scene `rgbw_color` / `rgbww_color` silently dropped** — the scene-apply

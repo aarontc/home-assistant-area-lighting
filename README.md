@@ -109,7 +109,7 @@ stateDiagram-v2
     Off --> HolidayScene: on / holiday active and area supports it
     Off --> AmbientLike: off / ambience active
     Off --> Night: favorite / no holiday, night available
-    Off --> RestoredDimmed: raise / restore previous scene at reduced brightness
+    Off --> RestoredDimmed: raise or lower / restore scene, all lights to minimum
     Off --> Manual: external light changes
 
     AmbientLike --> Off: off
@@ -220,11 +220,17 @@ Status: `Implemented`
 
 `raise` always means "increase brightness without losing scene context".
 
+**Which lights are affected:** `raise` and `lower` only modify lights that are
+**currently on**, stepping each by the brightness step. The one exception is a
+fully-dark area (no lights on at all): there `raise` and `lower` behave
+identically, turning **every** light in the area on at the minimum dimming
+level (the brightness step) so the room comes up gently.
+
 Behavior:
 
-1. From `off`, turn lights on using the most recent scene at 12.5% of configured brightness
-2. From `ambient`, `circadian`, `daylight`, `evening`, `night`, or holiday scenes, increase brightness by 12.5%
-3. From `circadian`, disengage circadian control before stepping brightness
+1. If any lights are on, increase the brightness of just those lights by 12.5%; lights that are off stay off
+2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring every area light up to 12.5% (the minimum) and mark the area `dimmed`
+3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
 5. From `manual`, increase brightness but do not reinterpret the area as a known scene
 
@@ -232,8 +238,8 @@ Behavior:
 
 Current code notes:
 
-1. Step size defaults to `12` (rounded from `12.5%` because HA's `brightness_step_pct` service field is an int); configurable per area via `brightness_step_pct`
-2. The code targets pre-defined dimming light groups directly rather than expressing this in scene-relative terms
+1. Step size defaults to `12` (rounded from `12.5%` because HA's `brightness_step_pct` service field is an int); configurable per area via `brightness_step_pct`. The same step doubles as the minimum dimming level used when lighting a dark area
+2. "Currently on" is read from the live light states, not the tracked scene, so a scene whose bulbs were switched off externally is treated as dark
 
 #### `lower`
 
@@ -243,16 +249,16 @@ Status: `Implemented`
 
 Behavior:
 
-1. From `off`, no action is taken
-2. From `ambient`, `circadian`, `daylight`, `evening`, `night`, or holiday scenes, decrease brightness by 12.5%
-3. From `circadian`, disengage circadian control before stepping brightness
+1. If any lights are on, decrease the brightness of just those lights by 12.5%; lights that are off stay off
+2. If no lights are on, behave exactly like `raise` from a dark area: restore the scene and bring every area light up to the minimum (12.5%). (Previously `lower` from a dark area was a no-op.)
+3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
 5. From `manual`, decrease brightness but remain in `manual`
 
 Current code notes:
 
 1. Step size defaults to `12` (rounded from `12.5%`, see `raise`)
-2. From `off`, no explicit no-op — `_step_on_lights_pct` simply has no on-lights to act on
+2. `raise` and `lower` share a single `_adjust_brightness` implementation
 
 #### `favorite`
 
@@ -351,17 +357,12 @@ flowchart TD
     N -->|Yes| O[Activate night scene]
     N -->|No| P[No action]
 
-    B -->|Raise| Q[Increase brightness by 12.5%]
-    Q --> R{Known scene?}
-    R -->|Yes| S[Mark dimmed]
-    R -->|No, manual| T[Remain manual]
-
-    B -->|Lower| U{Current state off?}
-    U -->|Yes| P
-    U -->|No| V[Decrease brightness by 12.5%]
-    V --> W{Known scene?}
-    W -->|Yes| S
-    W -->|No, manual| T
+    B -->|Raise or Lower| Q{Any lights currently on?}
+    Q -->|Yes| R["Step only the on lights: raise +12.5%, lower -12.5%"]
+    R --> S{Known scene?}
+    S -->|Yes| T[Mark dimmed]
+    S -->|No, manual| U[Remain manual]
+    Q -->|No| V["Restore scene, bring ALL area lights to minimum, mark dimmed"]
 
     B -->|Off| X{Ambience active?}
     X -->|No| Y[Turn lights off]
