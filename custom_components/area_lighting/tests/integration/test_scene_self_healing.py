@@ -250,3 +250,35 @@ async def test_activating_scene_schedules_selfcheck(
     # Tidy up the pending loop.call_later so it doesn't fire after the test.
     ctrl._heal_selfcheck_handle.cancel()
     ctrl._heal_selfcheck_handle = None
+
+
+@pytest.mark.integration
+async def test_diagnostic_snapshot_exposes_heal_fields(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    snap = ctrl.diagnostic_snapshot()
+    assert snap["scene_self_heal_enabled"] is True
+    assert snap["scene_heal_attempts"] == {}
+
+
+@pytest.mark.integration
+async def test_all_off_clears_heal_state_and_issue(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    from homeassistant.helpers import issue_registry as ir
+
+    from custom_components.area_lighting.const import DOMAIN, SCENE_DRIFT_ISSUE_ID
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    ctrl._heal_attempts = {"light.network_room_overhead_1": [time.monotonic()]}
+    ctrl._raise_scene_drift_issue("light.network_room_overhead_1")
+
+    await ctrl.handle_lights_all_off()
+    await hass.async_block_till_done()
+
+    assert ctrl._heal_attempts == {}
+    reg = ir.async_get(hass)
+    assert reg.async_get_issue(DOMAIN, f"{SCENE_DRIFT_ISSUE_ID}_network_room") is None

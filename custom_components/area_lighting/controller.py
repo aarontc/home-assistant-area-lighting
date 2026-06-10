@@ -349,6 +349,8 @@ class AreaLightingController:
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
+            "scene_self_heal_enabled": self._scene_self_heal,
+            "scene_heal_attempts": {k: len(v) for k, v in self._heal_attempts.items()},
             "manual_fadeout_seconds": self._manual_fadeout_seconds,
             "motion_fadeout_seconds": self._motion_fadeout_seconds,
             "motion_off_duration_seconds": self._motion_off_duration_seconds,
@@ -1454,6 +1456,7 @@ class AreaLightingController:
         """
         _LOGGER.debug("Area %s: handle_lights_all_off", self.area.id)
         self._active_scene_targets = {}
+        self._clear_scene_drift_issue()
         self._state.transition_to_off(ActivationSource.USER)
         await self._disable_circadian_switches()
         self._motion_timer.cancel()
