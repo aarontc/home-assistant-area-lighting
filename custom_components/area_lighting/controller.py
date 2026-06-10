@@ -56,6 +56,7 @@ class AreaLightingController:
         self.hass = hass
         self.area = area
         self._global_config = global_config
+        self._scene_self_heal: bool = global_config.scene_self_heal
 
         # First-class state machine
         self._state = AreaState()
@@ -446,6 +447,10 @@ class AreaLightingController:
     @property
     def circadian_active(self) -> bool:
         return self._state.is_circadian
+
+    @property
+    def scene_self_heal_enabled(self) -> bool:
+        return self._scene_self_heal
 
     @property
     def motion_light_enabled(self) -> bool:

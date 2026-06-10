@@ -467,7 +467,11 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             restore=pat_raw.get("restore", True),
         )
 
-    return AreaLightingConfig(areas=areas, alert_patterns=alert_patterns)
+    return AreaLightingConfig(
+        areas=areas,
+        alert_patterns=alert_patterns,
+        scene_self_heal=raw.get("scene_self_heal", True),
+    )
 
 
 def validate_leader_follower_graph(config: AreaLightingConfig) -> None:

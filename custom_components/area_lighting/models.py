@@ -293,6 +293,7 @@ class AreaLightingConfig:
 
     areas: list[AreaConfig] = field(default_factory=list)
     alert_patterns: dict[str, AlertPattern] = field(default_factory=dict)
+    scene_self_heal: bool = True
 
     @property
     def enabled_areas(self) -> list[AreaConfig]:

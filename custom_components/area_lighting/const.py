@@ -77,6 +77,12 @@ MANUAL_DETECTION_GRACE_SECONDS = 4
 # Manual detection brightness change threshold
 MANUAL_DETECTION_BRIGHTNESS_THRESHOLD = 5
 
+# Scene self-healing (glitch-aware divergence handling)
+SCENE_HEAL_WINDOW_SECONDS = 60  # tier-2 glitch window after settle
+SCENE_HEAL_MAX_ATTEMPTS = 3  # heals per bulb per attempt window
+SCENE_HEAL_ATTEMPT_WINDOW_SECONDS = 300  # rolling window for the loop cap
+SCENE_DRIFT_ISSUE_ID = "scene_drift_unhealable"
+
 # Holiday mode entity
 HOLIDAY_MODE_ENTITY = "input_select.holiday_mode"
 HOLIDAY_MODE_NONE = "none"
