@@ -120,3 +120,96 @@ async def test_reassert_loop_cap_gives_up_and_raises_issue(
     assert ctrl._state.is_manual
     reg = ir.async_get(hass)
     assert reg.async_get_issue(DOMAIN, f"{SCENE_DRIFT_ISSUE_ID}_network_room") is not None
+
+
+async def _activate_with_target(hass, ctrl, eid, commanded_offset, transition):
+    """Put the area in the ambient scene with one on-target for `eid`,
+    seeded as 'on' so a later async_set fires a state-change event."""
+    hass.states.async_set(eid, "on", {"brightness": 10, "color_temp_kelvin": 2700})
+    await hass.async_block_till_done()
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 120.0  # area grace gone
+    ctrl._active_scene_targets = {
+        eid: {
+            "state": "on",
+            "brightness": 10,
+            "color_temp_kelvin": 2700,
+            "commanded_at": time.monotonic() - commanded_offset,
+            "transition": transition,
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_divergence_inside_glitch_window_heals(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A jump 110s after a 60s-fade command (settle+60=124s) -> heal, not manual."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    await _activate_with_target(hass, ctrl, eid, commanded_offset=110.0, transition=60.0)
+
+    service_calls.clear()
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+
+    assert not ctrl._state.is_manual
+    assert _light_turn_on_calls(service_calls, eid), "expected a heal re-assert"
+
+
+@pytest.mark.integration
+async def test_divergence_after_glitch_window_marks_manual(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A jump 200s after a 60s-fade command (> settle+60=124s) -> manual latch."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    await _activate_with_target(hass, ctrl, eid, commanded_offset=200.0, transition=60.0)
+
+    service_calls.clear()
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert not _light_turn_on_calls(service_calls, eid), "must not heal a real manual change"
+
+
+@pytest.mark.integration
+async def test_recovery_from_unavailable_heals_regardless_of_window(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """unavailable->on at a divergent value, long after command -> heal (tier 1)."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    await _activate_with_target(hass, ctrl, eid, commanded_offset=3600.0, transition=0.0)
+
+    hass.states.async_set(eid, "unavailable", {})
+    await hass.async_block_till_done()
+    service_calls.clear()
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+
+    assert not ctrl._state.is_manual
+    assert _light_turn_on_calls(service_calls, eid), "expected recovery heal"
+
+
+@pytest.mark.integration
+async def test_kill_switch_off_falls_back_to_manual(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """With scene_self_heal disabled, an in-window glitch latches manual."""
+    network_room_config["area_lighting"]["scene_self_heal"] = False
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    await _activate_with_target(hass, ctrl, eid, commanded_offset=110.0, transition=60.0)
+
+    service_calls.clear()
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert not _light_turn_on_calls(service_calls, eid)
