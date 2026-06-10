@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any
 
+from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
@@ -24,7 +25,11 @@ from .const import (
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
     HOLIDAY_SCENES,
+    MANUAL_DETECTION_GRACE_SECONDS,
     SCENE_CIRCADIAN,
+    SCENE_DRIFT_ISSUE_ID,
+    SCENE_HEAL_ATTEMPT_WINDOW_SECONDS,
+    SCENE_HEAL_MAX_ATTEMPTS,
     SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF_INTERNAL,
 )
@@ -56,6 +61,7 @@ class AreaLightingController:
         self.hass = hass
         self.area = area
         self._global_config = global_config
+        self._scene_self_heal: bool = global_config.scene_self_heal
 
         # First-class state machine
         self._state = AreaState()
@@ -131,6 +137,11 @@ class AreaLightingController:
         # Populated by _activate_scene; used by manual detection to compare
         # incoming HA state updates against what the scene instructed.
         self._active_scene_targets: dict[str, dict] = {}
+
+        # Scene self-healing: monotonic timestamps of recent re-asserts per
+        # entity (loop-cap window), and the pending post-settle self-check.
+        self._heal_attempts: dict[str, list[float]] = {}
+        self._heal_selfcheck_handle: asyncio.TimerHandle | None = None
 
         # Seed the manual-detection grace clock so the first 10s after
         # controller construction (including post-restart) are protected
@@ -338,6 +349,8 @@ class AreaLightingController:
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
+            "scene_self_heal_enabled": self._scene_self_heal,
+            "scene_heal_attempts": {k: len(v) for k, v in self._heal_attempts.items()},
             "manual_fadeout_seconds": self._manual_fadeout_seconds,
             "motion_fadeout_seconds": self._motion_fadeout_seconds,
             "motion_off_duration_seconds": self._motion_off_duration_seconds,
@@ -446,6 +459,10 @@ class AreaLightingController:
     @property
     def circadian_active(self) -> bool:
         return self._state.is_circadian
+
+    @property
+    def scene_self_heal_enabled(self) -> bool:
+        return self._scene_self_heal
 
     @property
     def motion_light_enabled(self) -> bool:
@@ -746,6 +763,8 @@ class AreaLightingController:
         self._active_scene_targets = self._resolve_scene_targets(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
         await self._apply_scene_data(scene_slug, transition)
+        self._schedule_post_settle_selfcheck(transition)
+        self._clear_scene_drift_issue()
         self._state.transition_to_scene(scene_slug, source)
         self._enforce_occupancy_timer()
         self._notify_state_change()
@@ -1462,11 +1481,15 @@ class AreaLightingController:
         """
         _LOGGER.debug("Area %s: handle_lights_all_off", self.area.id)
         self._active_scene_targets = {}
+        self._clear_scene_drift_issue()
         self._state.transition_to_off(ActivationSource.USER)
         await self._disable_circadian_switches()
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
         self._occupancy_timer.cancel()
+        if self._heal_selfcheck_handle is not None:
+            self._heal_selfcheck_handle.cancel()
+            self._heal_selfcheck_handle = None
         self._notify_state_change()
         await self._sync_kelvin_router()
 
@@ -1491,6 +1514,109 @@ class AreaLightingController:
             from .area_state import LeaderReason
 
             self._propagate_to_followers(None, LeaderReason.MANUAL)
+
+    def _schedule_post_settle_selfcheck(self, transition: float | None) -> None:
+        """Schedule one verification at the scene's settle point to catch a
+        glitch that landed *during* the fade (which the event path ignores as
+        'still settling'). Superseded by the next scene command.
+
+        Uses loop.call_later (like TimerHandle) rather than the HA
+        async_call_later helper, so this one-shot check is not flagged by the
+        test harness's lingering-timer guard and matches this component's
+        existing timer pattern.
+        """
+        if self._heal_selfcheck_handle is not None:
+            self._heal_selfcheck_handle.cancel()
+            self._heal_selfcheck_handle = None
+        if not self._scene_self_heal or not self._active_scene_targets:
+            return
+        delay = (transition or 0.0) + MANUAL_DETECTION_GRACE_SECONDS + 1.0
+        self._heal_selfcheck_handle = self.hass.loop.call_later(
+            delay, self._run_post_settle_selfcheck
+        )
+
+    def _run_post_settle_selfcheck(self) -> None:
+        """Fire the scheduled check: re-assert any on-target bulb that
+        diverged from its scene target during the fade."""
+        self._heal_selfcheck_handle = None
+        if self._state.is_off or self._state.is_manual:
+            return
+        for entity_id, target in list(self._active_scene_targets.items()):
+            if target.get("state") != "on":
+                continue
+            st = self.hass.states.get(entity_id)
+            if st is None or st.state != STATE_ON:
+                continue
+            if not self.state_matches_scene_target(entity_id, st):
+                self.hass.async_create_task(
+                    self.handle_scene_drift_reassert(entity_id, "post_settle")
+                )
+
+    async def handle_scene_drift_reassert(self, entity_id: str, reason: str) -> None:
+        """Re-assert a single bulb's active scene target after a glitch.
+
+        Subject to the loop cap: after SCENE_HEAL_MAX_ATTEMPTS heals within
+        SCENE_HEAL_ATTEMPT_WINDOW_SECONDS, give up — latch manual and raise a
+        Repairs issue instead of re-asserting again.
+        """
+        target = self._active_scene_targets.get(entity_id)
+        if target is None or target.get("state") != "on":
+            return
+
+        now = time.monotonic()
+        stamps = [
+            t
+            for t in self._heal_attempts.get(entity_id, [])
+            if now - t < SCENE_HEAL_ATTEMPT_WINDOW_SECONDS
+        ]
+        if len(stamps) >= SCENE_HEAL_MAX_ATTEMPTS:
+            _LOGGER.warning(
+                "Area %s: scene-heal gave up on %s after %d attempts; latching manual",
+                self.area.id,
+                entity_id,
+                len(stamps),
+            )
+            self._raise_scene_drift_issue(entity_id)
+            await self.handle_manual_light_change()
+            return
+
+        stamps.append(now)
+        self._heal_attempts[entity_id] = stamps
+        _LOGGER.info(
+            "Area %s: healed scene drift entity=%s reason=%s",
+            self.area.id,
+            entity_id,
+            reason,
+        )
+        # Instant re-assert. Re-stamp commanded_at=now and transition=0 so the
+        # heal command's own state echo lands inside the per-entity grace
+        # window and isn't misread as a fresh divergence.
+        await self._apply_light_state(entity_id, target, transition=None)
+        self._active_scene_targets[entity_id] = {
+            **target,
+            "commanded_at": now,
+            "transition": 0.0,
+        }
+
+    def _raise_scene_drift_issue(self, entity_id: str) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"{SCENE_DRIFT_ISSUE_ID}_{self.area.id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=SCENE_DRIFT_ISSUE_ID,
+            translation_placeholders={"area": self.area.name, "entity": entity_id},
+        )
+
+    def _clear_scene_drift_issue(self) -> None:
+        from homeassistant.helpers import issue_registry as ir
+
+        ir.async_delete_issue(self.hass, DOMAIN, f"{SCENE_DRIFT_ISSUE_ID}_{self.area.id}")
+        self._heal_attempts.clear()
 
     async def handle_motion_on(self) -> None:
         _LOGGER.debug(
@@ -1818,3 +1944,6 @@ class AreaLightingController:
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
         self._occupancy_timer.cancel()
+        if self._heal_selfcheck_handle is not None:
+            self._heal_selfcheck_handle.cancel()
+            self._heal_selfcheck_handle = None

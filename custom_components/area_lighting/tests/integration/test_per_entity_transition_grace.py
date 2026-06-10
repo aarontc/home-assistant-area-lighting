@@ -127,13 +127,13 @@ async def test_divergence_after_long_fade_marks_manual(
     await hass.async_block_till_done()
 
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-    ctrl._state.last_scene_change_monotonic = time.monotonic() - 80.0
-    # Commanded 80 s ago with a 60 s transition; the buffer is well past.
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 200.0
+    # Commanded 200 s ago with a 60 s transition; the buffer is well past.
     ctrl._active_scene_targets = {
         "light.network_room_overhead_1": {
             "state": "on",
             "brightness": 100,
-            "commanded_at": time.monotonic() - 80.0,
+            "commanded_at": time.monotonic() - 200.0,
             "transition": 60.0,
         }
     }

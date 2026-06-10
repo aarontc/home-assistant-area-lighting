@@ -581,6 +581,38 @@ Current code notes:
 3. A real scene-change grace period is not implemented yet
 4. Circadian-originated light updates are not yet filtered with the full nuance described here
 
+#### Scene self-healing
+
+Status: `Implemented`
+
+Not every out-of-band divergence is a genuine manual change. Power-on defaults
+from a Philips Hue bridge, RF dropout recoveries, or a bulb returning from
+`unavailable` can land the bulb at a value it was never commanded to. The
+component classifies each divergence into one of three buckets:
+
+1. **Still settling** (mid-fade) — ignored, as before.
+2. **Glitch** — either the bulb's previous state was `unavailable`/`unknown`
+   (recovery), or the divergence occurred within the heal window
+   (`transition + 4 s grace + 60 s`) of the scene command — the component
+   instantly re-asserts only that bulb's scene target. The area state is not
+   changed; it stays in its active scene.
+3. **Manual change** — divergence outside the heal window on a reachable
+   bulb — latches `manual`, as before.
+
+A one-shot post-settle self-check is scheduled at scene activation to catch
+a glitch that lands *during* a fade (which the event path ignores as still
+settling).
+
+If a bulb is healed more than 3 times within 5 minutes, the component gives
+up on it: it stops healing, latches `manual`, and raises a Home Assistant
+Repairs issue (`scene_drift_unhealable`) naming the area and bulb. The issue
+is cleared automatically the next time the area activates a scene or all of
+its lights are turned off.
+
+The feature is on by default. Set `scene_self_heal: false` at the top level
+of `area_lighting.yaml` to disable it globally (divergence always latches
+`manual`, no self-check, no Repairs issue).
+
 #### All lights externally turned off
 
 Status: `Implemented`

@@ -54,6 +54,7 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional("alert_patterns", default={}): {
                     cv.string: ALERT_PATTERN_SCHEMA,
                 },
+                vol.Optional("scene_self_heal", default=True): cv.boolean,
                 # Ignored fields from templater.yaml kept for config compat
                 vol.Optional("base_url"): str,
             },

@@ -1,3 +1,13 @@
 {
-  "title": "Area Lighting"
+  "title": "Area Lighting",
+  "issues": {
+    "missing_external_entities": {
+      "title": "{count} required entities are missing",
+      "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting, circadian sensor readings).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
+    },
+    "scene_drift_unhealable": {
+      "title": "{area}: a light keeps drifting from its scene",
+      "description": "Home Assistant repeatedly tried to restore `{entity}` in {area} to its active scene, but it keeps changing back on its own. This usually means a Philips Hue power-on default, a Zigbee/RF dropout, or a Hue-app automation is driving the bulb independently of Home Assistant. Check the bulb's power-on behavior (set it to 'last state') and disable any competing Hue motion/automation for this room. The area has been left in `manual` until the next motion or remote event."
+    }
+  }
 }

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -21,6 +21,7 @@ from .const import (
     GLOBAL_MOTION_LIGHT_ENABLED_ENTITY,
     HOLIDAY_MODE_ENTITY,
     MANUAL_DETECTION_GRACE_SECONDS,
+    SCENE_HEAL_WINDOW_SECONDS,
 )
 from .controller import AreaLightingController
 from .models import AreaLightingConfig
@@ -563,6 +564,27 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
         if ctrl.state_matches_scene_target(entity_id, new_state):
             _skip("matches scene target", entity_id)
             return
+
+        # Past grace + transition windows AND diverges from the target.
+        # Self-healing: classify as a glitch (auto-heal) vs a genuine manual
+        # change. A glitch is either a recovery from unavailable/unknown, or a
+        # sudden jump within SCENE_HEAL_WINDOW_SECONDS after this bulb's own
+        # commanded settle point. Everything else is a real manual override.
+        if ctrl.scene_self_heal_enabled:
+            target = ctrl._active_scene_targets.get(entity_id)
+            if target is not None:
+                is_recovery = old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                in_glitch_window = False
+                commanded_at = target.get("commanded_at")
+                if commanded_at is not None:
+                    transition = target.get("transition") or 0.0
+                    age = _time.monotonic() - commanded_at
+                    settle = transition + MANUAL_DETECTION_GRACE_SECONDS
+                    in_glitch_window = age <= settle + SCENE_HEAL_WINDOW_SECONDS
+                if is_recovery or in_glitch_window:
+                    reason = "recovery" if is_recovery else "glitch_window"
+                    hass.async_create_task(ctrl.handle_scene_drift_reassert(entity_id, reason))
+                    return
 
         _LOGGER.info(
             "Area %s: manual detection fired entity=%s",

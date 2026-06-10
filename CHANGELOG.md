@@ -9,6 +9,14 @@ readable companion that highlights user-facing changes.
 
 ### Added
 
+- **Scene self-healing** — out-of-band Hue glitches (power-on defaults, RF
+  dropouts, recovery from `unavailable`) are now auto-corrected back to the
+  active scene instead of latching the area to `manual`. A bulb that keeps
+  diverging (more than 3 heals within 5 minutes) is left in `manual` and
+  raises a Home Assistant Repairs issue (`scene_drift_unhealable`), cleared
+  the next time the area changes scene or turns off. Disable globally with
+  `scene_self_heal: false`.
+
 - **Circadian kelvin routes** — new per-area `circadian_kelvin_routes:` config
   that, while the `circadian` scene is active, dispatches a configured set of
   lights between mutually-exclusive routes based on the live target color
