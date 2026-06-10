@@ -282,3 +282,59 @@ async def test_all_off_clears_heal_state_and_issue(
     assert ctrl._heal_attempts == {}
     reg = ir.async_get(hass)
     assert reg.async_get_issue(DOMAIN, f"{SCENE_DRIFT_ISSUE_ID}_network_room") is None
+
+
+@pytest.mark.integration
+async def test_incident_replay_right_w_glitch_and_left_w_recovery(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Reproduce the upstairs_bathroom incident with the two fixture lights.
+
+    ambient fade applied; ~110s later one bulb jumps to 228/3086 (Hue glitch),
+    the other goes unavailable then recovers. With self-healing on, the area
+    stays in 'ambient' and never latches 'manual'.
+    """
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    right = "light.network_room_overhead_1"
+    left = "light.network_room_overhead_2"
+
+    for eid in (right, left):
+        hass.states.async_set(eid, "on", {"brightness": 10, "color_temp_kelvin": 2700})
+    await hass.async_block_till_done()
+
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 120.0
+    commanded = time.monotonic() - 110.0
+    ctrl._active_scene_targets = {
+        right: {
+            "state": "on",
+            "brightness": 10,
+            "color_temp_kelvin": 2700,
+            "commanded_at": commanded,
+            "transition": 60.0,
+        },
+        left: {
+            "state": "on",
+            "brightness": 10,
+            "color_temp_kelvin": 2700,
+            "commanded_at": commanded,
+            "transition": 60.0,
+        },
+    }
+
+    # right_w glitches to a foreign value inside the heal window -> healed.
+    hass.states.async_set(right, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+    assert not ctrl._state.is_manual
+    assert _light_turn_on_calls(service_calls, right)
+
+    # left_w drops out, then recovers to a divergent value -> healed.
+    hass.states.async_set(left, "unavailable", {})
+    await hass.async_block_till_done()
+    hass.states.async_set(left, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+    assert not ctrl._state.is_manual
+    assert _light_turn_on_calls(service_calls, left)
+
+    assert ctrl.current_scene == "ambient"
