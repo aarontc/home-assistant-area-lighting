@@ -1,6 +1,15 @@
 name: Publish GitHub releases
 
 on:
+  # The GitLab push mirror pushes each new vX.Y.Z tag to GitHub; an external
+  # (SSH deploy-key) push triggers Actions, so the release publishes within the
+  # mirror's sync window (~1-5 min) instead of waiting for the throttled
+  # schedule below (GitHub heavily delays scheduled runs on low-activity repos).
+  push:
+    tags:
+      - 'v*'
+  # Safety net: if a tag push ever fails to trigger, the next scheduled scan
+  # still publishes any missing release (the publish step is idempotent).
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:

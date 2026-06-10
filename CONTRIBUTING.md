@@ -124,3 +124,29 @@ dagger call create-tag \
     --project-id=aaron/home-assistant-area-lighting \
     --token=env:GITLAB_TOKEN
 ```
+
+### Publishing GitHub releases
+
+GitHub is a push mirror of this GitLab project. The
+`.github/workflows/release.yaml` workflow ("Publish GitHub releases")
+turns each `vX.Y.Z` tag into a GitHub Release, building the notes from the
+`(Major)/(Minor)/(Patch)` commit subjects in that tag's range. It runs on
+three triggers:
+
+- **`push` of a `v*` tag** (normal path) - the mirror pushes new tags to
+  GitHub, and that push fires the workflow, so the release lands within the
+  mirror's sync window (~1-5 min).
+- **`schedule`** (every 5 min, but heavily throttled by GitHub on
+  low-activity repos) - a safety net that publishes any tag still missing a
+  release.
+- **`workflow_dispatch`** - manual run; pass a `tag` (and `replace: true`)
+  to (re)publish a specific release.
+
+The publish step is idempotent (existing releases are skipped) and the job
+is serialized via a `concurrency` group, so the overlapping triggers never
+double-publish.
+
+The mirror must authenticate over **SSH** (deploy key). An HTTPS personal
+access token would need the `workflow` scope just to push changes under
+`.github/workflows/`, and tag pushes made with such a token may not
+reliably trigger Actions; SSH avoids both problems.
