@@ -10,8 +10,11 @@ on:
       - 'v*'
   # Safety net: if a tag push ever fails to trigger, the next scheduled scan
   # still publishes any missing release (the publish step is idempotent).
+  # The push trigger above is the normal path, so the schedule only needs to
+  # run occasionally; twice a day is enough (GitHub throttles scheduled runs
+  # on low-activity repos to roughly once per 75 min regardless).
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 0,12 * * *'
   workflow_dispatch:
     inputs:
       tag:

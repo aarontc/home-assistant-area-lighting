@@ -136,9 +136,9 @@ three triggers:
 - **`push` of a `v*` tag** (normal path) - the mirror pushes new tags to
   GitHub, and that push fires the workflow, so the release lands within the
   mirror's sync window (~1-5 min).
-- **`schedule`** (every 5 min, but heavily throttled by GitHub on
-  low-activity repos) - a safety net that publishes any tag still missing a
-  release.
+- **`schedule`** (twice a day; GitHub throttles scheduled runs on
+  low-activity repos to ~once per 75 min anyway) - a safety net that
+  publishes any tag still missing a release.
 - **`workflow_dispatch`** - manual run; pass a `tag` (and `replace: true`)
   to (re)publish a specific release.
 
