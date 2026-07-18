@@ -21,6 +21,10 @@ _LOGGER = logging.getLogger(__name__)
 STORAGE_KEY = "area_lighting.state"
 STORAGE_VERSION = 1
 
+# Reserved key for non-area (global) state. Double underscore cannot
+# collide with a Home Assistant area slug.
+GLOBAL_STATE_KEY = "__global__"
+
 
 class StateStorage:
     """Manages persistent area controller state."""
@@ -58,4 +62,14 @@ class StateStorage:
             len(state),
         )
         self._data[area_id] = state
+        await self.async_save()
+
+    def get_global_state(self) -> dict[str, Any]:
+        """Get stored global (all-area) toggle state (empty dict if none)."""
+        return self._data.get(GLOBAL_STATE_KEY, {})
+
+    async def async_save_global_state(self, state: dict[str, Any]) -> None:
+        """Save global (all-area) toggle state under the reserved key."""
+        _LOGGER.debug("Persisted global state (%d keys)", len(state))
+        self._data[GLOBAL_STATE_KEY] = state
         await self.async_save()
