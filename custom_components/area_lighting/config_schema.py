@@ -28,6 +28,7 @@ from .models import (
     MotionLightCondition,
     SceneConfig,
 )
+from .state_storage import GLOBAL_STATE_KEY
 
 CIRCADIAN_SWITCH_SCHEMA = vol.Schema(
     {
@@ -213,9 +214,26 @@ ALERT_PATTERN_SCHEMA = vol.Schema(
     }
 )
 
+
+def _validate_area_id(value: str) -> str:
+    """Reject area ids in the reserved double-underscore namespace.
+
+    Persisted state keys share a flat namespace with area ids; keys
+    beginning with a double underscore (such as GLOBAL_STATE_KEY,
+    "__global__") are reserved for internal storage, so an area id
+    there would cross-write area and internal state.
+    """
+    if value.startswith("__"):
+        raise vol.Invalid(
+            f"area id '{value}' is reserved: ids beginning with '__' collide "
+            f"with internal storage keys such as '{GLOBAL_STATE_KEY}'"
+        )
+    return value
+
+
 AREA_SCHEMA = vol.Schema(
     {
-        vol.Required("id"): cv.string,
+        vol.Required("id"): vol.All(cv.string, _validate_area_id),
         vol.Required("name"): cv.string,
         vol.Optional("enabled", default=True): cv.boolean,
         vol.Optional("event_handlers", default=True): cv.boolean,

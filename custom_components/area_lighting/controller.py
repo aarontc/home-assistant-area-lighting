@@ -1815,9 +1815,13 @@ class AreaLightingController:
     def cancel_occupancy_timer(self) -> None:
         """Cancel any running occupancy timer without firing lights-off.
 
-        Used by the global occupancy master switch on disable.
+        Used by the global occupancy master switch on disable. Notifies
+        listeners and schedules a persistence save (mirroring the
+        per-area setter) so the cleared deadline does not survive a
+        restart and re-arm a phantom timer via restore_timers().
         """
         self._occupancy_timer.cancel()
+        self._notify_state_change()
 
     def enforce_occupancy_timer(self) -> None:
         """Public wrapper: re-evaluate whether the occupancy timer should arm.

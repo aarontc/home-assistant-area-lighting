@@ -74,7 +74,7 @@ entry in that list.
 
 | Key                         | Type                  | Required | Default | Notes |
 |-----------------------------|-----------------------|----------|---------|-------|
-| `id`                        | string                | **yes**  | —       | Unique area slug. Used to form entity IDs (`scene.{id}_{slug}`, `switch.{id}_motion_light_enabled`, etc.) — keep it snake_case. |
+| `id`                        | string                | **yes**  | —       | Unique area slug. Used to form entity IDs (`scene.{id}_{slug}`, `switch.{id}_motion_light_enabled`, etc.) — keep it snake_case. Ids beginning with `__` are reserved for internal storage keys and are rejected. |
 | `name`                      | string                | **yes**  | —       | Human-readable label shown in the UI. |
 | `enabled`                   | boolean               | no       | `true`  | `false` parses the area but creates no controller, entities, or handlers. |
 | `event_handlers`            | boolean               | no       | `true`  | Wires motion/occupancy/remote/external-change listeners. Set to `false` only for areas you want to load quietly (test fixtures, transition states during migration) — disabling it turns the area into a no-op for most of what `area_lighting` does. |
@@ -333,8 +333,8 @@ Bare slugs are validated at parse time against the owning area's `scenes` list; 
 motion_light_motion_sensor_ids:
   - binary_sensor.bedroom_motion
 motion_light_conditions:
-  - entity_id: input_boolean.motion_light_enabled
-    state: "on"
+  - entity_id: input_boolean.guest_mode
+    state: "off"
   - entity_ids:
       - sensor.patio_illuminance
       - sensor.garden_illuminance
@@ -544,8 +544,8 @@ area_lighting:
       motion_light_motion_sensor_ids:
         - binary_sensor.bedroom_motion
       motion_light_conditions:
-        - entity_id: input_boolean.motion_light_enabled
-          state: "on"
+        - entity_id: sensor.bedroom_illuminance
+          below: 50
       motion_light_timer_durations:
         off: "00:08:00"
         night_off: "00:04:00"

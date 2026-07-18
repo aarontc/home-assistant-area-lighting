@@ -17,7 +17,9 @@ readable companion that highlights user-facing changes.
   when its global switch and that area's switch are both on. Turning the
   global occupancy switch off cancels every running occupancy timer without
   touching the lights; turning it back on re-arms the timer in occupied
-  areas.
+  areas. Area ids beginning with `__` are now rejected at config validation:
+  that namespace is reserved for internal storage keys (the global switch
+  state persists under `__global__`).
 
 - **Scene self-healing** — out-of-band Hue glitches (power-on defaults, RF
   dropouts, recovery from `unavailable`) are now auto-corrected back to the

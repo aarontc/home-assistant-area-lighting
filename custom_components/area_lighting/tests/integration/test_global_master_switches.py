@@ -100,6 +100,31 @@ async def test_global_occupancy_off_cancels_running_timer(
 
 
 @pytest.mark.integration
+async def test_global_occupancy_off_persists_cancelled_timer(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    """Global-off must persist the cleared deadline.
+
+    Without the persistence save, the stale occupancy deadline stays in
+    storage and restore_timers() re-arms a phantom timer after a restart.
+    """
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._occupancy_timer.is_active
+
+    await _toggles(hass).async_set_occupancy_timeout_enabled(False)
+    await hass.async_block_till_done()
+
+    persisted = hass.data["area_lighting"]["state_storage"].get_area_state("media_room")
+    assert persisted["timer_deadlines"]["occupancy_off"] is None
+
+
+@pytest.mark.integration
 async def test_global_occupancy_off_expiry_is_noop(hass: HomeAssistant, helper_entities) -> None:
     """A restored/past-due timer firing while globally disabled is a no-op."""
     hass.states.async_set("light.media_room_overhead", "off")
