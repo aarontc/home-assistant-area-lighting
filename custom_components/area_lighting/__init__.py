@@ -42,7 +42,7 @@ from .scene_storage import SceneStorage
 from .select import AreaLastSceneSelect
 from .services import async_register_services
 from .state_storage import StateStorage
-from .switch import SWITCH_DEFS, AreaLightingSwitch
+from .switch import GLOBAL_SWITCH_DEFS, SWITCH_DEFS, AreaLightingGlobalSwitch, AreaLightingSwitch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -331,6 +331,11 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
         numbers.append(AreaOccupancyTimeoutNumber(ctrl))
         numbers.append(AreaOccupancyNightTimeoutNumber(ctrl))
         binary_sensors.append(AreaOccupiedBinarySensor(ctrl))
+
+    toggles = hass.data.get(DOMAIN, {}).get("global")
+    if toggles is not None:
+        for flag, name, icon, uid, eid in GLOBAL_SWITCH_DEFS:
+            switches.append(AreaLightingGlobalSwitch(toggles, flag, name, icon, uid, eid))
 
     if switch_component is not None and switches:
         await switch_component.async_add_entities(switches)

@@ -26,6 +26,24 @@ SWITCH_DEFS = [
     ("occupancy_timeout_enabled", "Occupancy Timeout Enabled", "mdi:timer-cog-outline", True),
 ]
 
+# (flag, name, icon, unique_id, entity_id)
+GLOBAL_SWITCH_DEFS = [
+    (
+        "motion_lights_enabled",
+        "Area Lighting Motion Lights (Global)",
+        "mdi:motion-sensor",
+        "area_lighting_global_motion_lights_enabled",
+        "switch.area_lighting_motion_lights_enabled",
+    ),
+    (
+        "occupancy_timeout_enabled",
+        "Area Lighting Occupancy Timeout (Global)",
+        "mdi:timer-cog-outline",
+        "area_lighting_global_occupancy_timeout_enabled",
+        "switch.area_lighting_occupancy_timeout_enabled",
+    ),
+]
+
 
 async def async_setup_platform(
     hass: HomeAssistant,
@@ -101,4 +119,44 @@ class AreaLightingSwitch(SwitchEntity):
 
     @callback
     def _on_controller_change(self) -> None:
+        self.async_write_ha_state()
+
+
+class AreaLightingGlobalSwitch(SwitchEntity):
+    """A global master switch backed by a GlobalToggles flag."""
+
+    _attr_should_poll = False
+
+    def __init__(self, toggles, flag, name, icon, unique_id, entity_id) -> None:
+        self._toggles = toggles
+        self._flag = flag
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = unique_id
+        self.entity_id = entity_id
+
+    @property
+    def is_on(self) -> bool:
+        return bool(getattr(self._toggles, self._flag))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
+
+    async def _set(self, value: bool) -> None:
+        if self._flag == "motion_lights_enabled":
+            await self._toggles.async_set_motion_lights_enabled(value)
+        else:
+            await self._toggles.async_set_occupancy_timeout_enabled(value)
+
+    async def async_added_to_hass(self) -> None:
+        self._toggles.add_state_listener(self._on_change)
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._toggles.remove_state_listener(self._on_change)
+
+    @callback
+    def _on_change(self) -> None:
         self.async_write_ha_state()
