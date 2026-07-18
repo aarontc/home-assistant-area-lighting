@@ -851,12 +851,34 @@ An area configuration generally needs to define:
 This README intentionally describes behavior first. The exact YAML or storage format can evolve as long
 as these behavioral guarantees remain true.
 
+## Global master switches
+
+The integration creates two global master switches of its own — no helpers
+required. Both default to on and survive restarts:
+
+| Entity | Purpose |
+|---|---|
+| `switch.area_lighting_motion_lights_enabled` | Master switch for motion turning lights on |
+| `switch.area_lighting_occupancy_timeout_enabled` | Master switch for the occupancy timer turning lights off |
+
+Each global switch is ANDed with the matching per-area switch
+(`switch.<area>_motion_light_enabled` /
+`switch.<area>_occupancy_timeout_enabled`): a feature runs in an area only
+when both the global switch and that area's switch are on.
+
+Migration note: these replace the external
+`input_boolean.motion_light_enabled` helper, which is no longer consulted
+and can be deleted. Automations or dashboards that toggled the old helper
+must target `switch.area_lighting_motion_lights_enabled` instead. On
+upgrade, motion lighting is re-enabled by default because the owned switch
+defaults to on.
+
 ## Required external entities
 
 `area_lighting` does not create any of these — they must exist in your Home
 Assistant instance before the integration loads. On startup, the integration
 logs a single error listing any that are missing; it then continues to load
-in degraded mode (motion lighting may behave oddly if globals are missing,
+in degraded mode (circadian cycling may behave oddly if globals are missing,
 holiday detection is disabled, etc.).
 
 ### Global
@@ -866,7 +888,6 @@ holiday detection is disabled, etc.).
 | `input_select.holiday_mode` | input_select | Active holiday | `none`, `christmas`, `halloween` |
 | `input_select.ambient_scene` | input_select | Ambient flavor toggle | `ambient`, `holiday` |
 | `input_boolean.lighting_circadian_daylight_lights_enabled` | input_boolean | Sun-position proxy used by `circadian` cycling | on / off |
-| `input_boolean.motion_light_enabled` | input_boolean | Global motion-lighting kill switch | on / off |
 | `sensor.circadian_values` | sensor | From `circadian_lighting` integration | must expose `colortemp` attribute |
 
 ### Per ambient zone
@@ -908,9 +929,6 @@ input_select:
 input_boolean:
   lighting_circadian_daylight_lights_enabled:
     name: Circadian Daylight Lights Enabled
-  motion_light_enabled:
-    name: Motion Lighting (Global)
-    initial: true
   lighting_upstairs_ambient:
     name: Upstairs Ambient Zone
   lighting_downstairs_ambient:

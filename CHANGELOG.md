@@ -9,6 +9,16 @@ readable companion that highlights user-facing changes.
 
 ### Added
 
+- **Global master switches** — the integration now creates two switches of
+  its own: `switch.area_lighting_motion_lights_enabled` (motion turns lights
+  on) and `switch.area_lighting_occupancy_timeout_enabled` (the occupancy
+  timer turns lights off). Both default to on, survive restarts, and each is
+  ANDed with the matching per-area switch, so a feature runs in an area only
+  when its global switch and that area's switch are both on. Turning the
+  global occupancy switch off cancels every running occupancy timer without
+  touching the lights; turning it back on re-arms the timer in occupied
+  areas.
+
 - **Scene self-healing** — out-of-band Hue glitches (power-on defaults, RF
   dropouts, recovery from `unavailable`) are now auto-corrected back to the
   active scene instead of latching the area to `manual`. A bulb that keeps
@@ -24,6 +34,14 @@ readable companion that highlights user-facing changes.
   See [`CONFIGURATION.md`](CONFIGURATION.md) § "Circadian kelvin routes".
 
 ### Changed
+
+- **BREAKING: external `input_boolean.motion_light_enabled` helper removed** —
+  the global motion kill switch is now the integration-owned
+  `switch.area_lighting_motion_lights_enabled`. Automations or dashboards
+  that toggled the old helper must target the new switch. On upgrade, motion
+  lighting is re-enabled by default (the owned switch defaults to on), so if
+  you had left the old helper off to suppress motion lighting, turn the new
+  switch off. The old helper is no longer consulted and can be deleted.
 
 - **`raise` / `lower` brightness behavior clarified** — dim up and dim down
   (Lutron `raise` / `lower`) now only adjust lights that are currently on,
