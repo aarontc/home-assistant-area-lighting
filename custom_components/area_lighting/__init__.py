@@ -23,6 +23,7 @@ from .const import DOMAIN
 from .controller import AreaLightingController
 from .diagnostics import AreaLightingDiagnosticSensor
 from .event_handlers import async_setup_event_handlers
+from .global_state import GlobalToggles
 from .number import (
     AreaManualFadeoutNumber,
     AreaMotionFadeoutNumber,
@@ -102,12 +103,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     state_storage = StateStorage(hass)
     await state_storage.async_load()
 
+    # Global (all-area) master toggles, restored from persisted state
+    global_toggles = GlobalToggles(hass, state_storage)
+    global_toggles.load_persisted_state(state_storage.get_global_state())
+
     hass.data[DOMAIN] = {
         "config": area_config,
         "controllers": {},
         "unsubs": [],
         "scene_storage": scene_storage,
         "state_storage": state_storage,
+        "global": global_toggles,
     }
 
     # Create controllers for each enabled area, restoring persisted state
