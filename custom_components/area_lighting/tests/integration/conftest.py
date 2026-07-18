@@ -1,8 +1,8 @@
 """Integration-layer fixtures for area_lighting tests.
 
 These fixtures pre-populate the external entities that area_lighting reads
-(holiday_mode, ambient_scene, ambient zone booleans, circadian sensor/switch,
-motion-light kill switch) so individual tests don't have to recreate them.
+(holiday_mode, ambient_scene, ambient zone booleans, circadian sensor/switch)
+so individual tests don't have to recreate them.
 """
 
 from __future__ import annotations
@@ -56,10 +56,6 @@ async def helper_entities(hass: HomeAssistant) -> None:
             "input_boolean": {
                 "lighting_circadian_daylight_lights_enabled": {
                     "name": "Circadian daylight enabled",
-                    "initial": True,
-                },
-                "motion_light_enabled": {
-                    "name": "Motion light enabled (global)",
                     "initial": True,
                 },
                 "lighting_upstairs_ambient": {

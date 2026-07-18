@@ -18,7 +18,6 @@ from homeassistant.helpers.event import (
 from .area_state import ActivationSource
 from .const import (
     DOMAIN,
-    GLOBAL_MOTION_LIGHT_ENABLED_ENTITY,
     HOLIDAY_MODE_ENTITY,
     MANUAL_DETECTION_GRACE_SECONDS,
     SCENE_HEAL_WINDOW_SECONDS,
@@ -124,10 +123,6 @@ def _build_bootstrap_yaml(
             "  lighting_circadian_daylight_lights_enabled:\n"
             "    name: Circadian Daylight Lights Enabled"
         )
-    if "input_boolean.motion_light_enabled" in missing:
-        input_boolean_lines.append(
-            "  motion_light_enabled:\n    name: Motion Lighting (Global)\n    initial: true"
-        )
     for zone in sorted(zones):
         entity = f"input_boolean.lighting_{zone}_ambient"
         if entity in missing:
@@ -187,10 +182,6 @@ async def async_validate_external_entities(
         (
             "input_boolean.lighting_circadian_daylight_lights_enabled",
             "circadian sun-position proxy (input_boolean)",
-        ),
-        (
-            "input_boolean.motion_light_enabled",
-            "global motion lighting kill-switch (input_boolean)",
         ),
         (
             "sensor.circadian_values",
@@ -604,9 +595,8 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
 
     def _check_conditions() -> bool:
         """Check global + area motion conditions."""
-        # Global motion enabled
-        global_state = hass.states.get(GLOBAL_MOTION_LIGHT_ENABLED_ENTITY)
-        if not global_state or global_state.state != STATE_ON:
+        toggles = hass.data.get(DOMAIN, {}).get("global")
+        if toggles is not None and not toggles.motion_lights_enabled:
             return False
 
         # Area motion enabled

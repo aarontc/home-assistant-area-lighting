@@ -55,7 +55,6 @@ async def test_validator_missing_holiday_mode_logs_error(
         {
             "input_boolean": {
                 "lighting_circadian_daylight_lights_enabled": {"initial": True},
-                "motion_light_enabled": {"initial": True},
                 "lighting_upstairs_ambient": {"initial": False},
             }
         },
@@ -109,7 +108,6 @@ async def test_validator_multiple_missing_single_error_line(
     assert "holiday_mode" in msg
     assert "ambient_scene" in msg
     assert "lighting_circadian_daylight_lights_enabled" in msg
-    assert "motion_light_enabled" in msg
     assert "sensor.circadian_values" in msg
 
 
@@ -177,7 +175,6 @@ async def test_validator_issue_includes_yaml_bootstrap(
     assert "ambient_scene:" in bootstrap
     assert "input_boolean:" in bootstrap
     assert "lighting_circadian_daylight_lights_enabled:" in bootstrap
-    assert "motion_light_enabled:" in bootstrap
     assert "lighting_upstairs_ambient:" in bootstrap  # the ambient zone from network_room
     # And a list of the missing entities, so the user knows what's wrong
     missing_list = placeholders.get("missing_list", "")

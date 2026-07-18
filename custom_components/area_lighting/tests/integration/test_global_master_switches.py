@@ -137,3 +137,41 @@ async def test_global_occupancy_off_then_on_rearms(hass: HomeAssistant, helper_e
     await hass.async_block_till_done()
 
     assert ctrl._occupancy_timer.is_active
+
+
+_MOTION_SENSOR = "binary_sensor.network_room_motion_sensor_motion"
+
+
+@pytest.mark.integration
+async def test_global_motion_on_allows_motion_activation(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    ctrl.motion_light_enabled = True
+
+    hass.states.async_set(_MOTION_SENSOR, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(_MOTION_SENSOR, "on")
+    await hass.async_block_till_done()
+
+    assert ctrl._state.source == ActivationSource.MOTION
+    assert not ctrl._state.is_off
+
+
+@pytest.mark.integration
+async def test_global_motion_off_blocks_motion_activation(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    ctrl.motion_light_enabled = True  # per-area on: only the GLOBAL gate blocks
+
+    await _toggles(hass).async_set_motion_lights_enabled(False)
+
+    hass.states.async_set(_MOTION_SENSOR, "off")
+    await hass.async_block_till_done()
+    hass.states.async_set(_MOTION_SENSOR, "on")
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_off  # motion did not turn lights on
