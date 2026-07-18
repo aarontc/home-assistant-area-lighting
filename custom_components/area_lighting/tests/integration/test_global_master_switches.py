@@ -6,6 +6,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting.area_state import ActivationSource
 from custom_components.area_lighting.global_state import GlobalToggles
 
 
@@ -61,3 +62,78 @@ async def test_holder_created_and_defaults_on(hass: HomeAssistant, helper_entiti
     assert isinstance(toggles, GlobalToggles)
     assert toggles.motion_lights_enabled is True
     assert toggles.occupancy_timeout_enabled is True
+
+
+@pytest.mark.integration
+async def test_global_occupancy_off_suppresses_arm(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+
+    await _toggles(hass).async_set_occupancy_timeout_enabled(False)
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    assert not ctrl._occupancy_timer.is_active
+
+
+@pytest.mark.integration
+async def test_global_occupancy_off_cancels_running_timer(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._occupancy_timer.is_active
+
+    await _toggles(hass).async_set_occupancy_timeout_enabled(False)
+    await hass.async_block_till_done()
+
+    assert not ctrl._occupancy_timer.is_active
+    assert ctrl._state.is_on  # lights stayed on; no lights-off callback fired
+    assert ctrl._state.scene_slug == "circadian"
+
+
+@pytest.mark.integration
+async def test_global_occupancy_off_expiry_is_noop(hass: HomeAssistant, helper_entities) -> None:
+    """A restored/past-due timer firing while globally disabled is a no-op."""
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._state.is_on
+
+    # Disable the flag WITHOUT going through the setter (so no cancel happens),
+    # simulating a timer that outlived the flag flip / was restored at startup.
+    _toggles(hass)._occupancy_timeout_enabled = False
+    await ctrl._on_occupancy_timer()
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_on
+    assert ctrl._state.scene_slug == "circadian"
+
+
+@pytest.mark.integration
+async def test_global_occupancy_off_then_on_rearms(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set("light.media_room_overhead", "off")
+    hass.states.async_set("binary_sensor.media_room_presence", "off")
+    await _setup(hass, _config_with_occupancy())
+    ctrl = hass.data["area_lighting"]["controllers"]["media_room"]
+
+    await _toggles(hass).async_set_occupancy_timeout_enabled(False)
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert not ctrl._occupancy_timer.is_active
+
+    await _toggles(hass).async_set_occupancy_timeout_enabled(True)
+    await hass.async_block_till_done()
+
+    assert ctrl._occupancy_timer.is_active

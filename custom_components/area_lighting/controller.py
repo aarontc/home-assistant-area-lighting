@@ -1766,14 +1766,22 @@ class AreaLightingController:
             self._start_occupancy_timer()
 
     def _start_occupancy_timer(self) -> None:
-        """Arm the occupancy timer, respecting the enable flag.
+        """Arm the occupancy timer, respecting the enable flags.
 
-        Single choke-point for every start so the `occupancy_timeout_enabled`
-        gate lives in one place. Cancels remain independent of the flag.
+        Single choke-point for every start so the per-area and global
+        `occupancy_timeout_enabled` gates live in one place. Cancels
+        remain independent of the flags.
         """
         if not self._occupancy_timeout_enabled:
             _LOGGER.debug(
                 "Area %s: occupancy timer start suppressed (timeout disabled)",
+                self.area.id,
+            )
+            return
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        if toggles is not None and not toggles.occupancy_timeout_enabled:
+            _LOGGER.debug(
+                "Area %s: occupancy timer start suppressed (global timeout disabled)",
                 self.area.id,
             )
             return
@@ -1803,6 +1811,20 @@ class AreaLightingController:
     async def handle_occupancy_lights_off(self) -> None:
         _LOGGER.debug("Area %s: handle_occupancy_lights_off", self.area.id)
         self._occupancy_timer.cancel()
+
+    def cancel_occupancy_timer(self) -> None:
+        """Cancel any running occupancy timer without firing lights-off.
+
+        Used by the global occupancy master switch on disable.
+        """
+        self._occupancy_timer.cancel()
+
+    def enforce_occupancy_timer(self) -> None:
+        """Public wrapper: re-evaluate whether the occupancy timer should arm.
+
+        Used by the global occupancy master switch on enable.
+        """
+        self._enforce_occupancy_timer()
 
     async def handle_ambient_enabled(self) -> None:
         """Ambient mode enabled (zone or area). Activate ambient scene if off."""
@@ -1935,6 +1957,13 @@ class AreaLightingController:
     async def _on_occupancy_timer(self) -> None:
         _LOGGER.debug("Area %s: occupancy timer expired", self.area.id)
         if self._state.is_off or self._state.is_ambient_like:
+            return
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        if toggles is not None and not toggles.occupancy_timeout_enabled:
+            _LOGGER.debug(
+                "Area %s: occupancy timer expiry suppressed (global timeout disabled)",
+                self.area.id,
+            )
             return
         await self.lighting_off_fade(source=ActivationSource.OCCUPANCY)
 
