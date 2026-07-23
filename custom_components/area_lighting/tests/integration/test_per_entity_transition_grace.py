@@ -49,7 +49,7 @@ async def test_active_scene_targets_record_commanded_at_and_transition(
     after = time.monotonic()
 
     assert ctrl._active_scene_targets, (
-        "expected _resolve_scene_targets to populate at least one entry for daylight"
+        "expected _resolve_raw_scene_targets to populate at least one entry for daylight"
     )
     for entity_id, target in ctrl._active_scene_targets.items():
         assert "commanded_at" in target, f"{entity_id}: missing commanded_at"

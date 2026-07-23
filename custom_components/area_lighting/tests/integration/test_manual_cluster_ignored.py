@@ -127,7 +127,7 @@ async def test_cluster_state_change_does_not_mark_manual(
     # MEMBER lights (not the cluster). This is how scene activation
     # actually runs in production.
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-    ctrl._active_scene_targets = ctrl._resolve_scene_targets("daylight")
+    ctrl._active_scene_targets = ctrl._resolve_raw_scene_targets("daylight")
     # Expire the grace window so manual detection isn't short-circuited
     # by the post-scene-change bypass.
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
@@ -162,7 +162,7 @@ async def test_individual_member_change_still_marks_manual(
     ctrl = hass.data["area_lighting"]["controllers"]["cluster_room"]
 
     ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
-    ctrl._active_scene_targets = ctrl._resolve_scene_targets("daylight")
+    ctrl._active_scene_targets = ctrl._resolve_raw_scene_targets("daylight")
     ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
 
     # Member light diverges from its scene target (brightness=200) —

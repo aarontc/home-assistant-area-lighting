@@ -33,6 +33,7 @@ from .const import (
     SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF_INTERNAL,
 )
+from .demand_response import apply_demand_response, demand_response_shed_ids
 from .models import AreaConfig, AreaLightingConfig, SceneConfig
 from .scene_machine import (
     ActionType,
@@ -137,6 +138,11 @@ class AreaLightingController:
         # Populated by _activate_scene; used by manual detection to compare
         # incoming HA state updates against what the scene instructed.
         self._active_scene_targets: dict[str, dict] = {}
+
+        # Entity ids of individual lights the current activation shed for
+        # demand response (empty when DR is inactive). Read by the kelvin
+        # router and the DR reconcile; surfaced in diagnostics.
+        self._dr_shed_ids: frozenset[str] = frozenset()
 
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
@@ -710,7 +716,7 @@ class AreaLightingController:
         Manual detection reads these to distinguish a real divergence
         from a bulb that's still settling into a commanded fade. The
         entries are replaced (not mutated) so the originating scene
-        config dicts handed back by _resolve_scene_targets stay clean.
+        config dicts handed back by _resolve_raw_scene_targets stay clean.
         """
         now = time.monotonic()
         tx = float(transition) if transition is not None else 0.0
@@ -739,6 +745,7 @@ class AreaLightingController:
             await self._disable_circadian_switches()
             await self._turn_off_all_lights(transition)
             self._active_scene_targets = {}
+            self._dr_shed_ids = frozenset()
             self._state.transition_to_off(source)
             self._enforce_occupancy_timer()
             self._notify_state_change()
@@ -760,7 +767,8 @@ class AreaLightingController:
         # Visual scene → disable circadian first so the switches stop
         # overriding the scene's color/brightness, then apply + transition.
         await self._disable_circadian_switches()
-        self._active_scene_targets = self._resolve_scene_targets(scene_slug)
+        self._active_scene_targets = self._effective_scene_targets(scene_slug)
+        self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
         await self._apply_scene_data(scene_slug, transition)
         self._schedule_post_settle_selfcheck(transition)
@@ -851,6 +859,10 @@ class AreaLightingController:
             light_entities = {
                 eid: state for eid, state in entities.items() if eid.startswith("light.")
             }
+            if self._demand_response_active():
+                light_entities = apply_demand_response(
+                    light_entities, [light.id for light in self.area.lights]
+                )
             cluster_specs = [
                 (light.id, list(light.members))
                 for light in self.area.light_clusters
@@ -864,13 +876,23 @@ class AreaLightingController:
                 ]
             )
         else:
-            # No snapshot → fall back to role-based on/off, no batching
-            tasks: list = []
+            # No snapshot -> role-based on/off. Under DR, shed the on-set tail
+            # and skip cluster entities (a cluster command would turn on shed
+            # members through the zone).
+            dr = self._demand_response_active()
+            shed: set[str] = set()
+            if dr:
+                ordered = [light.id for light in self.area.lights]
+                on_ids = [light.id for light in self.area.lights if light.in_scene(scene_slug)]
+                shed = set(demand_response_shed_ids(ordered, on_ids))
+            tasks = []
             for light in self.area.all_lights:
+                if dr and light.is_cluster:
+                    continue
                 svc_data: dict[str, Any] = {"entity_id": light.id}
                 if transition is not None:
                     svc_data["transition"] = int(transition)
-                if light.in_scene(scene_slug):
+                if light.in_scene(scene_slug) and light.id not in shed:
                     tasks.append(self._call_service("light.turn_on", **svc_data))
                 else:
                     tasks.append(self._call_service("light.turn_off", **svc_data))
@@ -907,7 +929,7 @@ class AreaLightingController:
                 return s
         return None
 
-    def _resolve_scene_targets(self, scene_slug: str) -> dict[str, dict]:
+    def _resolve_raw_scene_targets(self, scene_slug: str) -> dict[str, dict]:
         """Resolve the per-light target states for a scene.
 
         Uses the same priority as _apply_scene_data: stored snapshot →
@@ -934,6 +956,32 @@ class AreaLightingController:
             light.id: {"state": "on" if light.in_scene(scene_slug) else "off"}
             for light in self.area.all_lights
         }
+
+    def _demand_response_active(self) -> bool:
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        return toggles is not None and toggles.demand_response_active
+
+    @property
+    def dr_shed_ids(self) -> frozenset[str]:
+        """Individual lights the current activation shed for demand response."""
+        return self._dr_shed_ids
+
+    def _effective_scene_targets(self, scene_slug: str) -> dict[str, dict]:
+        """Raw scene targets, with the demand-response shed filter applied
+        when the global DR flag is active. Shed bulbs carry an off-target so
+        manual detection and self-heal treat them as intended-off."""
+        targets = self._resolve_raw_scene_targets(scene_slug)
+        if self._demand_response_active():
+            targets = apply_demand_response(targets, [light.id for light in self.area.lights])
+        return targets
+
+    def _compute_scene_shed_ids(self, scene_slug: str) -> frozenset[str]:
+        if not self._demand_response_active():
+            return frozenset()
+        ordered = [light.id for light in self.area.lights]
+        raw = self._resolve_raw_scene_targets(scene_slug)
+        on_ids = [eid for eid in ordered if raw.get(eid, {}).get("state") == "on"]
+        return frozenset(demand_response_shed_ids(ordered, on_ids))
 
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
         """Check whether a light's HA state matches the active scene target.
@@ -1468,7 +1516,7 @@ class AreaLightingController:
             self._state.transition_to_off(ActivationSource.USER)
         else:
             await self._disable_circadian_switches()
-            self._active_scene_targets = self._resolve_scene_targets(scene_slug)
+            self._active_scene_targets = self._effective_scene_targets(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()
         await self._sync_kelvin_router()
@@ -1481,6 +1529,7 @@ class AreaLightingController:
         """
         _LOGGER.debug("Area %s: handle_lights_all_off", self.area.id)
         self._active_scene_targets = {}
+        self._dr_shed_ids = frozenset()
         self._clear_scene_drift_issue()
         self._state.transition_to_off(ActivationSource.USER)
         await self._disable_circadian_switches()
