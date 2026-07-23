@@ -71,6 +71,7 @@ def test_state_dict_shape():
     assert t.state_dict() == {
         "motion_lights_enabled": False,
         "occupancy_timeout_enabled": True,
+        "demand_response_active": False,
     }
 
 
@@ -86,7 +87,13 @@ async def test_set_motion_notifies_and_saves():
 
     assert t.motion_lights_enabled is False
     assert calls == [1]
-    assert storage.saved == [{"motion_lights_enabled": False, "occupancy_timeout_enabled": True}]
+    assert storage.saved == [
+        {
+            "motion_lights_enabled": False,
+            "occupancy_timeout_enabled": True,
+            "demand_response_active": False,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -134,3 +141,14 @@ async def test_remove_state_listener_stops_notifications():
     await t.async_set_motion_lights_enabled(False)
     await hass.drain()
     assert calls == []
+
+
+def test_demand_response_defaults_off():
+    t = GlobalToggles(_FakeHass(), _FakeStorage())
+    assert t.demand_response_active is False
+
+
+def test_demand_response_load_persisted():
+    t = GlobalToggles(_FakeHass(), _FakeStorage())
+    t.load_persisted_state({"demand_response_active": True})
+    assert t.demand_response_active is True

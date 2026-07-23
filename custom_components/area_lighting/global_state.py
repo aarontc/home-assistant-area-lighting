@@ -27,6 +27,7 @@ class GlobalToggles:
         self._state_storage = state_storage
         self._motion_lights_enabled = True
         self._occupancy_timeout_enabled = True
+        self._demand_response_active = False
         self._listeners: list[Callable[[], None]] = []
 
     @property
@@ -36,6 +37,10 @@ class GlobalToggles:
     @property
     def occupancy_timeout_enabled(self) -> bool:
         return self._occupancy_timeout_enabled
+
+    @property
+    def demand_response_active(self) -> bool:
+        return self._demand_response_active
 
     # ── listener plumbing (mirrors controller.add_state_listener) ──
     def add_state_listener(self, cb: Callable[[], None]) -> None:
@@ -57,6 +62,7 @@ class GlobalToggles:
         return {
             "motion_lights_enabled": self._motion_lights_enabled,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
+            "demand_response_active": self._demand_response_active,
         }
 
     def load_persisted_state(self, data: dict) -> None:
@@ -66,6 +72,8 @@ class GlobalToggles:
             self._motion_lights_enabled = bool(data["motion_lights_enabled"])
         if "occupancy_timeout_enabled" in data:
             self._occupancy_timeout_enabled = bool(data["occupancy_timeout_enabled"])
+        if "demand_response_active" in data:
+            self._demand_response_active = bool(data["demand_response_active"])
 
     # ── setters (called by the switch entities) ──
     async def async_set_motion_lights_enabled(self, enabled: bool) -> None:
