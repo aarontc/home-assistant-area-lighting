@@ -1007,6 +1007,46 @@ class AreaLightingController:
         on_ids = [eid for eid in ordered if raw.get(eid, {}).get("state") == "on"]
         return frozenset(demand_response_shed_ids(ordered, on_ids))
 
+    async def async_reconcile_demand_response(self) -> None:
+        """Re-evaluate shed bulbs after the global demand-response flag flipped.
+
+        Idempotent ON/OFF-only converge (mirrors the kelvin router's diff loop):
+        shed bulbs are turned off, previously shed bulbs are turned back on to
+        their scene target, and bulbs already at the correct polarity (kept
+        bulbs that are on) are left untouched so a manual dim level survives the
+        flip. Manual and off areas are skipped. Called for every controller by
+        the global demand-response setter.
+        """
+        if self._state.is_off or self._state.is_manual:
+            return
+        if self._state.is_circadian:
+            # Circadian values are computed; re-running recomputes the same kept
+            # values (no visible change) and applies/removes the shed filter.
+            await self._activate_circadian(self._state.source)
+            return
+        if not self._state.is_scene:
+            return
+
+        scene_slug = self._state.scene_slug
+        raw = self._resolve_raw_scene_targets(scene_slug)
+        effective = self._effective_scene_targets(scene_slug)
+        self._active_scene_targets = effective
+        self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
+        self._stamp_targets_with_command_metadata(None)
+
+        tasks: list = []
+        for entity_id, target in effective.items():
+            st = self.hass.states.get(entity_id)
+            is_on = st is not None and st.state == STATE_ON
+            want_on = target.get("state") == "on"
+            if want_on and not is_on:
+                tasks.append(self._apply_light_state(entity_id, raw[entity_id]))
+            elif not want_on and is_on:
+                tasks.append(self._apply_light_state(entity_id, {"state": "off"}))
+        if tasks:
+            await asyncio.gather(*tasks)
+        self._notify_state_change()
+
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
         """Check whether a light's HA state matches the active scene target.
 
