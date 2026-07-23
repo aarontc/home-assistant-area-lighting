@@ -192,9 +192,14 @@ the plan will pick one storage mechanism and use it everywhere:
 - **Option B:** add a `self._dr_shed_ids: frozenset[str]` cache set at every
   activation and read by the router.
 
-Option A is preferred (one source of truth). The final choice is an
-implementation detail to settle with the circadian code open, but the invariant
-is fixed: the router reads, never recomputes.
+**Resolved at plan time: Option B.** The circadian path leaves
+`_active_scene_targets` empty, and the kelvin router (a separate object with no
+scene-target dict of its own) needs a read surface, so the controller stores
+`self._dr_shed_ids: frozenset[str]` for the current activation and exposes it as
+a public `dr_shed_ids` property. The scene path additionally carries shed bulbs
+as off-targets in `_active_scene_targets` (needed anyway for manual-detection /
+self-heal). The invariant holds: the router reads `dr_shed_ids`, never recomputes
+the ratio over its own smaller route-lights on-set.
 
 ## 7. Trigger, state, and persistence
 
@@ -219,23 +224,34 @@ Steady-state filtering (Section 6) only affects *new* activations. Already-lit
 areas are handled by a reconcile fired from the setter, in both directions.
 `manual` and `off` areas are skipped.
 
-- **On activate:** for each non-manual, non-off controller, compute the current
-  activation's shed set and `light.turn_off` any shed bulb that is currently on.
-  Kept bulbs are not touched (so brightness / dim level is preserved). Update
-  `_active_scene_targets` to mark shed bulbs off. This is the user's chosen
-  "shed immediately" behavior.
-- **On deactivate:** for each non-manual, non-off controller, re-resolve the
-  **unfiltered** scene/circadian targets and `light.turn_on` the bulbs that were
-  shed, bringing each to the area's current level: the scene target normally, or
-  the dimmed minimum if the area's `dimmed` modifier is set. Update
-  `_active_scene_targets`.
+The reconcile is a single **ON/OFF-only converge** per non-manual, non-off
+controller, mirroring the kelvin router's existing idempotent diff loop
+(`circadian_kelvin_router.py:129-140`): recompute the DR-effective targets for
+the current state, then diff against **live** light state and issue calls only on
+the ON/OFF dimension.
 
-Both directions are idempotent: re-running activate when already shed is a no-op
-(shed bulbs already off); re-running deactivate when already restored is a no-op.
+- **Scene areas:** for each effective target, if it wants **off** and the bulb is
+  **on** -> `light.turn_off`; if it wants **on** and the bulb is **off** ->
+  `light.turn_on` to its unfiltered scene target. A bulb already at the correct
+  polarity (a kept bulb that is on) is **left untouched** — so a manual dim level
+  on kept bulbs survives the flip. `_active_scene_targets` is updated to the new
+  effective targets.
+- **Circadian areas:** re-run `_activate_circadian(source)`. Circadian values are
+  computed, so kept bulbs are re-sent the same value (no visible change) while the
+  DR filter turns shed bulbs off (activate) or brings them back (deactivate).
 
-**Requirement:** the reconcile must not reset kept bulbs' brightness, and must
-not clear the `dimmed` modifier. Restoring a shed bulb in a dimmed area brings it
-to the dimmed level, not the full scene brightness.
+Both directions are idempotent: re-running activate when already shed turns
+nothing (shed bulbs already off); re-running deactivate when already restored
+turns nothing.
+
+**Behavior notes / accepted limitation:** kept bulbs that are on are never
+retouched, so their dim level is preserved across the flip. The one corner: a
+bulb the DR event **shed** while the area was `dimmed` is restored on deactivate
+at its **scene** brightness, not the exact dimmed level (that per-bulb level is
+not tracked in `_active_scene_targets`). This is a rare interaction
+(dimmed + DR), consistent with the user's "restore lighting as normal" intent,
+and reconstructing the exact dimmed level would require snapshotting live state
+(deferred, YAGNI).
 
 ## 9. Manual and restart
 
