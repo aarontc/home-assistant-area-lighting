@@ -85,6 +85,7 @@ class CircadianKelvinRouter:
         self._config = config
         self._unsub: Any = None
         self._current_index: int | None = None
+        self._last_shed_ids: frozenset[str] = frozenset()
         self._reconcile_lock = asyncio.Lock()
 
     async def sync_to_state(self, scene_slug: str | None) -> None:
@@ -106,6 +107,7 @@ class CircadianKelvinRouter:
                 self._unsub()
                 self._unsub = None
             self._current_index = None
+            self._last_shed_ids = frozenset()
 
     @callback
     def _on_source_changed(self, event: Event[EventStateChangedData]) -> None:
@@ -122,14 +124,15 @@ class CircadianKelvinRouter:
         async with self._reconcile_lock:
             colortemp = self._read_colortemp()
             new_index = select_route(self._config.routes, colortemp, self._current_index)
+            shed = frozenset(self._demand_response_shed_ids())
 
-            if new_index == self._current_index:
+            if new_index == self._current_index and shed == self._last_shed_ids:
                 return
 
             prev_index = self._current_index
             self._current_index = new_index
+            self._last_shed_ids = shed
             active = self._config.routes[new_index]
-            shed = self._demand_response_shed_ids()
             active_lights = set(active.lights) - shed
             inactive_lights = self._config.all_route_lights - active_lights
 

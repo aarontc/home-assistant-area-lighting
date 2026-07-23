@@ -87,6 +87,44 @@ async def _setup(hass: HomeAssistant, colortemp: int) -> None:
 
 
 @pytest.mark.integration
+async def test_router_sheds_route_bulbs_on_live_flag_flip(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A live demand-response flip must shed route bulbs even when the route index is unchanged."""
+    await _setup(hass, colortemp=3000)  # fallback route (all 3 strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+
+    # Mocked light services do not update hass.states: simulate the strips
+    # being physically on after the circadian bring-up.
+    for eid in ("light.kitchen_strip_1", "light.kitchen_strip_2", "light.kitchen_strip_3"):
+        hass.states.async_set(eid, "on", {})
+    hass.states.async_set("light.kitchen_fluorescent", "off", {})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    shed = {"light.kitchen_strip_2", "light.kitchen_strip_3"}
+    off = {
+        c.data.get("entity_id")
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    on = {
+        c.data.get("entity_id")
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_on"
+    }
+    assert shed <= off
+    assert on.isdisjoint(shed)
+    assert "light.kitchen_strip_1" not in off
+
+
+@pytest.mark.integration
 async def test_router_never_lights_shed_route_bulbs(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
