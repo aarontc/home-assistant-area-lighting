@@ -17,7 +17,7 @@ from typing import Any
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import CIRCADIAN_KELVIN_HYSTERESIS
+from .const import CIRCADIAN_KELVIN_HYSTERESIS, DOMAIN
 from .models import CircadianKelvinRouteConfig, CircadianKelvinRoutesConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,6 +112,11 @@ class CircadianKelvinRouter:
         """HA fires this for every state change on `source`."""
         self._hass.async_create_task(self._reconcile())
 
+    def _demand_response_shed_ids(self) -> set[str]:
+        controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
+        ctrl = controllers.get(self._area_id)
+        return set(ctrl.dr_shed_ids) if ctrl is not None else set()
+
     async def _reconcile(self) -> None:
         """Reconcile light state against the active route, idempotently."""
         async with self._reconcile_lock:
@@ -124,7 +129,9 @@ class CircadianKelvinRouter:
             prev_index = self._current_index
             self._current_index = new_index
             active = self._config.routes[new_index]
-            inactive_lights = self._config.all_route_lights - set(active.lights)
+            shed = self._demand_response_shed_ids()
+            active_lights = set(active.lights) - shed
+            inactive_lights = self._config.all_route_lights - active_lights
 
             # Diff against current HA state: only issue calls for lights that
             # need to change, so reconciliation is truly idempotent.
@@ -135,7 +142,7 @@ class CircadianKelvinRouter:
             ]
             on_calls_to_issue = [
                 eid
-                for eid in sorted(active.lights)
+                for eid in sorted(active_lights)
                 if (s := self._hass.states.get(eid)) is None or s.state != "on"
             ]
 
