@@ -787,12 +787,31 @@ class AreaLightingController:
                     LeaderReason.SCENE_ACTIVATED,
                 )
 
+    def _circadian_on_ids(self) -> list[str]:
+        """Individual lights (config order) that circadian activation turns on:
+        route lights (driven by the kelvin router) plus lights bound to a
+        circadian switch."""
+        routes = self.area.circadian_kelvin_routes
+        route_lights = routes.all_route_lights if routes else set()
+        return [
+            light.id
+            for light in self.area.lights
+            if light.id in route_lights or light.circadian_switch
+        ]
+
+    def _compute_circadian_shed_ids(self) -> frozenset[str]:
+        if not self._demand_response_active():
+            return frozenset()
+        ordered = [light.id for light in self.area.lights]
+        return frozenset(demand_response_shed_ids(ordered, self._circadian_on_ids()))
+
     async def _activate_circadian(
         self,
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
         """Activate circadian mode."""
         self._state.transition_to_circadian(source)
+        self._dr_shed_ids = self._compute_circadian_shed_ids()
         self._enforce_occupancy_timer()
         self._notify_state_change()
 
@@ -804,6 +823,11 @@ class AreaLightingController:
                 self.area.circadian_kelvin_routes is not None
                 and light.id in self.area.circadian_kelvin_routes.all_route_lights
             ):
+                continue
+            if light.id in self._dr_shed_ids:
+                # Shed for demand response: force off (route-light shedding is
+                # handled by the kelvin router, which reads dr_shed_ids).
+                tasks.append(self._call_service("light.turn_off", entity_id=light.id))
                 continue
             if not light.circadian_switch:
                 continue
@@ -1153,18 +1177,22 @@ class AreaLightingController:
         targets all area lights, including ones currently off and ones outside
         the active scene, so a dark area lights up uniformly at its minimum
         dimming level.
+
+        Under demand response, only the kept individual lights come up (cluster
+        entities are skipped so shed members are not lit through a zone).
         """
         brightness = max(1, min(255, round(255 * pct / 100)))
-        lights = self.area.all_lights
-        if lights:
+        if self._demand_response_active():
+            ordered = [light.id for light in self.area.lights]
+            shed = set(demand_response_shed_ids(ordered, ordered))
+            entity_ids = [eid for eid in ordered if eid not in shed]
+        else:
+            entity_ids = [light.id for light in self.area.all_lights]
+        if entity_ids:
             await asyncio.gather(
                 *[
-                    self._call_service(
-                        "light.turn_on",
-                        entity_id=light.id,
-                        brightness=brightness,
-                    )
-                    for light in lights
+                    self._call_service("light.turn_on", entity_id=eid, brightness=brightness)
+                    for eid in entity_ids
                 ]
             )
 
