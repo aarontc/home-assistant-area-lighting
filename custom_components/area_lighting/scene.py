@@ -124,12 +124,20 @@ class AreaLightingScene(Scene):
         # 3. Skeleton: all lights on/off by role membership
         await self._apply_skeleton(transition)
 
+    def _demand_response_active(self) -> bool:
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        return toggles is not None and toggles.demand_response_active
+
     async def _apply_stored(
         self,
         stored: dict[str, Any],
         transition: float | None,
     ) -> None:
         """Apply stored snapshot data to lights."""
+        if self._demand_response_active():
+            from .demand_response import apply_demand_response
+
+            stored = apply_demand_response(stored, [light.id for light in self._area.lights])
         _LOGGER.debug(
             "Area %s: applying scene data (%d entities)",
             self._area.id,
@@ -189,17 +197,31 @@ class AreaLightingScene(Scene):
         """Apply skeleton defaults: lights on/off based on role membership."""
         scene_slug = self._scene_cfg.slug
         excluded = set(self._scene_cfg.group_exclude)
+        dr = self._demand_response_active()
+        shed: set[str] = set()
+        if dr:
+            from .demand_response import demand_response_shed_ids
+
+            ordered = [light.id for light in self._area.lights]
+            on_ids = [
+                light.id
+                for light in self._area.lights
+                if light.in_scene(scene_slug) and light.id not in excluded
+            ]
+            shed = set(demand_response_shed_ids(ordered, on_ids))
 
         tasks: list = []
         for light in self._area.all_lights:
             if light.id in excluded:
+                continue
+            if dr and light.is_cluster:
                 continue
 
             service_data: dict[str, Any] = {"entity_id": light.id}
             if transition is not None:
                 service_data["transition"] = transition
 
-            if light.in_scene(scene_slug):
+            if light.in_scene(scene_slug) and light.id not in shed:
                 tasks.append(
                     self.hass.services.async_call(
                         "light",
