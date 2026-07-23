@@ -1,9 +1,9 @@
 """Global (all-area) master toggles for area_lighting.
 
-Owns two booleans that gate motion-triggered lights-on and the
-occupancy-timeout lights-off across every area. Persisted via the
-StateStorage reserved global key. Reaches controllers lazily through
-hass.data so it holds no back-references.
+Owns three booleans: motion-triggered lights-on, occupancy-timeout
+lights-off, and demand-response shedding, each gating every area.
+Persisted via the StateStorage reserved global key. Reaches controllers
+lazily through hass.data so it holds no back-references.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class GlobalToggles:
-    """Holds, persists, and broadcasts the two global master flags."""
+    """Holds, persists, and broadcasts the three global master flags."""
 
     def __init__(self, hass: HomeAssistant, state_storage: StateStorage) -> None:
         self._hass = hass
@@ -95,5 +95,15 @@ class GlobalToggles:
                 ctrl.enforce_occupancy_timer()
             else:
                 ctrl.cancel_occupancy_timer()
+        self._notify()
+        self._schedule_save()
+
+    async def async_set_demand_response_active(self, enabled: bool) -> None:
+        if self._demand_response_active == enabled:
+            return
+        self._demand_response_active = enabled
+        controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
+        for ctrl in controllers.values():
+            self._hass.async_create_task(ctrl.async_reconcile_demand_response())
         self._notify()
         self._schedule_save()

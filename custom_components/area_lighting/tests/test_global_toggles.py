@@ -26,12 +26,16 @@ class _FakeController:
     def __init__(self) -> None:
         self.enforced = 0
         self.cancelled = 0
+        self.reconciled = 0
 
     def enforce_occupancy_timer(self) -> None:
         self.enforced += 1
 
     def cancel_occupancy_timer(self) -> None:
         self.cancelled += 1
+
+    async def async_reconcile_demand_response(self) -> None:
+        self.reconciled += 1
 
 
 class _FakeHass:
@@ -152,3 +156,32 @@ def test_demand_response_load_persisted():
     t = GlobalToggles(_FakeHass(), _FakeStorage())
     t.load_persisted_state({"demand_response_active": True})
     assert t.demand_response_active is True
+
+
+@pytest.mark.asyncio
+async def test_set_demand_response_fans_out_and_persists():
+    hass, storage = _FakeHass(), _FakeStorage()
+    c1, c2 = _FakeController(), _FakeController()
+    hass.data[DOMAIN] = {"controllers": {"a": c1, "b": c2}}
+    t = GlobalToggles(hass, storage)
+
+    await t.async_set_demand_response_active(True)
+    await hass.drain()
+
+    assert t.demand_response_active is True
+    assert (c1.reconciled, c2.reconciled) == (1, 1)
+    assert storage.saved[-1]["demand_response_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_demand_response_idempotent():
+    hass, storage = _FakeHass(), _FakeStorage()
+    c1 = _FakeController()
+    hass.data[DOMAIN] = {"controllers": {"a": c1}}
+    t = GlobalToggles(hass, storage)
+
+    await t.async_set_demand_response_active(False)  # already False
+    await hass.drain()
+
+    assert c1.reconciled == 0
+    assert storage.saved == []

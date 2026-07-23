@@ -42,6 +42,13 @@ GLOBAL_SWITCH_DEFS = [
         "area_lighting_global_occupancy_timeout_enabled",
         "switch.area_lighting_occupancy_timeout_enabled",
     ),
+    (
+        "demand_response_active",
+        "Area Lighting Demand Response (Global)",
+        "mdi:transmission-tower",
+        "area_lighting_global_demand_response_active",
+        "switch.area_lighting_demand_response_active",
+    ),
 ]
 
 
@@ -148,6 +155,8 @@ class AreaLightingGlobalSwitch(SwitchEntity):
     async def _set(self, value: bool) -> None:
         if self._flag == "motion_lights_enabled":
             await self._toggles.async_set_motion_lights_enabled(value)
+        elif self._flag == "demand_response_active":
+            await self._toggles.async_set_demand_response_active(value)
         else:
             await self._toggles.async_set_occupancy_timeout_enabled(value)
 
