@@ -355,6 +355,8 @@ class AreaLightingController:
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
+            "demand_response_active": self._demand_response_active(),
+            "demand_response_shed": sorted(self._dr_shed_ids),
             "scene_self_heal_enabled": self._scene_self_heal,
             "scene_heal_attempts": {k: len(v) for k, v in self._heal_attempts.items()},
             "manual_fadeout_seconds": self._manual_fadeout_seconds,

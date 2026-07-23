@@ -35,6 +35,12 @@ readable companion that highlights user-facing changes.
   temperature. Solves the "fluorescent + Hue strip" mixed-fixture problem.
   See [`CONFIGURATION.md`](CONFIGURATION.md) § "Circadian kelvin routes".
 
+- **Demand response** — a global master switch
+  (`switch.area_lighting_demand_response_active`, default off) that, while on,
+  sheds a per-activation fraction of each area's on-bulbs (50% for up to 5,
+  80% for 6 or more), keeping the first-declared lights. Off commands, alerts,
+  and `manual` areas are unaffected; non-manual areas restore when it clears.
+
 ### Changed
 
 - **BREAKING: external `input_boolean.motion_light_enabled` helper removed** —

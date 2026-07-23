@@ -130,3 +130,40 @@ async def test_external_scene_tracking_is_filtered(hass: HomeAssistant, helper_e
 
     assert ctrl._active_scene_targets["light.bright_room_1"]["state"] == "on"
     assert ctrl._active_scene_targets["light.bright_room_6"]["state"] == "off"
+
+
+@pytest.mark.integration
+async def test_diagnostics_expose_demand_response(hass: HomeAssistant, helper_entities) -> None:
+    await _setup(hass, _config(6, 6), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    snap = ctrl.diagnostic_snapshot()
+    assert snap["demand_response_active"] is True
+    assert set(snap["demand_response_shed"]) == {f"light.bright_room_{i}" for i in (3, 4, 5, 6)}
+
+
+@pytest.mark.integration
+async def test_alert_bypasses_demand_response(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    cfg = _config(6, 6)
+    cfg["area_lighting"]["alert_patterns"] = {
+        "flash": {"steps": [{"target": "all", "state": "on", "brightness": 255}], "restore": False}
+    }
+    await _setup(hass, cfg, 6)
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await hass.services.async_call(
+        "area_lighting", "alert", {"area_id": "bright_room", "pattern": "flash"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    on = {
+        c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
+    }
+    # Alerts bypass DR: every bulb flashes, none are shed.
+    assert on == {f"light.bright_room_{i}" for i in range(1, 7)}

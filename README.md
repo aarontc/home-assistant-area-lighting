@@ -853,16 +853,18 @@ as these behavioral guarantees remain true.
 
 ## Global master switches
 
-The integration creates two global master switches of its own — no helpers
-required. Both default to on and survive restarts:
+The integration creates three global master switches of its own — no helpers
+required. The motion and occupancy switches default to on, the
+demand-response switch defaults to off, and all three survive restarts:
 
 | Entity | Purpose |
 |---|---|
 | `switch.area_lighting_motion_lights_enabled` | Master switch for motion turning lights on |
 | `switch.area_lighting_occupancy_timeout_enabled` | Master switch for the occupancy timer turning lights off |
+| `switch.area_lighting_demand_response_active` | Master switch for demand-response load shedding |
 
-Each global switch is ANDed with the matching per-area switch
-(`switch.<area>_motion_light_enabled` /
+The motion and occupancy switches are each ANDed with the matching per-area
+switch (`switch.<area>_motion_light_enabled` /
 `switch.<area>_occupancy_timeout_enabled`): a feature runs in an area only
 when both the global switch and that area's switch are on.
 
@@ -872,6 +874,24 @@ and can be deleted. Automations or dashboards that toggled the old helper
 must target `switch.area_lighting_motion_lights_enabled` instead. On
 upgrade, motion lighting is re-enabled by default because the owned switch
 defaults to on.
+
+## Demand response
+
+When `switch.area_lighting_demand_response_active` is on (default off, persisted),
+each area sheds a fraction of the bulbs any activation would turn on, reducing
+load during a utility demand-response event:
+
+- Up to 5 on-bulbs: shed 50%. 6 or more: shed 80%. At least one bulb always
+  survives (`keep = ceil(n * (1 - ratio))`), where `n` is how many bulbs that
+  specific activation would light.
+- Bulbs are shed from the config-order tail of the on-set, so the first-declared
+  lights in each area survive. Order your `lights` most-important-first.
+- Off commands, alerts, and areas in `manual` are never affected. Flipping the
+  switch immediately sheds already-lit non-manual areas; clearing it restores
+  them.
+
+Drive the switch from any utility integration or automation with
+`switch.turn_on` / `switch.turn_off`.
 
 ## Required external entities
 
