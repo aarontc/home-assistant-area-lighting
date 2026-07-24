@@ -221,8 +221,11 @@ async def test_skeleton_group_exclude_light_left_untracked_and_untouched(
     service_calls.clear()
     await ctrl.async_reconcile_demand_response()
     await hass.async_block_till_done()
-    _, reconcile_off = _on_off(service_calls)
-    assert "light.g_room_2" not in reconcile_off
+    reconcile_on, reconcile_off = _on_off(service_calls)
+    # No command of any kind for the excluded light, and its (seeded) HA
+    # state is still on: reconcile left it fully untouched.
+    assert "light.g_room_2" not in (reconcile_on | reconcile_off)
+    assert hass.states.get("light.g_room_2").state == "on"
 
 
 @pytest.mark.integration

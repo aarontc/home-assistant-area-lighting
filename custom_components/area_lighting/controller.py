@@ -1082,7 +1082,9 @@ class AreaLightingController:
 
         Uses the same priority as _apply_scene_data: stored snapshot →
         inline config entities → role-based skeleton. Returns a dict
-        mapping entity_id → target state dict for every light in the area.
+        mapping entity_id → target state dict. In the skeleton fallback,
+        lights in the active scene's group_exclude are intentionally
+        OMITTED (left untracked and untouched).
         """
         from .scene_storage import SceneStorage
 
