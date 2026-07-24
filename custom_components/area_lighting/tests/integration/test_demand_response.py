@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -167,3 +169,72 @@ async def test_alert_bypasses_demand_response(
     }
     # Alerts bypass DR: every bulb flashes, none are shed.
     assert on == {f"light.bright_room_{i}" for i in range(1, 7)}
+
+
+def _register_chrono_light_recorder(hass: HomeAssistant) -> list[tuple[str, str]]:
+    """Replace the mocked light services with one chronological recorder.
+
+    The service_calls fixture groups calls by service, so it cannot answer
+    ordering questions ("which command landed last on this bulb?").
+    """
+    calls: list[tuple[str, str]] = []
+
+    async def _record(call) -> None:
+        calls.append((call.service, call.data["entity_id"]))
+
+    hass.services.async_register("light", "turn_on", _record)
+    hass.services.async_register("light", "turn_off", _record)
+    return calls
+
+
+@pytest.mark.integration
+async def test_dr_flip_during_alert_applies_after_restore(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR edge arriving mid-alert is deferred, then applied after restore.
+
+    The reconcile must not fight the running alert, and the alert's
+    finally block must re-run it so the shed lands once the captured
+    states are restored.
+    """
+    cfg = _config(6, 6)
+    cfg["area_lighting"]["alert_patterns"] = {
+        "flash": {
+            "steps": [{"target": "all", "state": "on", "brightness": 255, "delay": 0.2}],
+            "restore": True,
+        }
+    }
+    await _setup(hass, cfg, 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    # Lit scene pre-alert: all bulbs physically on, DR off.
+    for i in range(1, 7):
+        hass.states.async_set(f"light.bright_room_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    chrono = _register_chrono_light_recorder(hass)
+    alert_task = hass.async_create_task(
+        hass.services.async_call(
+            "area_lighting",
+            "alert",
+            {"area_id": "bright_room", "pattern": "flash"},
+            blocking=True,
+        )
+    )
+    # Let the alert start and park in its step delay.
+    await asyncio.sleep(0.05)
+    assert ctrl._alert_active is True
+    chrono.clear()
+    # Flip DR on mid-alert via the real setter.
+    await _toggles(hass).async_set_demand_response_active(True)
+    await alert_task
+    await hass.async_block_till_done()
+
+    # Final commanded polarity per bulb: restore relights everything,
+    # then the deferred DR reconcile sheds the tail again.
+    final = {eid: svc for svc, eid in chrono}
+    assert final["light.bright_room_1"] == "turn_on"
+    assert final["light.bright_room_2"] == "turn_on"
+    for i in (3, 4, 5, 6):
+        assert final[f"light.bright_room_{i}"] == "turn_off"
+    assert ctrl.dr_shed_ids == frozenset({f"light.bright_room_{i}" for i in (3, 4, 5, 6)})

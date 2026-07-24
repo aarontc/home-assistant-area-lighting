@@ -51,7 +51,11 @@ readable companion that highlights user-facing changes.
   every path that leaves circadian (scene changes, off fades, manual
   changes) or suspends it (dimming) detaches the route listener before the
   circadian switches turn off, so the outgoing circadian setup never
-  fights the incoming state.
+  fights the incoming state. A flag flip that lands while an alert is
+  running is deferred and applied right after the alert restores its
+  captured states; per-area reconciles are serialized so rapid flips
+  converge to the final flag state, and a flip that lands mid
+  scene-activation is converged at the end of that activation.
 
 ### Changed
 

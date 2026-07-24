@@ -144,6 +144,12 @@ class AreaLightingController:
         # router and the DR reconcile; surfaced in diagnostics.
         self._dr_shed_ids: frozenset[str] = frozenset()
 
+        # Serializes demand-response reconciles: rapid flag flips schedule
+        # one reconcile task per flip, and interleaved converges could write
+        # tracking out of order. Each holder reads the current flag, so the
+        # last one through converges to the final state.
+        self._dr_lock: asyncio.Lock = asyncio.Lock()
+
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
         self._heal_attempts: dict[str, list[float]] = {}
@@ -768,6 +774,7 @@ class AreaLightingController:
 
         # Visual scene → disable circadian first so the switches stop
         # overriding the scene's color/brightness, then apply + transition.
+        dr_at_start = self._demand_response_active()
         await self._disable_circadian_switches()
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
@@ -788,6 +795,13 @@ class AreaLightingController:
                     scene_slug,
                     LeaderReason.SCENE_ACTIVATED,
                 )
+
+        # The global DR flag flipped while this activation was applying:
+        # the setter's reconcile saw the pre-transition state and skipped,
+        # so converge once now that tracking reflects the new scene. No
+        # recursion: the scene reconcile path never calls _activate_scene.
+        if self._demand_response_active() != dr_at_start:
+            await self.async_reconcile_demand_response()
 
     def _route_source_colortemp(self) -> float | None:
         """Colortemp the kelvin router routes on: the routes' source entity,
@@ -1084,6 +1098,11 @@ class AreaLightingController:
         """Individual lights the current activation shed for demand response."""
         return self._dr_shed_ids
 
+    @property
+    def demand_response_active(self) -> bool:
+        """Whether the global demand-response flag is active."""
+        return self._demand_response_active()
+
     def _effective_scene_targets(self, scene_slug: str) -> dict[str, dict]:
         """Raw scene targets, with the demand-response shed filter applied
         when the global DR flag is active. Shed bulbs carry an off-target so
@@ -1115,36 +1134,44 @@ class AreaLightingController:
         bulbs that are on) are left untouched so a manual dim level survives the
         flip. Manual and off areas are skipped. Called for every controller by
         the global demand-response setter.
+
+        Deferred while an alert owns the lights (execute_alert re-runs the
+        reconcile once the alert finishes), and serialized under _dr_lock so
+        rapid flag flips cannot interleave converges.
         """
-        if self._state.is_off or self._state.is_manual:
+        if self._alert_active:
             return
-        if self._state.is_circadian:
-            # Circadian values are computed; re-running recomputes the same kept
-            # values (no visible change) and applies/removes the shed filter.
-            await self._activate_circadian(self._state.source)
-            return
-        if not self._state.is_scene:
-            return
+        async with self._dr_lock:
+            if self._state.is_off or self._state.is_manual:
+                return
+            if self._state.is_circadian:
+                # Circadian values are computed; re-running recomputes the same
+                # kept values (no visible change) and applies/removes the shed
+                # filter.
+                await self._activate_circadian(self._state.source)
+                return
+            if not self._state.is_scene:
+                return
 
-        scene_slug = self._state.scene_slug
-        raw = self._resolve_raw_scene_targets(scene_slug)
-        effective = self._effective_scene_targets(scene_slug)
-        self._active_scene_targets = effective
-        self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
-        self._stamp_targets_with_command_metadata(None)
+            scene_slug = self._state.scene_slug
+            raw = self._resolve_raw_scene_targets(scene_slug)
+            effective = self._effective_scene_targets(scene_slug)
+            self._active_scene_targets = effective
+            self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
+            self._stamp_targets_with_command_metadata(None)
 
-        tasks: list = []
-        for entity_id, target in effective.items():
-            st = self.hass.states.get(entity_id)
-            is_on = st is not None and st.state == STATE_ON
-            want_on = target.get("state") == "on"
-            if want_on and not is_on:
-                tasks.append(self._apply_light_state(entity_id, raw[entity_id]))
-            elif not want_on and is_on:
-                tasks.append(self._apply_light_state(entity_id, {"state": "off"}))
-        if tasks:
-            await asyncio.gather(*tasks)
-        self._notify_state_change()
+            tasks: list = []
+            for entity_id, target in effective.items():
+                st = self.hass.states.get(entity_id)
+                is_on = st is not None and st.state == STATE_ON
+                want_on = target.get("state") == "on"
+                if want_on and not is_on:
+                    tasks.append(self._apply_light_state(entity_id, raw[entity_id]))
+                elif not want_on and is_on:
+                    tasks.append(self._apply_light_state(entity_id, {"state": "off"}))
+            if tasks:
+                await asyncio.gather(*tasks)
+            self._notify_state_change()
 
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
         """Check whether a light's HA state matches the active scene target.
