@@ -40,6 +40,9 @@ readable companion that highlights user-facing changes.
   sheds a per-activation fraction of each area's on-bulbs (50% for up to 5,
   80% for 6 or more), keeping the first-declared lights. Off commands, alerts,
   and `manual` areas are unaffected; non-manual areas restore when it clears.
+  While shedding, only individual lights are commanded: `light_clusters`
+  entities (Hue Zones) are never driven, so a zone captured as `on` in a
+  scene snapshot cannot relight shed bulbs.
 
 ### Changed
 

@@ -889,6 +889,15 @@ class AreaLightingController:
                 light_entities = apply_demand_response(
                     light_entities, [light.id for light in self.area.lights]
                 )
+                # Never drive a cluster entity under DR: only individual
+                # lights are shed, so a snapshot's zone entry survives as an
+                # `on` target and would relight shed members through the
+                # zone. cluster_specs stays as-is so kept members still
+                # coalesce into a zone command when they cover it entirely.
+                clusters = self._cluster_entity_ids()
+                light_entities = {
+                    eid: st for eid, st in light_entities.items() if eid not in clusters
+                }
             cluster_specs = [
                 (light.id, list(light.members))
                 for light in self.area.light_clusters
@@ -987,6 +996,10 @@ class AreaLightingController:
         toggles = self.hass.data.get(DOMAIN, {}).get("global")
         return toggles is not None and toggles.demand_response_active
 
+    def _cluster_entity_ids(self) -> set[str]:
+        """Entity ids of the area's Hue-Zone-style light clusters."""
+        return {cluster.id for cluster in self.area.light_clusters}
+
     @property
     def dr_shed_ids(self) -> frozenset[str]:
         """Individual lights the current activation shed for demand response."""
@@ -995,10 +1008,15 @@ class AreaLightingController:
     def _effective_scene_targets(self, scene_slug: str) -> dict[str, dict]:
         """Raw scene targets, with the demand-response shed filter applied
         when the global DR flag is active. Shed bulbs carry an off-target so
-        manual detection and self-heal treat them as intended-off."""
+        manual detection and self-heal treat them as intended-off. Cluster
+        entities are dropped under DR: a snapshot's zone entry would survive
+        as an `on` target (only individual lights are shed) and reconcile or
+        self-heal would relight shed members through the zone."""
         targets = self._resolve_raw_scene_targets(scene_slug)
         if self._demand_response_active():
             targets = apply_demand_response(targets, [light.id for light in self.area.lights])
+            clusters = self._cluster_entity_ids()
+            targets = {eid: st for eid, st in targets.items() if eid not in clusters}
         return targets
 
     def _compute_scene_shed_ids(self, scene_slug: str) -> frozenset[str]:

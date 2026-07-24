@@ -889,6 +889,9 @@ load during a utility demand-response event:
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
   switch immediately sheds already-lit non-manual areas; clearing it restores
   them.
+- While shedding, only individual lights are commanded: `light_clusters`
+  entities (Hue Zones) are never driven, so a zone captured as `on` in a scene
+  snapshot cannot relight shed bulbs.
 
 Drive the switch from any utility integration or automation with
 `switch.turn_on` / `switch.turn_off`.
