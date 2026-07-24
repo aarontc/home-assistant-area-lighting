@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from custom_components.area_lighting.area_state import ActivationSource
+from custom_components.area_lighting.const import BRIGHTNESS_STEP_DEFAULT
 from custom_components.area_lighting.global_state import GlobalToggles
 
 
@@ -118,3 +119,81 @@ async def test_dark_bring_up_sheds(hass: HomeAssistant, helper_entities, service
         c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
     }
     assert on == {"light.study_1", "light.study_2"}
+
+
+def _solo_scene_config() -> dict:
+    """The base 6-light config plus a 'solo' scene lighting only light.study_6.
+
+    study_6 sits in the config-order shed tail of the all-lights bring-up,
+    so restoring the remembered scene lights a bulb the bring-up must drop.
+    """
+    cfg = _config()
+    cfg["area_lighting"]["areas"][0]["scenes"].insert(
+        1,
+        {
+            "id": "solo",
+            "name": "Solo",
+            "entities": {"light.study_6": {"state": "on", "brightness": 200}},
+        },
+    )
+    return cfg
+
+
+@pytest.mark.integration
+async def test_dark_bring_up_converges_after_scene_restore(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Raise from dark restores the remembered scene, then converges to the
+    all-lights shed: a bulb the scene lit but the bring-up sheds ends OFF,
+    and tracking describes the bring-up (shed tail off-targets)."""
+    await _setup(hass, _solo_scene_config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+    ctrl._state.transition_to_scene("solo", ActivationSource.USER)
+
+    # Chronological recorder: the grouped service_calls fixture cannot answer
+    # which command landed last on study_6 (scene turn_on vs bring-up turn_off).
+    chrono: list[tuple[str, str, int | None]] = []
+
+    async def _record(call) -> None:
+        chrono.append((call.service, call.data["entity_id"], call.data.get("brightness")))
+
+    hass.services.async_register("light", "turn_on", _record)
+    hass.services.async_register("light", "turn_off", _record)
+
+    await ctrl._adjust_brightness(+1)
+    await hass.async_block_till_done()
+
+    step_brightness = round(255 * BRIGHTNESS_STEP_DEFAULT / 100)
+    final = {eid: (svc, brightness) for svc, eid, brightness in chrono}
+    assert final["light.study_1"] == ("turn_on", step_brightness)
+    assert final["light.study_2"] == ("turn_on", step_brightness)
+    for i in (3, 4, 5, 6):
+        assert final[f"light.study_{i}"][0] == "turn_off"
+    assert ctrl.dr_shed_ids == frozenset({f"light.study_{i}" for i in (3, 4, 5, 6)})
+    assert ctrl._active_scene_targets["light.study_6"]["state"] == "off"
+
+
+@pytest.mark.integration
+async def test_startup_restore_populates_circadian_shed_diagnostics(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A controller restored into circadian with DR active exposes the shed
+    set in diagnostics immediately, without driving any lights."""
+    from custom_components.area_lighting.controller import AreaLightingController
+
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+    ctrl._state.transition_to_circadian(ActivationSource.USER)
+    saved = ctrl.state_dict()
+
+    fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
+    fresh.load_persisted_state(saved)
+    service_calls.clear()
+    fresh.reconcile_startup_state()
+    await hass.async_block_till_done()
+
+    snap = fresh.diagnostic_snapshot()
+    assert set(snap["demand_response_shed"]) == {f"light.study_{i}" for i in (3, 4, 5, 6)}
+    assert len(service_calls) == 0

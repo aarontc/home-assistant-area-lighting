@@ -147,6 +147,96 @@ async def test_diagnostics_expose_demand_response(hass: HomeAssistant, helper_en
     assert set(snap["demand_response_shed"]) == {f"light.bright_room_{i}" for i in (3, 4, 5, 6)}
 
 
+def _skeleton_exclude_config() -> dict:
+    """6-light area with a skeleton 'all' scene excluding light.g_room_2."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "g_room",
+                    "name": "G Room",
+                    "event_handlers": True,
+                    "lights": [
+                        {"id": f"light.g_room_{i}", "roles": ["dimming"]} for i in range(1, 7)
+                    ],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "all", "name": "All", "group_exclude": ["light.g_room_2"]},
+                        {"id": "off", "name": "Off"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_skeleton_group_exclude_controller_matches_scene_entity(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Controller and scene-entity paths agree on a skeleton scene with
+    group_exclude under DR: the excluded light is untouched (stays off), the
+    shed is sized over the exclude-filtered on-set, and tracking marks the
+    excluded light and the shed tail as off-targets."""
+    for i in range(1, 7):
+        hass.states.async_set(f"light.g_room_{i}", "off", {})
+    assert await async_setup_component(hass, "area_lighting", _skeleton_exclude_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    ctrl = hass.data["area_lighting"]["controllers"]["g_room"]
+    _toggles(hass)._demand_response_active = True
+
+    # Scene-entity path (scene.py _apply_skeleton, the reference behavior).
+    service_calls.clear()
+    await hass.services.async_call(
+        "scene", "turn_on", {"entity_id": "scene.g_room_all"}, blocking=True
+    )
+    await hass.async_block_till_done()
+    scene_on, scene_off = _on_off(service_calls)
+
+    # Controller path.
+    service_calls.clear()
+    await ctrl._activate_scene("all", ActivationSource.USER)
+    await hass.async_block_till_done()
+    ctrl_on, ctrl_off = _on_off(service_calls)
+
+    # n=5 on-bulbs (g_room_2 excluded) -> keep 3: g_room_1, g_room_3, g_room_4.
+    assert scene_on == {"light.g_room_1", "light.g_room_3", "light.g_room_4"}
+    assert ctrl_on == scene_on
+    assert ctrl_off == scene_off
+    assert "light.g_room_2" not in (ctrl_on | ctrl_off)
+    assert ctrl.dr_shed_ids == frozenset({"light.g_room_5", "light.g_room_6"})
+    assert ctrl._active_scene_targets["light.g_room_1"]["state"] == "on"
+    assert ctrl._active_scene_targets["light.g_room_2"]["state"] == "off"
+    assert ctrl._active_scene_targets["light.g_room_5"]["state"] == "off"
+
+
+@pytest.mark.integration
+async def test_startup_restore_populates_scene_shed_diagnostics(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A controller restored into a scene with DR active exposes the shed
+    set in diagnostics immediately, without driving any lights."""
+    from custom_components.area_lighting.controller import AreaLightingController
+
+    await _setup(hass, _config(6, 6), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    ctrl._state.transition_to_scene("bright", ActivationSource.USER)
+    saved = ctrl.state_dict()
+
+    fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
+    fresh.load_persisted_state(saved)
+    service_calls.clear()
+    fresh.reconcile_startup_state()
+    await hass.async_block_till_done()
+
+    snap = fresh.diagnostic_snapshot()
+    assert set(snap["demand_response_shed"]) == {f"light.bright_room_{i}" for i in (3, 4, 5, 6)}
+    assert len(service_calls) == 0
+
+
 @pytest.mark.integration
 async def test_alert_bypasses_demand_response(
     hass: HomeAssistant, helper_entities, service_calls

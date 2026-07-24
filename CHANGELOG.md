@@ -59,6 +59,15 @@ readable companion that highlights user-facing changes.
   the final flag state (a reconcile that queued behind an in-flight one
   re-checks for a started alert before touching lights), and a flip that
   lands mid scene-activation is converged at the end of that activation.
+  Raising or lowering a fully-dark area (which restores the remembered
+  scene, then brings every light to the minimum step) converges to the
+  all-lights shed: the shed tail is explicitly turned off, so a bulb the
+  restored scene lit cannot survive the bring-up, and the shed tracking
+  follows. Skeleton scenes honor `group_exclude` identically in the
+  controller and the scene entity (excluded lights are left untouched
+  and never counted when sizing the shed), and a restart into an active
+  scene or circadian area recomputes the diagnostics shed list
+  immediately, without driving any lights.
 
 ### Changed
 

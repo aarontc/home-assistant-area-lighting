@@ -46,11 +46,13 @@ def apply_demand_response(
     targets: dict[str, dict],
     ordered_light_ids: list[str],
 ) -> dict[str, dict]:
-    """Return a copy of `targets` with the shed tail forced to off.
+    """Return `targets` with the config-order tail of the ON-set forced off.
 
     Only entities present in `ordered_light_ids` are eligible to shed. Shed
     entries are replaced with a fresh {"state": "off"} dict, so the caller's
-    original per-light state dicts are never mutated.
+    original per-light state dicts are never mutated. A shallow copy is
+    returned when anything is shed; the original mapping is returned
+    unchanged when nothing is shed (callers must not mutate it).
     """
     ordered_on = [eid for eid in ordered_light_ids if targets.get(eid, {}).get("state") == "on"]
     shed = ordered_on[keep_count(len(ordered_on)) :]

@@ -303,8 +303,20 @@ class AreaLightingController:
         to MANUAL so the tracked state matches reality.  Only runs when
         state was actually loaded from persistence (not on first-ever
         startup with default OFF).
+
+        When the persisted state is a scene or circadian and demand
+        response is already active, the shed set is recomputed so
+        diagnostics are accurate immediately after restart. No lights are
+        driven here: physical state is preserved.
         """
-        if not self._state_was_persisted or not self._state.is_off:
+        if not self._state_was_persisted:
+            return
+        if self._demand_response_active():
+            if self._state.is_scene:
+                self._dr_shed_ids = self._compute_scene_shed_ids(self._state.scene_slug)
+            elif self._state.is_circadian:
+                self._dr_shed_ids = self._compute_circadian_shed_ids()
+        if not self._state.is_off:
             return
         for light in self.area.lights:
             state = self.hass.states.get(light.id)
@@ -964,13 +976,11 @@ class AreaLightingController:
 
         storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
         stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
+        scene_cfg = self._get_scene_config(scene_slug)
 
-        entities: dict[str, Any] | None
-        if stored:
-            entities = stored
-        else:
-            scene_cfg = self._get_scene_config(scene_slug)
-            entities = scene_cfg.entities if scene_cfg and scene_cfg.entities else None
+        entities: dict[str, Any] | None = stored or (
+            scene_cfg.entities if scene_cfg and scene_cfg.entities else None
+        )
 
         if entities:
             # Filter to light.* entities only (legacy templater scene
@@ -1004,17 +1014,27 @@ class AreaLightingController:
                 ]
             )
         else:
-            # No snapshot -> role-based on/off. Under DR, shed the on-set tail
-            # and skip cluster entities (a cluster command would turn on shed
-            # members through the zone).
+            # No snapshot -> role-based on/off. Lights in the scene's
+            # group_exclude are skipped entirely (matching
+            # scene.py._apply_skeleton) so the two apply paths issue the same
+            # commands. Under DR, shed the on-set tail (sized over the
+            # exclude-filtered on-set) and skip cluster entities (a cluster
+            # command would turn on shed members through the zone).
+            excluded = set(scene_cfg.group_exclude) if scene_cfg else set()
             dr = self._demand_response_active()
             shed: set[str] = set()
             if dr:
                 ordered = [light.id for light in self.area.lights]
-                on_ids = [light.id for light in self.area.lights if light.in_scene(scene_slug)]
+                on_ids = [
+                    light.id
+                    for light in self.area.lights
+                    if light.in_scene(scene_slug) and light.id not in excluded
+                ]
                 shed = set(demand_response_shed_ids(ordered, on_ids))
             tasks = []
             for light in self.area.all_lights:
+                if light.id in excluded:
+                    continue
                 if dr and light.is_cluster:
                     continue
                 svc_data: dict[str, Any] = {"entity_id": light.id}
@@ -1068,20 +1088,26 @@ class AreaLightingController:
 
         storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
         stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
+        scene_cfg = self._get_scene_config(scene_slug)
 
-        entities: dict[str, Any] | None
-        if stored:
-            entities = stored
-        else:
-            scene_cfg = self._get_scene_config(scene_slug)
-            entities = scene_cfg.entities if scene_cfg and scene_cfg.entities else None
+        entities: dict[str, Any] | None = stored or (
+            scene_cfg.entities if scene_cfg and scene_cfg.entities else None
+        )
 
         if entities:
             return {eid: state for eid, state in entities.items() if eid.startswith("light.")}
 
-        # Skeleton fallback: role-based on/off, no attribute targets
+        # Skeleton fallback: role-based on/off, no attribute targets. Lights
+        # in the scene's group_exclude are treated as not-in-scene (matching
+        # scene.py._apply_skeleton) so DR shed sizing and tracking agree with
+        # the scene entity's apply path.
+        excluded = set(scene_cfg.group_exclude) if scene_cfg else set()
         return {
-            light.id: {"state": "on" if light.in_scene(scene_slug) else "off"}
+            light.id: {
+                "state": (
+                    "on" if light.in_scene(scene_slug) and light.id not in excluded else "off"
+                )
+            }
             for light in self.area.all_lights
         }
 
@@ -1359,15 +1385,36 @@ class AreaLightingController:
         dimming level.
 
         Under demand response, only the kept individual lights come up (cluster
-        entities are skipped so shed members are not lit through a zone).
+        entities are skipped so shed members are not lit through a zone). The
+        shed tail is explicitly turned OFF so a bulb a preceding scene
+        activation lit does not survive the all-lights shed, and tracking is
+        updated to match: _dr_shed_ids becomes the all-lights shed set and the
+        shed ids carry off-targets so self-heal and the DR reconcile treat
+        them as intended-off.
         """
         brightness = max(1, min(255, round(255 * pct / 100)))
         if self._demand_response_active():
             ordered = [light.id for light in self.area.lights]
-            shed = set(demand_response_shed_ids(ordered, ordered))
-            entity_ids = [eid for eid in ordered if eid not in shed]
-        else:
-            entity_ids = [light.id for light in self.area.all_lights]
+            shed = demand_response_shed_ids(ordered, ordered)
+            shed_set = set(shed)
+            kept = [eid for eid in ordered if eid not in shed_set]
+            self._dr_shed_ids = frozenset(shed_set)
+            now = time.monotonic()
+            for eid in shed:
+                self._active_scene_targets[eid] = {
+                    "state": "off",
+                    "commanded_at": now,
+                    "transition": 0.0,
+                }
+            tasks = [
+                self._call_service("light.turn_on", entity_id=eid, brightness=brightness)
+                for eid in kept
+            ]
+            tasks += [self._call_service("light.turn_off", entity_id=eid) for eid in shed]
+            if tasks:
+                await asyncio.gather(*tasks)
+            return
+        entity_ids = [light.id for light in self.area.all_lights]
         if entity_ids:
             await asyncio.gather(
                 *[

@@ -902,6 +902,11 @@ load during a utility demand-response event:
   or suspends it (dimming) stops route reconciliation before the circadian
   switches turn off, so the outgoing circadian setup never fights the next
   state.
+- Raise / lower from a fully-dark area converges to the all-lights shed: the
+  kept bulbs come up at the minimum step and the shed tail is turned off,
+  even when the restored scene had lit one of the shed bulbs. Scenes with
+  `group_exclude` size the shed over the exclude-filtered on-set and leave
+  excluded lights untouched.
 
 Drive the switch from any utility integration or automation with
 `switch.turn_on` / `switch.turn_off`.
