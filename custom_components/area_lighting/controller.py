@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from homeassistant.const import STATE_ON
@@ -845,13 +846,20 @@ class AreaLightingController:
         (sizing it over every route would over-count and keep inactive-route
         lights at the expense of active ones), plus circadian-switch lights
         outside any route. Without routes: all circadian-switch lights.
+
+        The active route is selected with the router's current index, so the
+        hysteresis grace applies exactly as it does in the router's own
+        reconcile: inside the hysteresis band both agree on the kept route.
+        A route's cluster entities are expanded to their members (the shed
+        universe is individual lights).
         """
         routes = self.area.circadian_kelvin_routes
         if routes is None:
             return [light.id for light in self.area.lights if light.circadian_switch]
-        index = select_route(routes.routes, self._route_source_colortemp(), None)
-        active = set(routes.routes[index].lights)
-        route_lights = routes.all_route_lights
+        current_idx = self._kelvin_router.current_index if self._kelvin_router is not None else None
+        index = select_route(routes.routes, self._route_source_colortemp(), current_idx)
+        active = self._expand_cluster_ids(routes.routes[index].lights)
+        route_lights = self._expand_cluster_ids(routes.all_route_lights)
         return [
             light.id
             for light in self.area.lights
@@ -882,6 +890,12 @@ class AreaLightingController:
                 self.area.circadian_kelvin_routes is not None
                 and light.id in self.area.circadian_kelvin_routes.all_route_lights
             ):
+                continue
+            if self._demand_response_active() and light.is_cluster:
+                # Never drive a cluster entity under DR: a zone turn_on would
+                # relight shed members through the aggregate. Its members are
+                # driven individually; clusters are not in the shed universe,
+                # so no turn_off either.
                 continue
             if light.id in self._dr_shed_ids:
                 # Shed for demand response: force off (route-light shedding is
@@ -941,7 +955,9 @@ class AreaLightingController:
 
         flipped = old_shed ^ new_shed
         routes = self.area.circadian_kelvin_routes
-        route_lights = routes.all_route_lights if routes else set()
+        # Cluster route entities expand to members: a flipped member of a
+        # routed zone is the router's to drive, not this flip loop's.
+        route_lights = self._expand_cluster_ids(routes.all_route_lights) if routes else set()
         tasks: list = []
         for light in self.area.lights:
             if light.id not in flipped or light.id in route_lights:
@@ -1133,6 +1149,18 @@ class AreaLightingController:
     def _cluster_entity_ids(self) -> set[str]:
         """Entity ids of the area's Hue-Zone-style light clusters."""
         return {cluster.id for cluster in self.area.light_clusters}
+
+    def _expand_cluster_ids(self, entity_ids: Iterable[str]) -> set[str]:
+        """Replace cluster entity ids with their member ids (others pass
+        through). Used wherever the shed universe (individual lights) must
+        line up with a set that may contain cluster entities, e.g. a kelvin
+        route whose `lights` entry is a Hue Zone."""
+        members_by_cluster = {c.id: c.members for c in self.area.light_clusters}
+        out: set[str] = set()
+        for entity_id in entity_ids:
+            members = members_by_cluster.get(entity_id)
+            out.update(members if members else (entity_id,))
+        return out
 
     @property
     def dr_shed_ids(self) -> frozenset[str]:
@@ -1369,10 +1397,18 @@ class AreaLightingController:
         return self.area.brightness_step_pct or BRIGHTNESS_STEP_DEFAULT
 
     def _on_light_entity_ids(self) -> list[str]:
-        """Return IDs of lights in this area that are currently 'on'."""
+        """Return IDs of lights in this area that are currently 'on'.
+
+        Under demand response, cluster entities are excluded: stepping a zone
+        aggregate would drive shed members back on through the zone, so only
+        the individual lights are stepped.
+        """
+        lights = self.area.all_lights
+        if self._demand_response_active():
+            lights = [light for light in lights if not light.is_cluster]
         return [
             light.id
-            for light in self.area.all_lights
+            for light in lights
             if (st := self.hass.states.get(light.id)) and st.state == "on"
         ]
 
@@ -1789,6 +1825,7 @@ class AreaLightingController:
         else:
             await self._disable_circadian_switches()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
+            self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()
         await self._sync_kelvin_router()

@@ -69,7 +69,19 @@ readable companion that highlights user-facing changes.
   target, so a demand-response reconcile cannot turn them off and
   toggling one never flips the area to manual. A restart into an active
   scene or circadian area recomputes the diagnostics shed list
-  immediately, without driving any lights.
+  immediately, without driving any lights. An externally activated visual
+  scene (`scene.turn_on`) records its shed set too, so clearing the flag
+  restores its shed bulbs. Circadian shed sizing uses the route selection
+  hysteresis exactly as the kelvin router does, so inside the hysteresis
+  band both agree on the active route and a multi-bulb route is never
+  fully relit. Cluster entities are never driven on while shedding in any
+  path: circadian activation skips a cluster bound to a circadian switch,
+  brightness raise/lower steps only individual member bulbs, and a kelvin
+  route whose light is a cluster entity is expanded to its members (kept
+  on, shed off); without demand response, clusters batch exactly as
+  before. A route reconcile that loses its listener while asking the
+  controller to refresh the shed set (the area is leaving circadian)
+  drops its route commands instead of fighting the incoming scene.
 
 ### Changed
 

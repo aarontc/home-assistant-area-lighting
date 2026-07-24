@@ -889,13 +889,17 @@ load during a utility demand-response event:
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
   switch immediately sheds already-lit non-manual areas; clearing it restores
   them.
-- While shedding, `light_clusters` entities (Hue Zones) are ignored as direct
-  scene targets: the individual member bulbs are driven instead, so a zone
-  captured as `on` in a scene snapshot cannot relight shed bulbs. Kept members
+- While shedding, `light_clusters` entities (Hue Zones) are never driven on
+  in any path: they are ignored as direct scene targets, skipped by circadian
+  activation (even when a cluster carries a `circadian_switch`), excluded
+  from brightness raise / lower stepping, and a kelvin route whose light is a
+  cluster entity is expanded to its member bulbs. The individual members are
+  driven instead, so a zone command cannot relight shed bulbs. Kept members
   still coalesce into a single zone command when every member of that zone is
-  kept.
+  kept, and without demand response clusters batch exactly as before.
 - With `circadian_kelvin_routes`, circadian shedding counts only the currently
-  active route's lights (plus circadian lights outside any route) and is
+  active route's lights (plus circadian lights outside any route), selected
+  with the same hysteresis the router uses, and is
   recomputed when the route changes, so a route swap re-sheds correctly. A
   recompute only re-drives lights whose shed status actually changed, and
   every path that leaves circadian (scene changes, off fades, manual changes)

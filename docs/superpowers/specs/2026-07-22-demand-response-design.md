@@ -68,6 +68,15 @@ target. DR therefore needs zero cluster-specific logic:
 - Shed *all* of a cluster's members (all forced off) -> they share the "off"
   cohort and coalesce into a single group `turn_off`. Also correct, and optimal.
 
+**Amendment (hardening):** "zero cluster-specific logic" held only for the
+dispatcher's cohort logic. Every path that can command a cluster entity
+directly must refuse to drive it **on** while DR is active, because a zone
+`turn_on` relights shed members through the aggregate: scene targets drop
+cluster entries (`_effective_scene_targets` / `_apply_scene_data`), circadian
+activation skips clusters, brightness stepping excludes them from the on-set,
+and the kelvin router expands cluster route entities to members (Section 5.1).
+Clusters remain a batching optimization for kept cohorts and full-off.
+
 **Recorded assumption:** cluster `members` are always also declared in `lights`
 (as `CONFIGURATION.md` prescribes and the worked example demonstrates). If a
 future config allows members-only bulbs, either (a) extend the universe to
@@ -173,6 +182,26 @@ lights (plus circadian-switch lights outside any route) and must be
 router still never computes a ratio itself, it asks the controller to refresh
 the set at the top of every reconcile and then reads it.
 
+Two consistency rules keep the controller's sizing and the router's dispatch
+agreeing on the same route:
+
+- **Hysteresis-consistent sizing.** The controller selects the active route
+  with the router's `current_index` (exposed as a read-only property), so
+  `select_route`'s hysteresis grace applies identically in both places. The
+  router publishes its new index **before** it asks the controller to refresh
+  the shed set, so the shed is always sized over the route the reconcile is
+  activating. Without this, a colortemp inside the hysteresis band would make
+  the controller size the shed over the strict-selection route while the
+  router keeps the previous route lit (a multi-bulb active route could be
+  fully relit).
+- **Cluster route expansion.** A route's `lights` may name a cluster entity
+  (the validator allows it). The shed universe is individual lights, so both
+  the controller's on-set sizing and the router's dispatch expand cluster
+  route entities to their members while DR is active; the cluster entity is
+  never commanded (a zone `turn_on` would relight shed members through the
+  aggregate, and a zone `turn_off` would kill kept members). Without DR the
+  cluster entity stays the route target (batching preserved).
+
 ## 6. On-emitters and where the filter goes
 
 There is no single turn-on chokepoint. Each independent on-emitter must run its
@@ -183,9 +212,9 @@ Alerts are the sole exception.
 |---|---|---|
 | Controller scene fan-out | `_apply_scene_data` `controller.py:822`, via `_effective_scene_targets` | Filtered at resolution (Section 5). |
 | Motion / remote / ambience / favorite / leader-follower | all route through `lighting_on` -> `_activate_scene` | Inherit the scene filter for free. No extra work. |
-| Circadian activation | `_activate_circadian` `controller.py:782` | Build its on-set (with kelvin routes: the ACTIVE route's lights plus non-route circadian lights, per Section 5.1's routed-circadian amendment), run through `apply_demand_response`, turn on only kept bulbs. Record shed bulbs as off so the router agrees (Section 6.1). |
-| Kelvin router | `CircadianKelvinRouter._reconcile` `circadian_kelvin_router.py:115` | At the top of every reconcile, ask the controller to refresh the shed set for the current colortemp (`recompute_and_apply_circadian_dr`), then skip any routed light it lists. The router itself never computes a ratio. |
-| Raise/lower dark-room bring-up | `_set_all_lights_to_pct` `controller.py:1101` | Build the all-lights on-target, run through the primitive; only kept bulbs come up. `_step_on_lights_pct` (already-on lights only) needs no change. |
+| Circadian activation | `_activate_circadian` `controller.py:782` | Build its on-set (with kelvin routes: the ACTIVE route's lights plus non-route circadian lights, per Section 5.1's routed-circadian amendment), run through `apply_demand_response`, turn on only kept bulbs. Cluster entities are skipped under DR (a cluster with a circadian switch would relight shed members through the zone; members are driven individually). Record shed bulbs as off so the router agrees (Section 6.1). |
+| Kelvin router | `CircadianKelvinRouter._reconcile` `circadian_kelvin_router.py:115` | Publish the newly selected route index, then ask the controller to refresh the shed set for the current colortemp (`recompute_and_apply_circadian_dr`), re-check that the router is still active after that await (a `deactivate()` interleaved with it drops the dispatch), then skip any routed light the shed set lists. Cluster route entities are expanded to members under DR (Section 5.1). The router itself never computes a ratio. |
+| Raise/lower dark-room bring-up | `_set_all_lights_to_pct` `controller.py:1101` | Build the all-lights on-target, run through the primitive; only kept bulbs come up. `_step_on_lights_pct` (already-on lights only) excludes cluster entities under DR so a step never drives a zone aggregate. |
 | HA Scene entity (external `scene.turn_on`) | `scene.py` `_apply_stored:127` / `_apply_skeleton:188` | Build its target dict and run through the primitive (needs the area's ordered light ids + the DR flag from `hass.data[DOMAIN]["global"]`). The controller's `handle_scene_activated` tracking resolves via `_effective_scene_targets`, so tracking stays consistent. |
 | Alerts | `alert.py:234` | **Bypass.** Alerts already snapshot/restore and set `_alert_active`; DR does not filter them (safety signals). |
 

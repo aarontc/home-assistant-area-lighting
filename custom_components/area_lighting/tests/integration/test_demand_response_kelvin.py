@@ -512,3 +512,248 @@ async def test_external_off_shed_clear_sticks(
     assert ctrl.dr_shed_ids == frozenset()
     assert ctrl._kelvin_router._unsub is None
     assert _light_calls(service_calls, "turn_on") == set()
+
+
+_DEN_SWITCH = "switch.circadian_lighting_den_den_circadian"
+
+
+def _den_config() -> dict:
+    """Multi-bulb BANDED route (3 spots) + single-bulb fallback, so the
+    hysteresis band around the banded route's edges is where controller and
+    router route selection can disagree."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "den",
+                    "name": "Den",
+                    "event_handlers": True,
+                    "circadian_switches": [
+                        {"name": "Den", "max_brightness": 100, "min_brightness": 20},
+                    ],
+                    "lights": [
+                        {
+                            "id": f"light.den_spot_{i}",
+                            "circadian_switch": "Den",
+                            "circadian_type": "ct",
+                        }
+                        for i in (1, 2, 3)
+                    ]
+                    + [
+                        {
+                            "id": "light.den_lamp",
+                            "circadian_switch": "Den",
+                            "circadian_type": "ct",
+                        }
+                    ],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "off", "name": "Off"},
+                    ],
+                    "circadian_kelvin_routes": {
+                        "crossfade_seconds": 1.0,
+                        "routes": [
+                            {
+                                "kelvin_range": [4500, 5500],
+                                "lights": [
+                                    "light.den_spot_1",
+                                    "light.den_spot_2",
+                                    "light.den_spot_3",
+                                ],
+                            },
+                            {"lights": ["light.den_lamp"]},
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+
+async def _setup_den(hass: HomeAssistant, colortemp: int) -> None:
+    for eid in (
+        "light.den_spot_1",
+        "light.den_spot_2",
+        "light.den_spot_3",
+        "light.den_lamp",
+    ):
+        hass.states.async_set(eid, "off", {})
+    hass.states.async_set(_DEN_SWITCH, "on", {"brightness": 75.0, "colortemp": colortemp})
+    assert await async_setup_component(hass, "area_lighting", _den_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+
+
+@pytest.mark.integration
+async def test_hysteresis_band_shed_sizing_matches_router(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Inside the hysteresis band the router keeps the banded route active.
+    The controller must size the shed set over that SAME route (hysteresis-
+    consistent), not the strict-selection fallback, so the multi-bulb active
+    route is never fully relit."""
+    await _setup_den(hass, colortemp=5000)  # banded route (3 spots) active
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    # Active route on-set = 3 spots: n=3 -> keep 2 -> shed the tail spot.
+    assert ctrl.dr_shed_ids == frozenset({"light.den_spot_3"})
+
+    # Physical result of the bring-up: kept spots on, shed spot and lamp off.
+    hass.states.async_set("light.den_spot_1", "on", {})
+    hass.states.async_set("light.den_spot_2", "on", {})
+    hass.states.async_set("light.den_spot_3", "off", {})
+    hass.states.async_set("light.den_lamp", "off", {})
+    await hass.async_block_till_done()
+
+    # 5510 is outside the strict [4500, 5500] band but inside the +25K
+    # hysteresis grace: the router keeps the banded route active.
+    service_calls.clear()
+    hass.states.async_set(_DEN_SWITCH, "on", {"brightness": 75.0, "colortemp": 5510})
+    await hass.async_block_till_done()
+
+    assert ctrl._kelvin_router.current_index == 0
+    assert ctrl.dr_shed_ids == frozenset({"light.den_spot_3"})
+    # Route and shed set are both unchanged: a fully idempotent reconcile.
+    # In particular the shed spot must NOT be relit.
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
+@pytest.mark.integration
+async def test_deactivate_during_controller_await_drops_route_dispatch(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A deactivate() interleaved with the reconcile's controller await must
+    drop the route dispatch: the area is leaving circadian and route
+    commands would fight the incoming scene."""
+    import asyncio
+
+    await _setup(hass, colortemp=5000)  # banded route (fluorescent) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    hass.states.async_set("light.kitchen_fluorescent", "on", {})
+    await hass.async_block_till_done()
+
+    entered = asyncio.Event()
+    gate = asyncio.Event()
+
+    async def _gated_recompute() -> None:
+        entered.set()
+        await gate.wait()
+
+    ctrl.recompute_and_apply_circadian_dr = _gated_recompute
+
+    # A colortemp change that would swap routes (banded -> fallback).
+    service_calls.clear()
+    hass.states.async_set(_SWITCH, "on", {"brightness": 75.0, "colortemp": 3000})
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    # The reconcile is parked on the controller await: deactivate now.
+    ctrl._kelvin_router.deactivate()
+    gate.set()
+    await hass.async_block_till_done()
+
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
+_MEDIA_SOURCE = "sensor.media_colortemp"
+_MEDIA_ZONE = "light.media_zone"
+_MEDIA_MEMBERS = ["light.media_1", "light.media_2", "light.media_3"]
+
+
+def _media_cluster_route_config() -> dict:
+    """A banded route whose sole `lights` entry is a CLUSTER entity (allowed
+    by the validator), plus a single-bulb fallback."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "media",
+                    "name": "Media",
+                    "event_handlers": True,
+                    "lights": [{"id": eid, "roles": ["dimming"]} for eid in _MEDIA_MEMBERS]
+                    + [{"id": "light.media_lamp", "roles": ["dimming"]}],
+                    "light_clusters": [{"id": _MEDIA_ZONE, "members": list(_MEDIA_MEMBERS)}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "off", "name": "Off"},
+                    ],
+                    "circadian_kelvin_routes": {
+                        "source": _MEDIA_SOURCE,
+                        "crossfade_seconds": 1.0,
+                        "routes": [
+                            {"kelvin_range": [4500, 5500], "lights": [_MEDIA_ZONE]},
+                            {"lights": ["light.media_lamp"]},
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+
+async def _setup_media(hass: HomeAssistant, colortemp: int) -> None:
+    for eid in [*_MEDIA_MEMBERS, _MEDIA_ZONE, "light.media_lamp"]:
+        hass.states.async_set(eid, "off", {})
+    hass.states.async_set(_MEDIA_SOURCE, "0", {"colortemp": colortemp})
+    assert await async_setup_component(hass, "area_lighting", _media_cluster_route_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+
+
+@pytest.mark.integration
+async def test_cluster_route_expands_to_members_under_dr(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Under DR a cluster route entity is driven as its individual members
+    (kept on, shed off); the cluster entity itself is never commanded."""
+    await _setup_media(hass, colortemp=5000)  # banded route (zone) active
+    ctrl = hass.data["area_lighting"]["controllers"]["media"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+
+    # Expanded active route on-set = 3 members: n=3 -> keep 2 -> shed tail.
+    assert ctrl.dr_shed_ids == frozenset({"light.media_3"})
+    on = _light_calls(service_calls, "turn_on")
+    assert on == {"light.media_1", "light.media_2"}
+    assert _MEDIA_ZONE not in _light_calls(service_calls, "turn_off")
+
+    # Physical result: kept members on, everything else off.
+    hass.states.async_set("light.media_1", "on", {})
+    hass.states.async_set("light.media_2", "on", {})
+    await hass.async_block_till_done()
+
+    # Route change to the fallback lamp: the members are turned off
+    # individually; the cluster entity is still never commanded.
+    service_calls.clear()
+    hass.states.async_set(_MEDIA_SOURCE, "0", {"colortemp": 3000})
+    await hass.async_block_till_done()
+
+    assert ctrl.dr_shed_ids == frozenset()
+    assert _light_calls(service_calls, "turn_on") == {"light.media_lamp"}
+    assert _light_calls(service_calls, "turn_off") == {"light.media_1", "light.media_2"}
+
+
+@pytest.mark.integration
+async def test_cluster_route_batches_without_dr(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Without DR the cluster entity stays the route target (batching)."""
+    await _setup_media(hass, colortemp=5000)  # banded route (zone) active
+    ctrl = hass.data["area_lighting"]["controllers"]["media"]
+
+    service_calls.clear()
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+
+    on = _light_calls(service_calls, "turn_on")
+    assert on == {_MEDIA_ZONE}

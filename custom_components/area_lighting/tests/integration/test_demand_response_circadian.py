@@ -121,6 +121,53 @@ async def test_dark_bring_up_sheds(hass: HomeAssistant, helper_entities, service
     assert on == {"light.study_1", "light.study_2"}
 
 
+def _cluster_switch_config() -> dict:
+    """The base 6-light config plus a Hue-Zone cluster over all of them that
+    itself carries the circadian switch (a cluster turn_on would relight
+    shed members through the zone)."""
+    cfg = _config()
+    cfg["area_lighting"]["areas"][0]["light_clusters"] = [
+        {
+            "id": "light.study_all",
+            "members": [f"light.study_{i}" for i in range(1, 7)],
+            "circadian_switch": "Main",
+            "circadian_type": "ct",
+        }
+    ]
+    return cfg
+
+
+@pytest.mark.integration
+async def test_circadian_never_drives_cluster_entity_under_dr(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A cluster with a circadian switch must be skipped under DR: its
+    members are driven individually (kept on, shed off) and the cluster is
+    neither turned on (would relight shed members) nor turned off (clusters
+    are not in the shed universe)."""
+    hass.states.async_set("light.study_all", "off", {})
+    await _setup(hass, _cluster_switch_config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    on = {
+        c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
+    }
+    off = {
+        c.data["entity_id"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert on == {"light.study_1", "light.study_2"}
+    assert {f"light.study_{i}" for i in (3, 4, 5, 6)} <= off
+    assert "light.study_all" not in on
+    assert "light.study_all" not in off
+
+
 def _solo_scene_config() -> dict:
     """The base 6-light config plus a 'solo' scene lighting only light.study_6.
 

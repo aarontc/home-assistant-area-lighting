@@ -62,3 +62,37 @@ async def test_scene_turn_on_is_filtered_under_dr(
         c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
     }
     assert on == {"light.gallery_1", "light.gallery_2"}
+
+
+@pytest.mark.integration
+async def test_external_visual_scene_records_shed_set(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """External visual-scene tracking under DR must record the shed set, so a
+    later DR-off reconcile knows which bulbs to restore."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["gallery"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.handle_scene_activated("bright")
+    await hass.async_block_till_done()
+
+    shed = {f"light.gallery_{i}" for i in (3, 4, 5, 6)}
+    assert ctrl.dr_shed_ids == frozenset(shed)
+
+    # Physical state matches the DR outcome: kept on, shed off. Clearing the
+    # flag and reconciling must restore exactly the shed bulbs.
+    for i in (1, 2):
+        hass.states.async_set(f"light.gallery_{i}", "on", {"brightness": 200})
+    for i in (3, 4, 5, 6):
+        hass.states.async_set(f"light.gallery_{i}", "off", {})
+    _toggles(hass)._demand_response_active = False
+
+    service_calls.clear()
+    await ctrl.async_reconcile_demand_response()
+    await hass.async_block_till_done()
+
+    on = {
+        c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
+    }
+    assert on == shed

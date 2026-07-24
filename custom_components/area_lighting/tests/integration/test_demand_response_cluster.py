@@ -195,3 +195,27 @@ async def test_dr_all_kept_subcluster_batches_into_single_zone_command(
     assert on == {SUBCLUSTER}
     assert off >= SHED
     assert not off & KEPT
+
+
+@pytest.mark.integration
+async def test_dr_brightness_step_excludes_cluster_entity(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Stepping brightness under DR must not drive the zone aggregate: a
+    cluster command would step shed members back on through the zone."""
+    await _setup(hass)
+    ctrl = hass.data["area_lighting"]["controllers"]["zone_room"]
+    _toggles(hass)._demand_response_active = True
+
+    # Members and the zone aggregate all read "on" (e.g. pre-DR lighting).
+    for entity_id in [*MEMBERS, ZONE]:
+        hass.states.async_set(entity_id, "on", {"brightness": 200})
+
+    service_calls.clear()
+    await ctrl.lighting_raise()
+    await hass.async_block_till_done()
+
+    on, off = _on_off(service_calls)
+    assert ZONE not in on
+    assert on == set(MEMBERS)
+    assert off == set()

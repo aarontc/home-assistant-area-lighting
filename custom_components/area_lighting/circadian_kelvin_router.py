@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
@@ -88,6 +88,16 @@ class CircadianKelvinRouter:
         self._last_shed_ids: frozenset[str] = frozenset()
         self._reconcile_lock = asyncio.Lock()
 
+    @property
+    def current_index(self) -> int | None:
+        """Index of the currently-active route (None while inactive).
+
+        Exposed so the controller can size the circadian demand-response
+        shed set over the SAME route this router considers active
+        (select_route with this index applies the hysteresis grace).
+        """
+        return self._current_index
+
     async def sync_to_state(self, scene_slug: str | None) -> None:
         """Called after every controller state transition.
 
@@ -139,6 +149,14 @@ class CircadianKelvinRouter:
                 # direct call from sync_to_state("circadian") is unaffected:
                 # it runs after _unsub is set.
                 return
+            colortemp = self._read_colortemp()
+            prev_index = self._current_index
+            new_index = select_route(self._config.routes, colortemp, prev_index)
+            # Publish the selection BEFORE the controller refreshes the shed
+            # set, so the controller sizes the shed over the route this
+            # reconcile is activating (hysteresis-consistent: it reads
+            # current_index back and passes it to select_route).
+            self._current_index = new_index
             ctrl = self._controller()
             if ctrl is not None:
                 # The circadian shed set is sized over the ACTIVE route, so a
@@ -146,19 +164,25 @@ class CircadianKelvinRouter:
                 # it (and converge its non-route circadian lights) before we
                 # read it. Never calls back into this router.
                 await ctrl.recompute_and_apply_circadian_dr()
-            colortemp = self._read_colortemp()
-            new_index = select_route(self._config.routes, colortemp, self._current_index)
+            if self._unsub is None:
+                # deactivate() ran while the controller call above was in
+                # flight: the area is leaving (or has left) circadian, so
+                # dispatching route commands now would fight the incoming
+                # scene.
+                return
             shed = frozenset(ctrl.dr_shed_ids) if ctrl is not None else frozenset()
 
-            if new_index == self._current_index and shed == self._last_shed_ids:
+            if new_index == prev_index and shed == self._last_shed_ids:
                 return
 
-            prev_index = self._current_index
-            self._current_index = new_index
             self._last_shed_ids = shed
             active = self._config.routes[new_index]
-            active_lights = set(active.lights) - shed
-            inactive_lights = self._config.all_route_lights - active_lights
+            cluster_members = self._cluster_members_under_dr(ctrl)
+            active_lights = self._expand_clusters(active.lights, cluster_members) - shed
+            inactive_lights = (
+                self._expand_clusters(self._config.all_route_lights, cluster_members)
+                - active_lights
+            )
 
             # Diff against current HA state: only issue calls for lights that
             # need to change, so reconciliation is truly idempotent.
@@ -209,6 +233,28 @@ class CircadianKelvinRouter:
             )
             if tasks:
                 await asyncio.gather(*tasks)
+
+    def _cluster_members_under_dr(self, ctrl: Any) -> dict[str, list[str]]:
+        """Cluster entity id -> member ids, non-empty only under demand
+        response. While DR is active a route's cluster entity must be driven
+        as its individual members (a zone turn_on would relight shed members
+        through the aggregate); without DR clusters stay as-is to preserve
+        batching."""
+        if ctrl is None or not ctrl.demand_response_active:
+            return {}
+        return {c.id: list(c.members) for c in ctrl.area.light_clusters if c.members}
+
+    @staticmethod
+    def _expand_clusters(
+        entity_ids: Iterable[str],
+        cluster_members: dict[str, list[str]],
+    ) -> set[str]:
+        """Replace cluster entity ids with their members; others pass through."""
+        out: set[str] = set()
+        for entity_id in entity_ids:
+            members = cluster_members.get(entity_id)
+            out.update(members if members else (entity_id,))
+        return out
 
     def _describe_route(self, index: int) -> str:
         """Return a human-readable label for a route by index."""
