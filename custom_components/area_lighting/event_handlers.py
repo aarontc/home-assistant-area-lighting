@@ -517,6 +517,13 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             _skip("alert pattern active", entity_id)
             return
 
+        # Lights in the active scene's group_exclude are not managed by the
+        # scene at all (they carry no target), so their state changes are
+        # never overrides of it.
+        if ctrl.is_group_excluded(entity_id):
+            _skip("group_exclude for active scene", entity_id)
+            return
+
         # Grace period: ignore all events in the window immediately
         # after a scene transition (covers intermediate Hue states
         # like old-brightness-before-new-target).

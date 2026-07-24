@@ -65,7 +65,9 @@ readable companion that highlights user-facing changes.
   restored scene lit cannot survive the bring-up, and the shed tracking
   follows. Skeleton scenes honor `group_exclude` identically in the
   controller and the scene entity (excluded lights are left untouched
-  and never counted when sizing the shed), and a restart into an active
+  and never counted when sizing the shed): they carry no tracked scene
+  target, so a demand-response reconcile cannot turn them off and
+  toggling one never flips the area to manual. A restart into an active
   scene or circadian area recomputes the diagnostics shed list
   immediately, without driving any lights.
 

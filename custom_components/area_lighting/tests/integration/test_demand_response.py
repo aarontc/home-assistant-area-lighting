@@ -171,15 +171,18 @@ def _skeleton_exclude_config() -> dict:
 
 
 @pytest.mark.integration
-async def test_skeleton_group_exclude_controller_matches_scene_entity(
+async def test_skeleton_group_exclude_light_left_untracked_and_untouched(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
-    """Controller and scene-entity paths agree on a skeleton scene with
-    group_exclude under DR: the excluded light is untouched (stays off), the
-    shed is sized over the exclude-filtered on-set, and tracking marks the
-    excluded light and the shed tail as off-targets."""
+    """group_exclude means LEFT UNTOUCHED: a physically-on excluded light
+    gets no command from either apply path, has no entry in the tracked
+    targets (an off-target there would let reconcile or self-heal turn it
+    off), and survives a DR reconcile unchanged. The shed is still sized
+    over the exclude-filtered on-set, matching scene.py."""
     for i in range(1, 7):
         hass.states.async_set(f"light.g_room_{i}", "off", {})
+    # The excluded light is physically ON before the scene lands.
+    hass.states.async_set("light.g_room_2", "on", {"brightness": 120})
     assert await async_setup_component(hass, "area_lighting", _skeleton_exclude_config())
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")
@@ -205,11 +208,52 @@ async def test_skeleton_group_exclude_controller_matches_scene_entity(
     assert scene_on == {"light.g_room_1", "light.g_room_3", "light.g_room_4"}
     assert ctrl_on == scene_on
     assert ctrl_off == scene_off
+    assert "light.g_room_2" not in (scene_on | scene_off)
     assert "light.g_room_2" not in (ctrl_on | ctrl_off)
     assert ctrl.dr_shed_ids == frozenset({"light.g_room_5", "light.g_room_6"})
     assert ctrl._active_scene_targets["light.g_room_1"]["state"] == "on"
-    assert ctrl._active_scene_targets["light.g_room_2"]["state"] == "off"
     assert ctrl._active_scene_targets["light.g_room_5"]["state"] == "off"
+    # No entry at all: an off-target would make reconcile turn it off.
+    assert "light.g_room_2" not in ctrl._active_scene_targets
+
+    # A DR reconcile only iterates tracked targets, so the physically-on
+    # excluded light must survive it untouched.
+    service_calls.clear()
+    await ctrl.async_reconcile_demand_response()
+    await hass.async_block_till_done()
+    _, reconcile_off = _on_off(service_calls)
+    assert "light.g_room_2" not in reconcile_off
+
+
+@pytest.mark.integration
+async def test_group_excluded_light_turning_on_does_not_latch_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """An on-state-change for a group-excluded light while its skeleton
+    scene is active is not a manual override: the scene never manages that
+    light, so the area must stay in the scene state."""
+    import time as _time
+
+    for i in range(1, 7):
+        hass.states.async_set(f"light.g_room_{i}", "off", {})
+    assert await async_setup_component(hass, "area_lighting", _skeleton_exclude_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    ctrl = hass.data["area_lighting"]["controllers"]["g_room"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl._activate_scene("all", ActivationSource.USER)
+    await hass.async_block_till_done()
+    # Expire the post-activation grace window so the event is judged on
+    # its own merits, not swallowed by the grace skip.
+    ctrl._state.last_scene_change_monotonic = _time.monotonic() - 30.0
+
+    hass.states.async_set("light.g_room_2", "on", {"brightness": 180})
+    await hass.async_block_till_done()
+
+    assert not ctrl._state.is_manual
+    assert ctrl.current_scene == "all"
 
 
 @pytest.mark.integration

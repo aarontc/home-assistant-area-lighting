@@ -171,7 +171,10 @@ async def test_dark_bring_up_converges_after_scene_restore(
     for i in (3, 4, 5, 6):
         assert final[f"light.study_{i}"][0] == "turn_off"
     assert ctrl.dr_shed_ids == frozenset({f"light.study_{i}" for i in (3, 4, 5, 6)})
-    assert ctrl._active_scene_targets["light.study_6"]["state"] == "off"
+    # Every shed id must carry an off-target so a partial tracking update
+    # cannot pass.
+    for shed_id in ctrl.dr_shed_ids:
+        assert ctrl._active_scene_targets[shed_id]["state"] == "off"
 
 
 @pytest.mark.integration

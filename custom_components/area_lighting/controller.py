@@ -1098,18 +1098,31 @@ class AreaLightingController:
             return {eid: state for eid, state in entities.items() if eid.startswith("light.")}
 
         # Skeleton fallback: role-based on/off, no attribute targets. Lights
-        # in the scene's group_exclude are treated as not-in-scene (matching
-        # scene.py._apply_skeleton) so DR shed sizing and tracking agree with
-        # the scene entity's apply path.
+        # in the scene's group_exclude are OMITTED entirely (matching
+        # scene.py._apply_skeleton, which never commands them): group_exclude
+        # means left untouched, so an off-target here would let a DR
+        # reconcile or self-heal turn off a light the scene must not manage.
+        # Their absence also keeps them out of the on-set used to size the
+        # DR shed, so shed sizing agrees with the scene entity's apply path.
         excluded = set(scene_cfg.group_exclude) if scene_cfg else set()
         return {
-            light.id: {
-                "state": (
-                    "on" if light.in_scene(scene_slug) and light.id not in excluded else "off"
-                )
-            }
+            light.id: {"state": "on" if light.in_scene(scene_slug) else "off"}
             for light in self.area.all_lights
+            if light.id not in excluded
         }
+
+    def is_group_excluded(self, entity_id: str) -> bool:
+        """Whether the active scene's group_exclude covers this light.
+
+        Excluded lights are absent from _active_scene_targets (the scene
+        must leave them untouched), so manual detection consults this to
+        avoid treating their state changes as overrides of a scene that
+        never managed them.
+        """
+        if not self._state.is_scene:
+            return False
+        scene_cfg = self._get_scene_config(self._state.scene_slug)
+        return scene_cfg is not None and entity_id in scene_cfg.group_exclude
 
     def _demand_response_active(self) -> bool:
         toggles = self.hass.data.get(DOMAIN, {}).get("global")
