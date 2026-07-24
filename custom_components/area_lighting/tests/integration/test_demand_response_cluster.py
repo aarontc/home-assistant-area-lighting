@@ -1,12 +1,13 @@
-"""Demand response must never drive cluster (Hue Zone) entities.
+"""Demand response must not use cluster (Hue Zone) entities as scene targets.
 
 A stored snapshot captures `area.all_lights`, which includes the cluster
 entity (e.g. `light.zone_all`) with state `on`. `apply_demand_response`
 only sheds individual lights, so without a dedicated filter the zone
 survives as an `on` target: applying it turns the whole zone on,
 relighting shed members, and a later reconcile sees the zone `off` and
-turns it back on (idempotency break). Under DR, only individual members
-may be driven; clusters remain a pure batching optimization.
+turns it back on (idempotency break). Under DR, the individual members
+are the targets; clusters remain a pure batching optimization, so a
+cluster whose members are all kept still coalesces into one zone command.
 """
 
 from __future__ import annotations
@@ -56,10 +57,14 @@ def _config() -> dict:
     }
 
 
-async def _setup(hass: HomeAssistant) -> None:
-    for entity_id in [*MEMBERS, ZONE]:
+async def _setup(
+    hass: HomeAssistant,
+    config: dict | None = None,
+    extra_entities: tuple[str, ...] = (),
+) -> None:
+    for entity_id in [*MEMBERS, ZONE, *extra_entities]:
         hass.states.async_set(entity_id, "off", {})
-    assert await async_setup_component(hass, "area_lighting", _config())
+    assert await async_setup_component(hass, "area_lighting", config or _config())
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")
     await hass.async_block_till_done()
@@ -94,9 +99,8 @@ async def test_dr_scene_activation_never_drives_cluster_entity(
     assert ZONE not in on
     assert on == KEPT
     assert off >= SHED
-    # Tracking must not carry a stale `on` target for the zone either.
-    zone_target = ctrl._active_scene_targets.get(ZONE)
-    assert zone_target is None or zone_target.get("state") != "on"
+    # Tracking must drop the zone key entirely, not retain it as `off`.
+    assert ZONE not in ctrl._active_scene_targets
 
     # Idempotency: with the physical states matching the DR outcome
     # (kept on, shed off, zone aggregate off), a reconcile must not turn
@@ -141,7 +145,8 @@ async def test_cluster_batching_unchanged_without_dr(
 ) -> None:
     # Non-DR path stays as-is: the dispatcher coalesces the six identical
     # member targets into a single zone command (plus the snapshot's own
-    # zone entry), and no member is turned off.
+    # zone entry, also addressed to the zone), so the zone is the ONLY
+    # turn_on target: no member is driven individually, none turned off.
     await _setup(hass)
     ctrl = hass.data["area_lighting"]["controllers"]["zone_room"]
 
@@ -150,5 +155,43 @@ async def test_cluster_batching_unchanged_without_dr(
     await hass.async_block_till_done()
 
     on, off = _on_off(service_calls)
-    assert ZONE in on
+    assert on == {ZONE}
     assert off == set()
+
+
+SUBCLUSTER = "light.zone_front"
+SUBCLUSTER_MEMBERS = ["light.zone_a", "light.zone_b"]
+
+
+def _config_with_subcluster() -> dict:
+    """Base config plus a two-member subcluster over the first-declared
+    lights, mirrored into the bright scene's entities like a snapshot
+    would capture it."""
+    config = _config()
+    area = config["area_lighting"]["areas"][0]
+    area["light_clusters"].append({"id": SUBCLUSTER, "members": list(SUBCLUSTER_MEMBERS)})
+    area["scenes"][1]["entities"][SUBCLUSTER] = {"state": "on"}
+    return config
+
+
+@pytest.mark.integration
+async def test_dr_all_kept_subcluster_batches_into_single_zone_command(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    # Six on-bulbs shed 80%, keeping exactly the two first-declared lights,
+    # which are precisely the subcluster's membership. The dispatcher must
+    # coalesce that fully-kept cohort into ONE turn_on for the subcluster
+    # zone entity; neither kept member may be driven individually, and the
+    # all-member zone must stay untouched.
+    await _setup(hass, _config_with_subcluster(), extra_entities=(SUBCLUSTER,))
+    ctrl = hass.data["area_lighting"]["controllers"]["zone_room"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    on, off = _on_off(service_calls)
+    assert on == {SUBCLUSTER}
+    assert off >= SHED
+    assert not off & KEPT
