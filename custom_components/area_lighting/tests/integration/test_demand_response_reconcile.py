@@ -117,11 +117,62 @@ async def test_reconcile_skips_manual_and_off(
     assert len(service_calls) == 0
 
 
+def _register_stateful_light_recorder(hass: HomeAssistant) -> list[tuple[str, str]]:
+    """Chronological light-command recorder that mirrors commands into states.
+
+    Mirroring each turn_on/turn_off into the state machine makes a later
+    diff-based converge see the effect of earlier commands, the way real
+    bulbs would report back.
+    """
+    calls: list[tuple[str, str]] = []
+
+    async def _record(call) -> None:
+        eid = call.data["entity_id"]
+        calls.append((call.service, eid))
+        if call.service == "turn_on":
+            hass.states.async_set(eid, "on", {"brightness": call.data.get("brightness", 200)})
+        else:
+            hass.states.async_set(eid, "off", {})
+
+    hass.services.async_register("light", "turn_on", _record)
+    hass.services.async_register("light", "turn_off", _record)
+    return calls
+
+
+def _gate_first_apply(ctrl, monkeypatch) -> tuple[asyncio.Event, asyncio.Event]:
+    """Park the first _apply_light_state call until the test releases it.
+
+    Because the call happens inside the reconcile's converge, the parked
+    reconcile is pinned mid-execution while holding _dr_lock, letting the
+    test overlap a second reconcile deterministically.
+    """
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+    original_apply = ctrl._apply_light_state
+
+    async def gated_apply(entity_id, state_data, transition=None):
+        if not reached.is_set():
+            reached.set()
+            await gate.wait()
+        await original_apply(entity_id, state_data, transition)
+
+    monkeypatch.setattr(ctrl, "_apply_light_state", gated_apply)
+    return gate, reached
+
+
 @pytest.mark.integration
-async def test_concurrent_reconciles_serialize(
-    hass: HomeAssistant, helper_entities, service_calls
+async def test_concurrent_reconciles_with_opposing_flags_serialize(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
 ) -> None:
-    """Two overlapping reconciles converge to one consistent shed state."""
+    """Overlapping reconciles with opposing flag states run strictly in turn.
+
+    Reconcile A (DR on) is parked mid-converge while holding _dr_lock; the
+    flag then flips off and reconcile B (DR off) starts. Without the lock,
+    B would run during A's pause, see still-on bulbs, issue nothing, and
+    A's stale turn_offs would land last: dark bulbs with empty tracking.
+    With the lock, B runs strictly after A and relights everything A shed,
+    so the final commands, states, and tracking all reflect the last flag.
+    """
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["den"]
     for i in range(1, 7):
@@ -129,24 +180,69 @@ async def test_concurrent_reconciles_serialize(
     await ctrl._activate_scene("bright", ActivationSource.USER)
     await hass.async_block_till_done()
 
+    chrono = _register_stateful_light_recorder(hass)
+    gate, reached = _gate_first_apply(ctrl, monkeypatch)
+
     _toggles(hass)._demand_response_active = True
-    service_calls.clear()
-    await asyncio.gather(
-        ctrl.async_reconcile_demand_response(),
-        ctrl.async_reconcile_demand_response(),
-    )
+    task_a = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await reached.wait()  # A holds _dr_lock, parked mid-apply
+    _toggles(hass)._demand_response_active = False
+    task_b = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await asyncio.sleep(0)  # let B start and queue on the lock
+    gate.set()
+    await asyncio.gather(task_a, task_b)
     await hass.async_block_till_done()
 
-    on = {
-        c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
-    }
-    off = {
-        c.data["entity_id"]
-        for c in service_calls
-        if c.domain == "light" and c.service == "turn_off"
-    }
-    assert on == set()  # no double-relight of kept or shed bulbs
-    assert off == {f"light.den_{i}" for i in (3, 4, 5, 6)}
+    # B acquired last, so the last command per shed bulb is its relight and
+    # every bulb ends on: no interleaved "dark bulb, empty tracking" state.
+    final = {eid: svc for svc, eid in chrono}
+    for i in (3, 4, 5, 6):
+        assert final[f"light.den_{i}"] == "turn_on"
+    assert all(hass.states.get(f"light.den_{i}").state == "on" for i in range(1, 7))
+    assert ctrl.dr_shed_ids == frozenset()
+    assert ctrl._active_scene_targets["light.den_4"]["state"] == "on"
+
+
+@pytest.mark.integration
+async def test_reconcile_queued_on_lock_defers_when_alert_starts(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """A reconcile that queued on _dr_lock re-checks the alert flag on entry.
+
+    Reconcile A parks mid-converge holding the lock; an alert then starts
+    while reconcile B waits on the lock. When B finally acquires it, the
+    alert owns the lights, so B must defer instead of converging (the
+    alert's finally block re-runs the reconcile later).
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    for i in range(1, 7):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    chrono = _register_stateful_light_recorder(hass)
+    gate, reached = _gate_first_apply(ctrl, monkeypatch)
+
+    _toggles(hass)._demand_response_active = True
+    task_a = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await reached.wait()  # A holds _dr_lock, parked mid-apply
+    # DR flips off and an alert starts while A still holds the lock.
+    _toggles(hass)._demand_response_active = False
+    task_b = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await asyncio.sleep(0)  # let B start and queue on the lock
+    ctrl._alert_active = True
+    gate.set()
+    await asyncio.gather(task_a, task_b)
+    await hass.async_block_till_done()
+    ctrl._alert_active = False
+
+    # B deferred: nothing relit the bulbs A shed, and A's tracking stands
+    # (the post-alert reconcile is responsible for the DR-off restore).
+    final = {eid: svc for svc, eid in chrono}
+    for i in (3, 4, 5, 6):
+        assert final[f"light.den_{i}"] == "turn_off"
+    assert not any(svc == "turn_on" for svc, _ in chrono)
     assert ctrl.dr_shed_ids == frozenset({f"light.den_{i}" for i in (3, 4, 5, 6)})
     assert ctrl._active_scene_targets["light.den_4"]["state"] == "off"
 
@@ -157,9 +253,10 @@ async def test_scene_activation_mid_flip_ends_shed(
 ) -> None:
     """DR flipping on mid-activation still ends with the tail shed.
 
-    The setter's reconcile fired before transition_to_scene (it saw the
-    old state and skipped), so the end-of-activation check must catch
-    the flag change and converge.
+    Branch-level test: the flag is mutated directly inside a patched
+    _apply_scene_data, so no setter-driven reconcile ever runs. The
+    end-of-activation dr_at_start comparison alone must notice the flip
+    and converge to the shed state.
     """
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["den"]

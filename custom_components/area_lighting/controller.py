@@ -1137,11 +1137,16 @@ class AreaLightingController:
 
         Deferred while an alert owns the lights (execute_alert re-runs the
         reconcile once the alert finishes), and serialized under _dr_lock so
-        rapid flag flips cannot interleave converges.
+        rapid flag flips cannot interleave converges. The alert check sits
+        inside the lock so a reconcile that queued behind an in-flight one
+        re-checks after acquiring it (an alert may have started while it
+        waited). A reconcile already past the check when an alert begins can
+        still overlap the alert's first moments; that narrow window is
+        accepted.
         """
-        if self._alert_active:
-            return
         async with self._dr_lock:
+            if self._alert_active:
+                return
             if self._state.is_off or self._state.is_manual:
                 return
             if self._state.is_circadian:

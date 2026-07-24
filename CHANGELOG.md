@@ -53,9 +53,12 @@ readable companion that highlights user-facing changes.
   circadian switches turn off, so the outgoing circadian setup never
   fights the incoming state. A flag flip that lands while an alert is
   running is deferred and applied right after the alert restores its
-  captured states; per-area reconciles are serialized so rapid flips
-  converge to the final flag state, and a flip that lands mid
-  scene-activation is converged at the end of that activation.
+  captured states, including a flip to off: the post-alert reconcile
+  still runs so previously shed bulbs are relit and the shed tracking
+  clears. Per-area reconciles are serialized so rapid flips converge to
+  the final flag state (a reconcile that queued behind an in-flight one
+  re-checks for a started alert before touching lights), and a flip that
+  lands mid scene-activation is converged at the end of that activation.
 
 ### Changed
 

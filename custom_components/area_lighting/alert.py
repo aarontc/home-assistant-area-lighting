@@ -301,9 +301,12 @@ async def execute_alert(
         controller._notify_state_change()
 
         controller._alert_active = False
-        if controller.demand_response_active:
+        if controller.demand_response_active or controller.dr_shed_ids:
             # A DR edge that arrived mid-alert was deferred (the reconcile
             # short-circuits while _alert_active); apply it now that the
-            # captured states are restored, refreshing _dr_shed_ids.
+            # captured states are restored, refreshing _dr_shed_ids. The
+            # dr_shed_ids check catches a DR-off edge: the flag is already
+            # clear, but the reconcile must still run to relight the shed
+            # bulbs and empty the stale shed set.
             await controller.async_reconcile_demand_response()
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

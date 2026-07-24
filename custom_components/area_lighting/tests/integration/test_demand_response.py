@@ -171,20 +171,44 @@ async def test_alert_bypasses_demand_response(
     assert on == {f"light.bright_room_{i}" for i in range(1, 7)}
 
 
-def _register_chrono_light_recorder(hass: HomeAssistant) -> list[tuple[str, str]]:
+def _register_chrono_light_recorder(
+    hass: HomeAssistant,
+    gate: asyncio.Event | None = None,
+    reached: asyncio.Event | None = None,
+) -> list[tuple[str, str]]:
     """Replace the mocked light services with one chronological recorder.
 
     The service_calls fixture groups calls by service, so it cannot answer
     ordering questions ("which command landed last on this bulb?").
+
+    When ``gate`` and ``reached`` are given, the first recorded call sets
+    ``reached`` and parks until the test sets ``gate``. That pins the alert
+    inside its first light command, so a mid-alert flag flip lands at a
+    known point without any wall-clock sleeps.
     """
     calls: list[tuple[str, str]] = []
 
     async def _record(call) -> None:
+        first = not calls
         calls.append((call.service, call.data["entity_id"]))
+        if gate is not None and reached is not None and first:
+            reached.set()
+            await gate.wait()
 
     hass.services.async_register("light", "turn_on", _record)
     hass.services.async_register("light", "turn_off", _record)
     return calls
+
+
+def _alert_config() -> dict:
+    cfg = _config(6, 6)
+    cfg["area_lighting"]["alert_patterns"] = {
+        "flash": {
+            "steps": [{"target": "all", "state": "on", "brightness": 255}],
+            "restore": True,
+        }
+    }
+    return cfg
 
 
 @pytest.mark.integration
@@ -193,18 +217,13 @@ async def test_dr_flip_during_alert_applies_after_restore(
 ) -> None:
     """A DR edge arriving mid-alert is deferred, then applied after restore.
 
-    The reconcile must not fight the running alert, and the alert's
-    finally block must re-run it so the shed lands once the captured
-    states are restored.
+    The alert is parked deterministically inside its first light command
+    (recorder gate), the flag flips through the real setter, then the
+    alert finishes. The reconcile must not fight the running alert, and
+    the alert's finally block must re-run it so the shed lands once the
+    captured states are restored.
     """
-    cfg = _config(6, 6)
-    cfg["area_lighting"]["alert_patterns"] = {
-        "flash": {
-            "steps": [{"target": "all", "state": "on", "brightness": 255, "delay": 0.2}],
-            "restore": True,
-        }
-    }
-    await _setup(hass, cfg, 6)
+    await _setup(hass, _alert_config(), 6)
     ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
     # Lit scene pre-alert: all bulbs physically on, DR off.
     for i in range(1, 7):
@@ -212,7 +231,9 @@ async def test_dr_flip_during_alert_applies_after_restore(
     await ctrl._activate_scene("bright", ActivationSource.USER)
     await hass.async_block_till_done()
 
-    chrono = _register_chrono_light_recorder(hass)
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+    chrono = _register_chrono_light_recorder(hass, gate=gate, reached=reached)
     alert_task = hass.async_create_task(
         hass.services.async_call(
             "area_lighting",
@@ -221,12 +242,11 @@ async def test_dr_flip_during_alert_applies_after_restore(
             blocking=True,
         )
     )
-    # Let the alert start and park in its step delay.
-    await asyncio.sleep(0.05)
+    await reached.wait()
     assert ctrl._alert_active is True
-    chrono.clear()
-    # Flip DR on mid-alert via the real setter.
+    # Flip DR on mid-alert via the real setter, then let the alert finish.
     await _toggles(hass).async_set_demand_response_active(True)
+    gate.set()
     await alert_task
     await hass.async_block_till_done()
 
@@ -238,3 +258,54 @@ async def test_dr_flip_during_alert_applies_after_restore(
     for i in (3, 4, 5, 6):
         assert final[f"light.bright_room_{i}"] == "turn_off"
     assert ctrl.dr_shed_ids == frozenset({f"light.bright_room_{i}" for i in (3, 4, 5, 6)})
+
+
+@pytest.mark.integration
+async def test_dr_off_during_alert_restores_shed(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR-off edge arriving mid-alert restores shed bulbs after the alert.
+
+    The mid-alert reconcile is deferred while the alert owns the lights.
+    Even though the flag is already off when the alert ends, the finally
+    block must still reconcile (dr_shed_ids is stale) so previously shed
+    bulbs are relit and the shed set empties.
+    """
+    await _setup(hass, _alert_config(), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    # Physical shed state pre-alert: kept bulbs on, shed tail off.
+    for i in (1, 2):
+        hass.states.async_set(f"light.bright_room_{i}", "on", {"brightness": 200})
+    for i in (3, 4, 5, 6):
+        hass.states.async_set(f"light.bright_room_{i}", "off", {})
+    assert ctrl.dr_shed_ids == frozenset({f"light.bright_room_{i}" for i in (3, 4, 5, 6)})
+
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+    chrono = _register_chrono_light_recorder(hass, gate=gate, reached=reached)
+    alert_task = hass.async_create_task(
+        hass.services.async_call(
+            "area_lighting",
+            "alert",
+            {"area_id": "bright_room", "pattern": "flash"},
+            blocking=True,
+        )
+    )
+    await reached.wait()
+    assert ctrl._alert_active is True
+    # Flip DR off mid-alert via the real setter, then let the alert finish.
+    await _toggles(hass).async_set_demand_response_active(False)
+    gate.set()
+    await alert_task
+    await hass.async_block_till_done()
+
+    # Restore put shed bulbs back to their captured-off state; the finally
+    # block reconcile must then relight them because DR is no longer active.
+    final = {eid: svc for svc, eid in chrono}
+    for i in range(1, 7):
+        assert final[f"light.bright_room_{i}"] == "turn_on"
+    assert ctrl.dr_shed_ids == frozenset()
+    assert ctrl._active_scene_targets["light.bright_room_4"]["state"] == "on"
