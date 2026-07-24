@@ -16,7 +16,11 @@ from .area_state import (
     ActivationSource,
     AreaState,
 )
-from .circadian_kelvin_router import CircadianKelvinRouter, select_route
+from .circadian_kelvin_router import (
+    CircadianKelvinRouter,
+    read_source_colortemp,
+    select_route,
+)
 from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
@@ -817,26 +821,15 @@ class AreaLightingController:
             await self.async_reconcile_demand_response()
 
     def _route_source_colortemp(self) -> float | None:
-        """Colortemp the kelvin router routes on: the routes' source entity,
-        falling back to sensor.circadian_values. None when neither is
-        available or parseable."""
-        sources: list[str] = []
+        """Colortemp the kelvin router routes on, read through the router
+        module's shared policy: the routes' `source` entity ONLY, with no
+        other fallback source, so controller and router always select the
+        same route. None when the area has no routes or the source is
+        unavailable/unparseable."""
         routes = self.area.circadian_kelvin_routes
-        if routes is not None:
-            sources.append(routes.source)
-        sources.append("sensor.circadian_values")
-        for entity_id in sources:
-            state = self.hass.states.get(entity_id)
-            if state is None or state.state in ("unavailable", "unknown"):
-                continue
-            raw = state.attributes.get("colortemp")
-            if raw is None:
-                continue
-            try:
-                return float(raw)
-            except (TypeError, ValueError):
-                continue
-        return None
+        if routes is None:
+            return None
+        return read_source_colortemp(self.hass, routes.source)
 
     def _circadian_on_ids(self) -> list[str]:
         """Individual lights (config order) that circadian activation turns on.
@@ -847,17 +840,24 @@ class AreaLightingController:
         lights at the expense of active ones), plus circadian-switch lights
         outside any route. Without routes: all circadian-switch lights.
 
-        The active route is selected with the router's current index, so the
-        hysteresis grace applies exactly as it does in the router's own
-        reconcile: inside the hysteresis band both agree on the kept route.
-        A route's cluster entities are expanded to their members (the shed
-        universe is individual lights).
+        The router is the authority on the active route: once it has
+        published an index (its reconcile publishes BEFORE it has this
+        controller refresh the shed set), that index is used directly, which
+        also carries the router's hysteresis grace. Only before the router's
+        first reconcile (a fresh circadian activation) is the route selected
+        here, with the router's exact source policy and no prior index, so
+        the router's follow-up reconcile lands on the same route. A route's
+        cluster entities are expanded to their members (the shed universe is
+        individual lights).
         """
         routes = self.area.circadian_kelvin_routes
         if routes is None:
             return [light.id for light in self.area.lights if light.circadian_switch]
         current_idx = self._kelvin_router.current_index if self._kelvin_router is not None else None
-        index = select_route(routes.routes, self._route_source_colortemp(), current_idx)
+        if current_idx is not None:
+            index = current_idx
+        else:
+            index = select_route(routes.routes, self._route_source_colortemp(), None)
         active = self._expand_cluster_ids(routes.routes[index].lights)
         route_lights = self._expand_cluster_ids(routes.all_route_lights)
         return [

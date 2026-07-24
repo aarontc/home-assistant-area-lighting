@@ -23,6 +23,27 @@ from .models import CircadianKelvinRouteConfig, CircadianKelvinRoutesConfig
 _LOGGER = logging.getLogger(__name__)
 
 
+def read_source_colortemp(hass: HomeAssistant, source: str) -> float | None:
+    """Read the routing colortemp from `source`'s `colortemp` attribute.
+
+    Returns None when the entity is missing/unavailable/unknown or the
+    attribute is absent/unparseable. This is the ONLY colortemp-read policy
+    for kelvin routing, shared by the router's reconcile and the
+    controller's shed sizing, so both always select the same route (no
+    per-component fallback sources).
+    """
+    state = hass.states.get(source)
+    if state is None or state.state in ("unavailable", "unknown"):
+        return None
+    raw = state.attributes.get("colortemp")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def select_route(
     routes: Sequence[CircadianKelvinRouteConfig],
     colortemp: float | None,
@@ -265,13 +286,4 @@ class CircadianKelvinRouter:
         return f"banded[{lo}-{hi}K]"
 
     def _read_colortemp(self) -> float | None:
-        state = self._hass.states.get(self._config.source)
-        if state is None or state.state in ("unavailable", "unknown"):
-            return None
-        raw = state.attributes.get("colortemp")
-        if raw is None:
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
+        return read_source_colortemp(self._hass, self._config.source)

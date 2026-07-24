@@ -757,3 +757,87 @@ async def test_cluster_route_batches_without_dr(
 
     on = _light_calls(service_calls, "turn_on")
     assert on == {_MEDIA_ZONE}
+
+
+_STUDY_SOURCE = "sensor.study_colortemp"
+
+
+def _study_config() -> dict:
+    """Explicit source, single-bulb BANDED route + MULTI-bulb (3 lamp)
+    fallback route: the shape where a controller/router divergence on the
+    active route leaves the fallback lamps fully unshed under DR."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "study",
+                    "name": "Study",
+                    "event_handlers": True,
+                    "lights": [{"id": "light.study_spot", "roles": ["dimming"]}]
+                    + [{"id": f"light.study_lamp_{i}", "roles": ["dimming"]} for i in (1, 2, 3)],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "off", "name": "Off"},
+                    ],
+                    "circadian_kelvin_routes": {
+                        "source": _STUDY_SOURCE,
+                        "crossfade_seconds": 1.0,
+                        "routes": [
+                            {"kelvin_range": [4500, 5500], "lights": ["light.study_spot"]},
+                            {
+                                "lights": [
+                                    "light.study_lamp_1",
+                                    "light.study_lamp_2",
+                                    "light.study_lamp_3",
+                                ]
+                            },
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_unavailable_source_controller_agrees_with_router_fallback(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """When routes.source is UNAVAILABLE while sensor.circadian_values holds
+    a colortemp that WOULD select the banded route, controller and router
+    must still agree on the active route: both read colortemp from
+    routes.source ONLY, so both select the FALLBACK route. The controller
+    must not size the shed over the banded route via a sensor fallback,
+    which would leave the router's multi-bulb fallback route fully unshed."""
+    for eid in (
+        "light.study_spot",
+        "light.study_lamp_1",
+        "light.study_lamp_2",
+        "light.study_lamp_3",
+    ):
+        hass.states.async_set(eid, "off", {})
+    hass.states.async_set(_STUDY_SOURCE, "unavailable", {})
+    # A banded-route colortemp on the sensor the controller used to fall
+    # back to. It must be IGNORED for route selection.
+    hass.states.async_set("sensor.circadian_values", "0", {"colortemp": 5000})
+    assert await async_setup_component(hass, "area_lighting", _study_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+
+    # The router selected the fallback route (source unavailable).
+    assert ctrl._kelvin_router.current_index == 1
+    # The controller sized the shed over that SAME route: 3 lamps -> keep 2,
+    # shed the config-order tail lamp. Under the old sensor fallback it
+    # sized over the banded single-spot route instead (shed set empty).
+    assert ctrl.dr_shed_ids == frozenset({"light.study_lamp_3"})
+    on = _light_calls(service_calls, "turn_on")
+    assert {"light.study_lamp_1", "light.study_lamp_2"} <= on
+    assert "light.study_lamp_3" not in on
