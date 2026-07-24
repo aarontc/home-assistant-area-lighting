@@ -896,7 +896,10 @@ load during a utility demand-response event:
   kept.
 - With `circadian_kelvin_routes`, circadian shedding counts only the currently
   active route's lights (plus circadian lights outside any route) and is
-  recomputed when the route changes, so a route swap re-sheds correctly.
+  recomputed when the route changes, so a route swap re-sheds correctly. A
+  recompute only re-drives lights whose shed status actually changed, and
+  leaving circadian stops route reconciliation before the circadian switches
+  turn off, so the outgoing circadian setup never fights the next scene.
 
 Drive the switch from any utility integration or automation with
 `switch.turn_on` / `switch.turn_off`.

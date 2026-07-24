@@ -103,11 +103,21 @@ class CircadianKelvinRouter:
                 )
             await self._reconcile()
         else:
-            if self._unsub is not None:
-                self._unsub()
-                self._unsub = None
-            self._current_index = None
-            self._last_shed_ids = frozenset()
+            self.deactivate()
+
+    def deactivate(self) -> None:
+        """Deregister the source listener and reset routing state.
+
+        Called by the controller BEFORE it disables circadian switches on
+        a transition out of circadian (and by sync_to_state for any
+        non-circadian scene), so the switch-off cannot fire the listener
+        and enqueue a reconcile against the outgoing circadian scene.
+        """
+        if self._unsub is not None:
+            self._unsub()
+            self._unsub = None
+        self._current_index = None
+        self._last_shed_ids = frozenset()
 
     @callback
     def _on_source_changed(self, event: Event[EventStateChangedData]) -> None:
@@ -121,6 +131,13 @@ class CircadianKelvinRouter:
     async def _reconcile(self) -> None:
         """Reconcile light state against the active route, idempotently."""
         async with self._reconcile_lock:
+            if self._unsub is None:
+                # Stale reconcile enqueued before deactivate() deregistered
+                # the listener: the area is leaving (or has left) circadian,
+                # so driving lights here would fight the incoming scene. The
+                # direct call from sync_to_state("circadian") is unaffected:
+                # it runs after _unsub is set.
+                return
             ctrl = self._controller()
             if ctrl is not None:
                 # The circadian shed set is sized over the ACTIVE route, so a

@@ -46,7 +46,11 @@ readable companion that highlights user-facing changes.
   Kept members still coalesce into a single zone command when every member
   of that zone is kept. With `circadian_kelvin_routes`, circadian shedding
   is sized over the currently active route's lights (plus circadian lights
-  outside any route) and is recomputed whenever the route changes.
+  outside any route) and is recomputed whenever the route changes. A
+  recompute only re-drives lights whose shed status actually changed, and
+  leaving circadian detaches the route listener before the circadian
+  switches turn off, so the outgoing circadian setup never fights the
+  incoming scene.
 
 ### Changed
 

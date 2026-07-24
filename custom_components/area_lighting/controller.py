@@ -743,6 +743,19 @@ class AreaLightingController:
         """
         from .area_state import LeaderReason
 
+        if (
+            self._kelvin_router is not None
+            and self._state.is_circadian
+            and scene_slug != SCENE_CIRCADIAN
+        ):
+            # Leaving circadian: deregister the router's source listener
+            # BEFORE the circadian switches are disabled, so the switch-off
+            # cannot enqueue a stale reconcile that drives route lights
+            # against the incoming scene. _sync_kelvin_router at the end of
+            # the transition keeps the router deregistered (or re-subscribes
+            # if the target turns out to be circadian).
+            self._kelvin_router.deactivate()
+
         if scene_slug == SCENE_OFF_INTERNAL:
             await self._disable_circadian_switches()
             await self._turn_off_all_lights(transition)
@@ -894,8 +907,11 @@ class AreaLightingController:
 
     async def recompute_and_apply_circadian_dr(self) -> None:
         """Refresh the circadian demand-response shed set for the CURRENT
-        kelvin route and converge non-route circadian lights whose shed
-        status flipped.
+        kelvin route and re-drive ONLY the non-route circadian lights whose
+        shed status FLIPPED between the old and new set. Flip-only makes a
+        reconcile with an unchanged shed set a strict no-op: it never
+        relights an unchanged kept light that happens to be off, and never
+        re-offs an unchanged shed light.
 
         Called by the kelvin router at the top of its reconcile (before it
         reads dr_shed_ids), so it must never call back into the router;
@@ -904,17 +920,22 @@ class AreaLightingController:
         if not self._state.is_circadian or not self._demand_response_active():
             self._dr_shed_ids = frozenset()
             return
-        self._dr_shed_ids = self._compute_circadian_shed_ids()
+        old_shed = self._dr_shed_ids
+        new_shed = self._compute_circadian_shed_ids()
+        self._dr_shed_ids = new_shed
+        if old_shed == new_shed:
+            return
 
+        flipped = old_shed ^ new_shed
         routes = self.area.circadian_kelvin_routes
         route_lights = routes.all_route_lights if routes else set()
         tasks: list = []
-        for light in self.area.all_lights:
-            if light.id in route_lights or not light.circadian_switch:
+        for light in self.area.lights:
+            if light.id not in flipped or light.id in route_lights:
                 continue
             state = self.hass.states.get(light.id)
             is_on = state is not None and state.state == STATE_ON
-            if light.id in self._dr_shed_ids:
+            if light.id in new_shed:
                 if is_on:
                     tasks.append(self._call_service("light.turn_off", entity_id=light.id))
             elif not is_on:
@@ -1671,11 +1692,20 @@ class AreaLightingController:
             self._state.transition_to_circadian(ActivationSource.USER)
             self._dr_shed_ids = self._compute_circadian_shed_ids()
         elif scene_slug == "off":
+            if self._kelvin_router is not None and self._state.is_circadian:
+                # Leaving circadian: deregister the router BEFORE the switch
+                # disable, so no stale reconcile repopulates the cleared
+                # shed set or re-drives route lights.
+                self._kelvin_router.deactivate()
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
             await self._disable_circadian_switches()
             self._state.transition_to_off(ActivationSource.USER)
         else:
+            if self._kelvin_router is not None and self._state.is_circadian:
+                # Leaving circadian for a visual scene: same stale-reconcile
+                # protection as above.
+                self._kelvin_router.deactivate()
             await self._disable_circadian_switches()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
