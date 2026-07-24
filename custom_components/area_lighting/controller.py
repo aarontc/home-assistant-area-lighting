@@ -743,19 +743,6 @@ class AreaLightingController:
         """
         from .area_state import LeaderReason
 
-        if (
-            self._kelvin_router is not None
-            and self._state.is_circadian
-            and scene_slug != SCENE_CIRCADIAN
-        ):
-            # Leaving circadian: deregister the router's source listener
-            # BEFORE the circadian switches are disabled, so the switch-off
-            # cannot enqueue a stale reconcile that drives route lights
-            # against the incoming scene. _sync_kelvin_router at the end of
-            # the transition keeps the router deregistered (or re-subscribes
-            # if the target turns out to be circadian).
-            self._kelvin_router.deactivate()
-
         if scene_slug == SCENE_OFF_INTERNAL:
             await self._disable_circadian_switches()
             await self._turn_off_all_lights(transition)
@@ -1285,6 +1272,15 @@ class AreaLightingController:
             )
 
     async def _disable_circadian_switches(self) -> None:
+        # Every caller is leaving circadian or suspending it (dim), and the
+        # switches being turned off include the kelvin router's source:
+        # deregister the router FIRST so the switch-off cannot fire its
+        # listener and enqueue a stale reconcile (colortemp=None -> fallback
+        # route) that drives route lights against the incoming state.
+        # Idempotent; _sync_kelvin_router re-registers the router whenever
+        # the area (re)enters circadian.
+        if self._kelvin_router is not None:
+            self._kelvin_router.deactivate()
         if self.area.circadian_switches:
             await asyncio.gather(
                 *[
@@ -1692,20 +1688,11 @@ class AreaLightingController:
             self._state.transition_to_circadian(ActivationSource.USER)
             self._dr_shed_ids = self._compute_circadian_shed_ids()
         elif scene_slug == "off":
-            if self._kelvin_router is not None and self._state.is_circadian:
-                # Leaving circadian: deregister the router BEFORE the switch
-                # disable, so no stale reconcile repopulates the cleared
-                # shed set or re-drives route lights.
-                self._kelvin_router.deactivate()
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
             await self._disable_circadian_switches()
             self._state.transition_to_off(ActivationSource.USER)
         else:
-            if self._kelvin_router is not None and self._state.is_circadian:
-                # Leaving circadian for a visual scene: same stale-reconcile
-                # protection as above.
-                self._kelvin_router.deactivate()
             await self._disable_circadian_switches()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)

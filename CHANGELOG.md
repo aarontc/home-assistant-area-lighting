@@ -48,9 +48,10 @@ readable companion that highlights user-facing changes.
   is sized over the currently active route's lights (plus circadian lights
   outside any route) and is recomputed whenever the route changes. A
   recompute only re-drives lights whose shed status actually changed, and
-  leaving circadian detaches the route listener before the circadian
-  switches turn off, so the outgoing circadian setup never fights the
-  incoming scene.
+  every path that leaves circadian (scene changes, off fades, manual
+  changes) or suspends it (dimming) detaches the route listener before the
+  circadian switches turn off, so the outgoing circadian setup never
+  fights the incoming state.
 
 ### Changed
 

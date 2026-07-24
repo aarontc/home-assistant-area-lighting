@@ -898,8 +898,10 @@ load during a utility demand-response event:
   active route's lights (plus circadian lights outside any route) and is
   recomputed when the route changes, so a route swap re-sheds correctly. A
   recompute only re-drives lights whose shed status actually changed, and
-  leaving circadian stops route reconciliation before the circadian switches
-  turn off, so the outgoing circadian setup never fights the next scene.
+  every path that leaves circadian (scene changes, off fades, manual changes)
+  or suspends it (dimming) stops route reconciliation before the circadian
+  switches turn off, so the outgoing circadian setup never fights the next
+  state.
 
 Drive the switch from any utility integration or automation with
 `switch.turn_on` / `switch.turn_off`.

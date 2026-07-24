@@ -420,6 +420,76 @@ async def test_visual_scene_transition_deregisters_router(
 
 
 @pytest.mark.integration
+async def test_off_fade_from_circadian_deregisters_router(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """lighting_off_fade from circadian must deregister the router BEFORE
+    the circadian switches are disabled, so the switch-off cannot enqueue a
+    stale reconcile (colortemp=None -> fallback route) that re-drives route
+    lights against the outgoing fade."""
+    await _setup(hass, colortemp=5000)  # banded route (fluorescent) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl._kelvin_router._unsub is not None
+
+    # Physical result of the bring-up: banded route (fluorescent) on.
+    hass.states.async_set("light.kitchen_fluorescent", "on", {})
+    await hass.async_block_till_done()
+
+    _make_switch_off_update_state(hass)
+
+    service_calls.clear()
+    await ctrl.lighting_off_fade(ActivationSource.MOTION)
+    await hass.async_block_till_done()
+
+    assert ctrl._kelvin_router._unsub is None
+    # An off fade must never turn a light ON: a stale circadian reconcile
+    # would light the kept fallback strips mid-transition.
+    assert _light_calls(service_calls, "turn_on") == set()
+
+
+@pytest.mark.integration
+async def test_circadian_dim_deregisters_router(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Dimming inside circadian disables the circadian switches (the
+    router's source): the router must be deregistered first, so the
+    switch-off cannot enqueue a stale reconcile (colortemp=None -> fallback
+    route swap) that fights the user's dim. The router re-registers on the
+    next circadian sync (e.g. the un-dim restore)."""
+    await _setup(hass, colortemp=5000)  # banded route (fluorescent) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl._kelvin_router._unsub is not None
+
+    hass.states.async_set("light.kitchen_fluorescent", "on", {})
+    await hass.async_block_till_done()
+
+    _make_switch_off_update_state(hass)
+
+    service_calls.clear()
+    await ctrl.lighting_lower()
+    await hass.async_block_till_done()
+
+    assert ctrl._kelvin_router._unsub is None
+    assert ctrl._state.is_circadian
+    assert ctrl._state.dimmed
+    # No fallback-route swap fights the dim: the strips are never lit and
+    # the active fluorescent is never turned off.
+    on = _light_calls(service_calls, "turn_on")
+    assert on.isdisjoint(
+        {"light.kitchen_strip_1", "light.kitchen_strip_2", "light.kitchen_strip_3"}
+    )
+    assert "light.kitchen_fluorescent" not in _light_calls(service_calls, "turn_off")
+
+
+@pytest.mark.integration
 async def test_external_off_shed_clear_sticks(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
