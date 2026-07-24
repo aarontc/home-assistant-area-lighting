@@ -44,7 +44,9 @@ readable companion that highlights user-facing changes.
   direct scene targets: the individual member bulbs are driven instead, so
   a zone captured as `on` in a scene snapshot cannot relight shed bulbs.
   Kept members still coalesce into a single zone command when every member
-  of that zone is kept.
+  of that zone is kept. With `circadian_kelvin_routes`, circadian shedding
+  is sized over the currently active route's lights (plus circadian lights
+  outside any route) and is recomputed whenever the route changes.
 
 ### Changed
 

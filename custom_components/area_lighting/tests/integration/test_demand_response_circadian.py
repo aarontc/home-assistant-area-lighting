@@ -85,6 +85,24 @@ async def test_circadian_sheds_to_keep_two(
 
 
 @pytest.mark.integration
+async def test_external_circadian_sets_and_off_clears_shed_set(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Externally activated circadian under DR records the shed set; off clears it."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.handle_scene_activated("circadian")
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset({f"light.study_{i}" for i in (3, 4, 5, 6)})
+
+    await ctrl.handle_scene_activated("off")
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset()
+
+
+@pytest.mark.integration
 async def test_dark_bring_up_sheds(hass: HomeAssistant, helper_entities, service_calls) -> None:
     # raise from a fully-dark area brings all lights to min; under DR only the
     # kept lights come up.

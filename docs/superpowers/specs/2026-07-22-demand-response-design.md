@@ -164,6 +164,15 @@ recompute the ratio themselves. Recomputing over a different on-set (e.g. the
 router's route-lights subset) would size `n` differently and could disagree on
 which specific bulbs are off.
 
+**Routed-circadian amendment.** For circadian in an area with
+`circadian_kelvin_routes`, the on-set is a function of the current colortemp:
+only the ACTIVE route is lit, so the shed set is sized over the active route's
+lights (plus circadian-switch lights outside any route) and must be
+**recomputed on route changes**. Ownership is unchanged: the controller
+(`recompute_and_apply_circadian_dr`) is the only writer of `dr_shed_ids`; the
+router still never computes a ratio itself, it asks the controller to refresh
+the set at the top of every reconcile and then reads it.
+
 ## 6. On-emitters and where the filter goes
 
 There is no single turn-on chokepoint. Each independent on-emitter must run its
@@ -174,8 +183,8 @@ Alerts are the sole exception.
 |---|---|---|
 | Controller scene fan-out | `_apply_scene_data` `controller.py:822`, via `_effective_scene_targets` | Filtered at resolution (Section 5). |
 | Motion / remote / ambience / favorite / leader-follower | all route through `lighting_on` -> `_activate_scene` | Inherit the scene filter for free. No extra work. |
-| Circadian activation | `_activate_circadian` `controller.py:782` | Build its on-set, run through `apply_demand_response`, turn on only kept bulbs. Record shed bulbs as off so the router agrees (Section 6.1). |
-| Kelvin router | `CircadianKelvinRouter._reconcile` `circadian_kelvin_router.py:115` | Before turning on a routed light, skip it if it is shed for the current activation (read the recorded shed set; do not recompute). |
+| Circadian activation | `_activate_circadian` `controller.py:782` | Build its on-set (with kelvin routes: the ACTIVE route's lights plus non-route circadian lights, per Section 5.1's routed-circadian amendment), run through `apply_demand_response`, turn on only kept bulbs. Record shed bulbs as off so the router agrees (Section 6.1). |
+| Kelvin router | `CircadianKelvinRouter._reconcile` `circadian_kelvin_router.py:115` | At the top of every reconcile, ask the controller to refresh the shed set for the current colortemp (`recompute_and_apply_circadian_dr`), then skip any routed light it lists. The router itself never computes a ratio. |
 | Raise/lower dark-room bring-up | `_set_all_lights_to_pct` `controller.py:1101` | Build the all-lights on-target, run through the primitive; only kept bulbs come up. `_step_on_lights_pct` (already-on lights only) needs no change. |
 | HA Scene entity (external `scene.turn_on`) | `scene.py` `_apply_stored:127` / `_apply_skeleton:188` | Build its target dict and run through the primitive (needs the area's ordered light ids + the DR flag from `hass.data[DOMAIN]["global"]`). The controller's `handle_scene_activated` tracking resolves via `_effective_scene_targets`, so tracking stays consistent. |
 | Alerts | `alert.py:234` | **Bypass.** Alerts already snapshot/restore and set `_alert_active`; DR does not filter them (safety signals). |
@@ -199,7 +208,12 @@ scene-target dict of its own) needs a read surface, so the controller stores
 a public `dr_shed_ids` property. The scene path additionally carries shed bulbs
 as off-targets in `_active_scene_targets` (needed anyway for manual-detection /
 self-heal). The invariant holds: the router reads `dr_shed_ids`, never recomputes
-the ratio over its own smaller route-lights on-set.
+the ratio over its own smaller route-lights on-set. The earlier "computed once
+per activation, router only reads" simplification is superseded for routed
+circadian: there the controller re-derives `dr_shed_ids` from the active route
+whenever the router reconciles, and `handle_scene_activated` sets it on external
+circadian activation (clears it on external off). See the Section 5.1
+routed-circadian amendment.
 
 ## 7. Trigger, state, and persistence
 

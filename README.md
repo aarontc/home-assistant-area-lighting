@@ -894,6 +894,9 @@ load during a utility demand-response event:
   captured as `on` in a scene snapshot cannot relight shed bulbs. Kept members
   still coalesce into a single zone command when every member of that zone is
   kept.
+- With `circadian_kelvin_routes`, circadian shedding counts only the currently
+  active route's lights (plus circadian lights outside any route) and is
+  recomputed when the route changes, so a route swap re-sheds correctly.
 
 Drive the switch from any utility integration or automation with
 `switch.turn_on` / `switch.turn_off`.

@@ -108,7 +108,8 @@ async def test_router_sheds_route_bulbs_on_live_flag_flip(
     await _toggles(hass).async_set_demand_response_active(True)
     await hass.async_block_till_done()
 
-    shed = {"light.kitchen_strip_2", "light.kitchen_strip_3"}
+    # The active on-set is the 3 fallback strips (n=3 -> keep 2): only the
+    # config-order tail strip is shed on the flip.
     off = {
         c.data.get("entity_id")
         for c in service_calls
@@ -119,9 +120,10 @@ async def test_router_sheds_route_bulbs_on_live_flag_flip(
         for c in service_calls
         if c.domain == "light" and c.service == "turn_on"
     }
-    assert shed <= off
-    assert on.isdisjoint(shed)
-    assert "light.kitchen_strip_1" not in off
+    assert "light.kitchen_strip_3" in off
+    assert off.isdisjoint({"light.kitchen_strip_1", "light.kitchen_strip_2"})
+    assert on.isdisjoint({"light.kitchen_strip_3"})
+    assert ctrl.dr_shed_ids == frozenset({"light.kitchen_strip_3"})
 
 
 @pytest.mark.integration
@@ -136,11 +138,76 @@ async def test_router_never_lights_shed_route_bulbs(
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
 
-    assert ctrl.dr_shed_ids == frozenset({"light.kitchen_strip_2", "light.kitchen_strip_3"})
+    # Shedding is sized over the ACTIVE route's lights (the 3 strips), not
+    # every route light: n=3 -> keep 2 -> shed only the tail strip.
+    assert ctrl.dr_shed_ids == frozenset({"light.kitchen_strip_3"})
     on = {
         c.data.get("entity_id")
         for c in service_calls
         if c.domain == "light" and c.service == "turn_on"
     }
-    assert "light.kitchen_strip_1" in on
-    assert on.isdisjoint({"light.kitchen_strip_2", "light.kitchen_strip_3"})
+    assert {"light.kitchen_strip_1", "light.kitchen_strip_2"} <= on
+    assert "light.kitchen_strip_3" not in on
+
+
+@pytest.mark.integration
+async def test_route_change_recomputes_shed_set(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A route change re-sizes the shed set over the NEW active route."""
+    await _setup(hass, colortemp=3000)  # fallback route (all 3 strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset({"light.kitchen_strip_3"})
+
+    # Mocked light services do not update hass.states: simulate the routed
+    # bring-up result (kept strips on, shed strip and fluorescent off).
+    hass.states.async_set("light.kitchen_strip_1", "on", {})
+    hass.states.async_set("light.kitchen_strip_2", "on", {})
+    hass.states.async_set("light.kitchen_strip_3", "off", {})
+    hass.states.async_set("light.kitchen_fluorescent", "off", {})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    hass.states.async_set(_SWITCH, "on", {"brightness": 75.0, "colortemp": 5000})
+    await hass.async_block_till_done()
+
+    on = {
+        c.data.get("entity_id")
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_on"
+    }
+    off = {
+        c.data.get("entity_id")
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert "light.kitchen_fluorescent" in on
+    assert {"light.kitchen_strip_1", "light.kitchen_strip_2"} <= off
+    # New active on-set is the single fluorescent: n=1 -> keep 1 -> shed none.
+    assert ctrl.dr_shed_ids == frozenset()
+
+
+@pytest.mark.integration
+async def test_external_circadian_recomputes_shed_set(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """External scene.turn_on of circadian under DR refreshes the shed set."""
+    await _setup(hass, colortemp=3000)  # fallback route (all 3 strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl.handle_scene_activated("circadian")
+    await hass.async_block_till_done()
+
+    assert ctrl.dr_shed_ids == frozenset({"light.kitchen_strip_3"})
+    on = {
+        c.data.get("entity_id")
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_on"
+    }
+    assert "light.kitchen_strip_3" not in on

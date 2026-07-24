@@ -114,17 +114,23 @@ class CircadianKelvinRouter:
         """HA fires this for every state change on `source`."""
         self._hass.async_create_task(self._reconcile())
 
-    def _demand_response_shed_ids(self) -> set[str]:
+    def _controller(self) -> Any:
         controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
-        ctrl = controllers.get(self._area_id)
-        return set(ctrl.dr_shed_ids) if ctrl is not None else set()
+        return controllers.get(self._area_id)
 
     async def _reconcile(self) -> None:
         """Reconcile light state against the active route, idempotently."""
         async with self._reconcile_lock:
+            ctrl = self._controller()
+            if ctrl is not None:
+                # The circadian shed set is sized over the ACTIVE route, so a
+                # colortemp change can change it: have the controller refresh
+                # it (and converge its non-route circadian lights) before we
+                # read it. Never calls back into this router.
+                await ctrl.recompute_and_apply_circadian_dr()
             colortemp = self._read_colortemp()
             new_index = select_route(self._config.routes, colortemp, self._current_index)
-            shed = frozenset(self._demand_response_shed_ids())
+            shed = frozenset(ctrl.dr_shed_ids) if ctrl is not None else frozenset()
 
             if new_index == self._current_index and shed == self._last_shed_ids:
                 return

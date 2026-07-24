@@ -15,7 +15,7 @@ from .area_state import (
     ActivationSource,
     AreaState,
 )
-from .circadian_kelvin_router import CircadianKelvinRouter
+from .circadian_kelvin_router import CircadianKelvinRouter, select_route
 from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
@@ -34,7 +34,7 @@ from .const import (
     SCENE_OFF_INTERNAL,
 )
 from .demand_response import apply_demand_response, demand_response_shed_ids
-from .models import AreaConfig, AreaLightingConfig, SceneConfig
+from .models import AreaConfig, AreaLightingConfig, LightConfig, SceneConfig
 from .scene_machine import (
     ActionType,
     SceneAction,
@@ -789,16 +789,47 @@ class AreaLightingController:
                     LeaderReason.SCENE_ACTIVATED,
                 )
 
-    def _circadian_on_ids(self) -> list[str]:
-        """Individual lights (config order) that circadian activation turns on:
-        route lights (driven by the kelvin router) plus lights bound to a
-        circadian switch."""
+    def _route_source_colortemp(self) -> float | None:
+        """Colortemp the kelvin router routes on: the routes' source entity,
+        falling back to sensor.circadian_values. None when neither is
+        available or parseable."""
+        sources: list[str] = []
         routes = self.area.circadian_kelvin_routes
-        route_lights = routes.all_route_lights if routes else set()
+        if routes is not None:
+            sources.append(routes.source)
+        sources.append("sensor.circadian_values")
+        for entity_id in sources:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                continue
+            raw = state.attributes.get("colortemp")
+            if raw is None:
+                continue
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _circadian_on_ids(self) -> list[str]:
+        """Individual lights (config order) that circadian activation turns on.
+
+        With kelvin routes only the ACTIVE route is lit at any colortemp, so
+        the route portion of the on-set is the active route's lights only
+        (sizing it over every route would over-count and keep inactive-route
+        lights at the expense of active ones), plus circadian-switch lights
+        outside any route. Without routes: all circadian-switch lights.
+        """
+        routes = self.area.circadian_kelvin_routes
+        if routes is None:
+            return [light.id for light in self.area.lights if light.circadian_switch]
+        index = select_route(routes.routes, self._route_source_colortemp(), None)
+        active = set(routes.routes[index].lights)
+        route_lights = routes.all_route_lights
         return [
             light.id
             for light in self.area.lights
-            if light.id in route_lights or light.circadian_switch
+            if light.id in active or (light.circadian_switch and light.id not in route_lights)
         ]
 
     def _compute_circadian_shed_ids(self) -> frozenset[str]:
@@ -831,27 +862,67 @@ class AreaLightingController:
                 # handled by the kelvin router, which reads dr_shed_ids).
                 tasks.append(self._call_service("light.turn_off", entity_id=light.id))
                 continue
-            if not light.circadian_switch:
+            data = self._circadian_turn_on_data(light)
+            if data is None:
                 continue
-            cs = self.area.circadian_switch_for_light(light)
-            if not cs:
-                continue
-            switch_state = self.hass.states.get(cs.entity_id)
-            if not switch_state:
-                continue
-            brightness_pct = switch_state.attributes.get("brightness")
-            colortemp_state = self.hass.states.get("sensor.circadian_values")
-            colortemp = colortemp_state.attributes.get("colortemp") if colortemp_state else None
-
-            data: dict[str, Any] = {"entity_id": light.id}
-            if brightness_pct is not None:
-                data["brightness"] = int(float(brightness_pct) * 2.55)
-            if colortemp is not None and light.circadian_type == "ct":
-                data["color_temp_kelvin"] = int(colortemp)
             tasks.append(self._call_service("light.turn_on", **data))
         if tasks:
             await asyncio.gather(*tasks)
         await self._sync_kelvin_router()
+
+    def _circadian_turn_on_data(self, light: LightConfig) -> dict[str, Any] | None:
+        """light.turn_on payload for one circadian-switch light, or None when
+        the light has no (available) circadian switch."""
+        if not light.circadian_switch:
+            return None
+        cs = self.area.circadian_switch_for_light(light)
+        if not cs:
+            return None
+        switch_state = self.hass.states.get(cs.entity_id)
+        if not switch_state:
+            return None
+        brightness_pct = switch_state.attributes.get("brightness")
+        colortemp_state = self.hass.states.get("sensor.circadian_values")
+        colortemp = colortemp_state.attributes.get("colortemp") if colortemp_state else None
+
+        data: dict[str, Any] = {"entity_id": light.id}
+        if brightness_pct is not None:
+            data["brightness"] = int(float(brightness_pct) * 2.55)
+        if colortemp is not None and light.circadian_type == "ct":
+            data["color_temp_kelvin"] = int(colortemp)
+        return data
+
+    async def recompute_and_apply_circadian_dr(self) -> None:
+        """Refresh the circadian demand-response shed set for the CURRENT
+        kelvin route and converge non-route circadian lights whose shed
+        status flipped.
+
+        Called by the kelvin router at the top of its reconcile (before it
+        reads dr_shed_ids), so it must never call back into the router;
+        route lights are the router's to drive.
+        """
+        if not self._state.is_circadian or not self._demand_response_active():
+            self._dr_shed_ids = frozenset()
+            return
+        self._dr_shed_ids = self._compute_circadian_shed_ids()
+
+        routes = self.area.circadian_kelvin_routes
+        route_lights = routes.all_route_lights if routes else set()
+        tasks: list = []
+        for light in self.area.all_lights:
+            if light.id in route_lights or not light.circadian_switch:
+                continue
+            state = self.hass.states.get(light.id)
+            is_on = state is not None and state.state == STATE_ON
+            if light.id in self._dr_shed_ids:
+                if is_on:
+                    tasks.append(self._call_service("light.turn_off", entity_id=light.id))
+            elif not is_on:
+                data = self._circadian_turn_on_data(light)
+                if data is not None:
+                    tasks.append(self._call_service("light.turn_on", **data))
+        if tasks:
+            await asyncio.gather(*tasks)
 
     async def _apply_scene_data(
         self,
@@ -1598,8 +1669,10 @@ class AreaLightingController:
         if scene_slug == "circadian":
             self._active_scene_targets = {}
             self._state.transition_to_circadian(ActivationSource.USER)
+            self._dr_shed_ids = self._compute_circadian_shed_ids()
         elif scene_slug == "off":
             self._active_scene_targets = {}
+            self._dr_shed_ids = frozenset()
             await self._disable_circadian_switches()
             self._state.transition_to_off(ActivationSource.USER)
         else:
