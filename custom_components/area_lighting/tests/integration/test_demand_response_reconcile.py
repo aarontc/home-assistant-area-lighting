@@ -345,6 +345,63 @@ async def test_scene_activation_aba_double_flip_converges(
 
 
 @pytest.mark.integration
+async def test_alert_restores_targets_from_reconcile_queued_before_it(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """The alert's tracking snapshot reflects reconciles that beat it to the lock.
+
+    Reconcile A (DR on) parks mid-converge holding _dr_lock with shed
+    tracking already published; DR then flips off and reconcile B queues on
+    the lock, followed by the alert. B converges (relights the tail, empties
+    the shed set, rewrites all-on targets) strictly before the alert starts,
+    so the snapshot the alert restores in its finally block must be B's
+    all-on targets. A snapshot taken before the lock would capture A's shed
+    targets and restore them over B's converge, leaving "off" tracking for
+    physically-on bulbs with no repair reconcile (DR off, shed set empty).
+    """
+    from custom_components.area_lighting.alert import execute_alert
+    from custom_components.area_lighting.models import AlertPattern, AlertStep
+
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    for i in range(1, 7):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    chrono = _register_stateful_light_recorder(hass)
+    gate, reached = _gate_first_apply(ctrl, monkeypatch)
+
+    _toggles(hass)._demand_response_active = True
+    task_a = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await reached.wait()  # A holds _dr_lock, parked mid-apply, shed targets published
+    _toggles(hass)._demand_response_active = False
+    task_b = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await asyncio.sleep(0)  # B queues on the lock
+
+    pattern = AlertPattern(
+        steps=[AlertStep(target="all", state="on", brightness=255)],
+        repeat=1,
+        restore=True,
+    )
+    alert_task = hass.async_create_task(execute_alert(hass, ctrl, pattern))
+    await asyncio.sleep(0)  # the alert queues on the lock behind B
+
+    gate.set()
+    await asyncio.gather(task_a, task_b, alert_task)
+    await hass.async_block_till_done()
+
+    # B's DR-off converge ran before the alert began, so the alert restored
+    # B's tracking: every bulb on, all-on targets, no shed state.
+    final = {eid: svc for svc, eid in chrono}
+    for i in range(1, 7):
+        assert final[f"light.den_{i}"] == "turn_on"
+    assert ctrl.dr_shed_ids == frozenset()
+    for i in range(1, 7):
+        assert ctrl._active_scene_targets[f"light.den_{i}"]["state"] == "on"
+
+
+@pytest.mark.integration
 async def test_alert_start_waits_for_inflight_reconcile(
     hass: HomeAssistant, helper_entities, service_calls, monkeypatch
 ) -> None:

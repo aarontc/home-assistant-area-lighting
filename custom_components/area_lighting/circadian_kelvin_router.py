@@ -281,10 +281,18 @@ class CircadianKelvinRouter:
         response. While DR is active a route's cluster entity must be driven
         as its individual members (a zone turn_on would relight shed members
         through the aggregate); without DR clusters stay as-is to preserve
-        batching."""
+        batching. Only clusters actually used AS route lights are included:
+        an unrelated cluster must not drag its members into the stable-path
+        convergence (a directly-routed individual light that happens to be a
+        member would be needlessly re-driven on stable reconciles)."""
         if ctrl is None or not ctrl.demand_response_active:
             return {}
-        return {c.id: list(c.members) for c in ctrl.area.light_clusters if c.members}
+        route_lights = self._config.all_route_lights
+        return {
+            c.id: list(c.members)
+            for c in ctrl.area.light_clusters
+            if c.members and c.id in route_lights
+        }
 
     @staticmethod
     def _expand_clusters(

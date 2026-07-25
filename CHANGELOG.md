@@ -59,7 +59,9 @@ readable companion that highlights user-facing changes.
   the final flag state (a reconcile that queued behind an in-flight one
   re-checks for a started alert before touching lights, and an alert's
   start waits for an in-flight reconcile to finish before capturing light
-  states, so the two never overlap), and a flip that lands mid
+  states, snapshotting the area's scene tracking only after that wait so
+  a reconcile that beat it to the start is what it later restores, so the
+  two never overlap), and a flip that lands mid
   scene-activation is converged at the end of that activation, even a
   double flip that returns the flag to its starting value (every flip
   bumps a generation counter, so the activation cannot miss it).
@@ -84,8 +86,10 @@ readable companion that highlights user-facing changes.
   route whose light is a cluster entity is expanded to its members (kept
   on, shed off), and a stable route reconcile (same route, same shed set)
   still corrects a member whose physical state drifted, without relighting
-  shed members; without demand response, clusters batch exactly as
-  before. A route reconcile that loses its listener while asking the
+  shed members; only clusters actually named as route lights join that
+  member convergence, so a directly-routed light that merely belongs to an
+  unrelated cluster keeps its manual state on stable reconciles; without
+  demand response, clusters batch exactly as before. A route reconcile that loses its listener while asking the
   controller to refresh the shed set (the area is leaving circadian)
   drops its route commands instead of fighting the incoming scene.
 

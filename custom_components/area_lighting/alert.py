@@ -238,8 +238,9 @@ async def execute_alert(
 ) -> None:
     """Execute an alert pattern on an area's lights.
 
-    1. Set _alert_active flag under _dr_lock (suppresses manual detection
-       and serializes the start with any in-flight DR reconcile)
+    1. Set _alert_active flag and snapshot scene state/targets under
+       _dr_lock (suppresses manual detection and serializes the start
+       with any in-flight DR reconcile)
     2. Capture light states
     3. Snapshot + cancel timers
     4. Execute steps x repeat
@@ -265,16 +266,19 @@ async def execute_alert(
         "_occupancy_timer": controller._occupancy_timer,
     }
 
-    saved_state = controller._state.to_dict()
-    saved_targets = dict(controller._active_scene_targets)
-
     # Set the flag under _dr_lock so the alert's start serializes with any
     # in-flight demand-response reconcile: acquiring the lock waits out a
     # converge that is mid-execution, and once the flag is set every later
     # reconcile sees it inside the lock and defers. The lock is released
-    # immediately; the pattern itself never holds it.
+    # immediately; the pattern itself never holds it. The state/target
+    # snapshot is taken inside the lock AFTER the flag is set, so it
+    # reflects every reconcile that finished (or was queued) before the
+    # alert started; a snapshot taken before the lock would restore stale
+    # tracking over a queued reconcile's converge.
     async with controller._dr_lock:
         controller._alert_active = True
+        saved_state = controller._state.to_dict()
+        saved_targets = dict(controller._active_scene_targets)
     try:
         captured = capture_light_states(individual_light_ids, hass.states.get)
 

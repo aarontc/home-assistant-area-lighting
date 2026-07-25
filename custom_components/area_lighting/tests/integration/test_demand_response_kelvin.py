@@ -790,6 +790,87 @@ async def test_cluster_route_stable_reconcile_converges_member_drift(
     assert _light_calls(service_calls, "turn_on") == {"light.media_2"}
 
 
+def _unrouted_cluster_config() -> dict:
+    """A cluster that is NOT used in any route, plus an individual light
+    (a member of that cluster) routed directly. The cluster must not drag
+    its members into the stable-path convergence."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "media",
+                    "name": "Media",
+                    "event_handlers": True,
+                    "lights": [{"id": eid, "roles": ["dimming"]} for eid in _MEDIA_MEMBERS]
+                    + [{"id": "light.media_lamp", "roles": ["dimming"]}],
+                    "light_clusters": [{"id": _MEDIA_ZONE, "members": list(_MEDIA_MEMBERS)}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "off", "name": "Off"},
+                    ],
+                    "circadian_kelvin_routes": {
+                        "source": _MEDIA_SOURCE,
+                        "crossfade_seconds": 1.0,
+                        "routes": [
+                            {"kelvin_range": [4500, 5500], "lights": ["light.media_1"]},
+                            {"lights": ["light.media_lamp"]},
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_unrouted_cluster_does_not_redrive_routed_member_on_stable(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A cluster absent from every route must not pull its members into the
+    stable-path convergence: a manual change to a directly-routed light that
+    happens to be a member of that unrelated cluster survives stable
+    reconciles (same route index, same shed set) under DR."""
+    for eid in [*_MEDIA_MEMBERS, _MEDIA_ZONE, "light.media_lamp"]:
+        hass.states.async_set(eid, "off", {})
+    hass.states.async_set(_MEDIA_SOURCE, "0", {"colortemp": 5000})
+    assert await async_setup_component(hass, "area_lighting", _unrouted_cluster_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    ctrl = hass.data["area_lighting"]["controllers"]["media"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset()  # single-light on-set keeps itself
+
+    # Physical result of the bring-up, plus one unrouted cluster member lit
+    # outside the router so the area never reads all-off during the drift.
+    hass.states.async_set("light.media_1", "on", {})
+    hass.states.async_set("light.media_2", "on", {})
+    await hass.async_block_till_done()
+
+    # Consistent stable reconcile: silent.
+    service_calls.clear()
+    hass.states.async_set(_MEDIA_SOURCE, "1", {"colortemp": 5000})
+    await hass.async_block_till_done()
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+    # The routed member is manually turned off while route and shed set
+    # stay stable.
+    hass.states.async_set("light.media_1", "off", {})
+    await hass.async_block_till_done()
+    assert ctrl._state.is_circadian  # drift did not knock the area out
+
+    service_calls.clear()
+    hass.states.async_set(_MEDIA_SOURCE, "2", {"colortemp": 5000})
+    await hass.async_block_till_done()
+
+    # The zone cluster is not a route light, so the stable path leaves the
+    # directly-routed member (and everything else) alone.
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
 @pytest.mark.integration
 async def test_cluster_route_batches_without_dr(
     hass: HomeAssistant, helper_entities, service_calls

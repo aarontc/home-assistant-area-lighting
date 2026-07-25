@@ -889,8 +889,10 @@ load during a utility demand-response event:
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
   switch immediately sheds already-lit non-manual areas; clearing it restores
   them. An alert and a shed reconcile never overlap: an alert waits for an
-  in-flight reconcile to finish before capturing light states, and a flip
-  that lands mid-alert is applied right after the alert restores them.
+  in-flight reconcile to finish before capturing light states (and snapshots
+  the area's scene tracking only after that wait, so a reconcile that beat
+  it to the start is what the alert later restores), and a flip that lands
+  mid-alert is applied right after the alert restores them.
 - While shedding, `light_clusters` entities (Hue Zones) are never driven on
   in any path: they are ignored as direct scene targets, skipped by circadian
   activation (even when a cluster carries a `circadian_switch`), excluded
@@ -900,7 +902,10 @@ load during a utility demand-response event:
   still coalesce into a single zone command when every member of that zone is
   kept, and without demand response clusters batch exactly as before. A
   stable route reconcile (same route, same shed set) still corrects a member
-  whose physical state drifted, without relighting shed members.
+  whose physical state drifted, without relighting shed members; only
+  clusters actually named as route lights join that member convergence, so a
+  directly-routed light that merely belongs to an unrelated cluster keeps
+  its manual state on stable reconciles.
 - With `circadian_kelvin_routes`, circadian shedding counts only the currently
   active route's lights (plus circadian lights outside any route), selected
   with the same hysteresis the router uses, and is
