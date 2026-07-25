@@ -28,6 +28,7 @@ def _flip_flag(hass: HomeAssistant, value: bool) -> None:
 
 def _config() -> dict:
     entities = {f"light.den_{i}": {"state": "on", "brightness": 200} for i in range(1, 7)}
+    dim_entities = {f"light.den_{i}": {"state": "on", "brightness": 100} for i in range(1, 4)}
     return {
         "area_lighting": {
             "areas": [
@@ -39,6 +40,7 @@ def _config() -> dict:
                     "scenes": [
                         {"id": "circadian", "name": "Circadian"},
                         {"id": "bright", "name": "Bright", "entities": entities},
+                        {"id": "dim", "name": "Dim", "entities": dim_entities},
                         {"id": "off", "name": "Off"},
                     ],
                 }
@@ -452,3 +454,76 @@ async def test_alert_start_waits_for_inflight_reconcile(
     reconcile_offs = [i for i, (svc, _) in enumerate(chrono) if svc == "turn_off"][:4]
     assert len(reconcile_offs) == 4
     assert first_on > max(reconcile_offs)
+
+
+@pytest.mark.integration
+async def test_reconcile_queued_mid_activation_cannot_corrupt_tracking(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """A reconcile entering mid scene-activation must not re-assert the
+    outgoing scene's tracking over the incoming one.
+
+    Scene "dim" is active. Reconcile R1 (DR on) parks mid-converge holding
+    _dr_lock; two more flag flips (off, on) queue reconciles R2/R3 on the
+    lock. Scene "bright" activation B then starts: it captures the
+    already-bumped generation, publishes bright's tracking, and parks
+    mid-apply with _state still "dim". Releasing R1 lets R2/R3 acquire the
+    lock MID-activation: without the in-progress guard they read the stale
+    "dim" state and overwrite bright's tracking with dim's (and B's
+    end-of-activation generation compare cannot catch it, because B started
+    after every bump). The final tracking, shed set, and state must all
+    reflect "bright" with demand response applied.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await ctrl._activate_scene("dim", ActivationSource.USER)
+    await hass.async_block_till_done()
+    # Physical result of "dim": its three bulbs on, the rest off.
+    for i in (1, 2, 3):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 100})
+
+    chrono = _register_stateful_light_recorder(hass)
+    gate, reached = _gate_first_apply(ctrl, monkeypatch)
+
+    await _toggles(hass).async_set_demand_response_active(True)  # queues R1
+    await reached.wait()  # R1 holds _dr_lock, parked mid-apply of dim's shed
+    await _toggles(hass).async_set_demand_response_active(False)  # queues R2
+    await _toggles(hass).async_set_demand_response_active(True)  # queues R3
+
+    b_gate = asyncio.Event()
+    b_reached = asyncio.Event()
+    original_apply_scene = ctrl._apply_scene_data
+
+    async def gated_scene_apply(scene_slug, transition=None):
+        b_reached.set()
+        await b_gate.wait()
+        await original_apply_scene(scene_slug, transition)
+
+    monkeypatch.setattr(ctrl, "_apply_scene_data", gated_scene_apply)
+
+    task_b = hass.async_create_task(ctrl._activate_scene("bright", ActivationSource.USER))
+    await b_reached.wait()  # B published bright's tracking; _state still "dim"
+
+    gate.set()  # R1 finishes and releases; R2/R3 acquire mid-activation
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if not ctrl._dr_lock.locked():
+            break
+    assert not ctrl._dr_lock.locked()
+
+    b_gate.set()  # B applies, transitions to "bright", and settles DR
+    await task_b
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_scene
+    assert ctrl._state.scene_slug == "bright"
+    assert ctrl.dr_shed_ids == frozenset({f"light.den_{i}" for i in (3, 4, 5, 6)})
+    assert set(ctrl._active_scene_targets) == {f"light.den_{i}" for i in range(1, 7)}
+    assert ctrl._active_scene_targets["light.den_1"]["state"] == "on"
+    assert ctrl._active_scene_targets["light.den_6"]["state"] == "off"
+    # Physically: bright's kept head on, shed tail off.
+    final = {eid: svc for svc, eid in chrono}
+    for i in (1, 2):
+        assert final[f"light.den_{i}"] == "turn_on"
+    for i in (3, 4, 5, 6):
+        assert final[f"light.den_{i}"] == "turn_off"

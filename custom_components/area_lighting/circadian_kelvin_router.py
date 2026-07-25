@@ -195,16 +195,24 @@ class CircadianKelvinRouter:
 
             stable = new_index == prev_index and shed == self._last_shed_ids
             cluster_members = self._cluster_members_under_dr(ctrl)
+            restore_only: frozenset[str] | None = None
             if not cluster_members and self._last_shed_ids and not shed:
                 # Demand response just cleared (shed set went non-empty ->
                 # empty) and cluster expansion is off again. An aggregate
                 # zone still reads "on" from its kept members, so aggregate
                 # diffing would skip the turn_on that restores a previously
                 # shed member. Force ONE member-level pass over the
-                # route-used clusters (shed is empty, so every active-route
-                # member that is off gets relit); the next reconcile
-                # resumes aggregate batching.
+                # route-used clusters; the next reconcile resumes
+                # aggregate batching.
                 cluster_members = self._route_used_cluster_members(ctrl)
+                if new_index == prev_index:
+                    # Same route: relight ONLY what demand response shed.
+                    # A kept active-route light the user manually turned
+                    # off while shedding was active was never this
+                    # router's to turn off, so the clear must not
+                    # force-relight it. On a simultaneous route change the
+                    # full new-route bring-up wins instead.
+                    restore_only = self._last_shed_ids
             if stable and not cluster_members:
                 # Same route, same shed set, no cluster expansion in play:
                 # the previous dispatch's targets still stand, so skip the
@@ -238,9 +246,10 @@ class CircadianKelvinRouter:
                 for eid in sorted(inactive_lights)
                 if (s := self._hass.states.get(eid)) is not None and s.state == "on"
             ]
+            on_candidates = active_lights if restore_only is None else active_lights & restore_only
             on_calls_to_issue = [
                 eid
-                for eid in sorted(active_lights)
+                for eid in sorted(on_candidates)
                 if (s := self._hass.states.get(eid)) is None or s.state != "on"
             ]
 

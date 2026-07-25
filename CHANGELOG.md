@@ -64,7 +64,12 @@ readable companion that highlights user-facing changes.
   two never overlap), and a flip that lands mid
   scene-activation is converged at the end of that activation, even a
   double flip that returns the flag to its starting value (every flip
-  bumps a generation counter, so the activation cannot miss it).
+  bumps a generation counter, so the activation cannot miss it). A
+  reconcile that arrives while a scene or circadian activation is still
+  mid-transition defers to that activation instead of converging against
+  the outgoing scene's state, and the activation runs the converge itself
+  once it finishes, so the incoming scene's tracking is never overwritten
+  with the outgoing scene's.
   Raising or lowering a fully-dark area (which restores the remembered
   scene, then brings every light to the minimum step) converges to the
   all-lights shed: the shed tail is explicitly turned off, so a bulb the
@@ -86,7 +91,9 @@ readable companion that highlights user-facing changes.
   route whose light is a cluster entity is expanded to its members (kept
   on, shed off), and a stable route reconcile (same route, same shed set)
   still corrects a member whose physical state drifted, without relighting
-  shed members; only clusters actually named as route lights join that
+  shed members; clearing the flag relights only the route lights that were
+  actually shed, so a kept light the user manually turned off while
+  shedding was active stays off; only clusters actually named as route lights join that
   member convergence, so a directly-routed light that merely belongs to an
   unrelated cluster keeps its manual state on stable reconciles; without
   demand response, clusters batch exactly as before. A route reconcile that loses its listener while asking the
