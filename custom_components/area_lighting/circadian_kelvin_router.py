@@ -195,6 +195,16 @@ class CircadianKelvinRouter:
 
             stable = new_index == prev_index and shed == self._last_shed_ids
             cluster_members = self._cluster_members_under_dr(ctrl)
+            if not cluster_members and self._last_shed_ids and not shed:
+                # Demand response just cleared (shed set went non-empty ->
+                # empty) and cluster expansion is off again. An aggregate
+                # zone still reads "on" from its kept members, so aggregate
+                # diffing would skip the turn_on that restores a previously
+                # shed member. Force ONE member-level pass over the
+                # route-used clusters (shed is empty, so every active-route
+                # member that is off gets relit); the next reconcile
+                # resumes aggregate batching.
+                cluster_members = self._route_used_cluster_members(ctrl)
             if stable and not cluster_members:
                 # Same route, same shed set, no cluster expansion in play:
                 # the previous dispatch's targets still stand, so skip the
@@ -286,6 +296,14 @@ class CircadianKelvinRouter:
         convergence (a directly-routed individual light that happens to be a
         member would be needlessly re-driven on stable reconciles)."""
         if ctrl is None or not ctrl.demand_response_active:
+            return {}
+        return self._route_used_cluster_members(ctrl)
+
+    def _route_used_cluster_members(self, ctrl: Any) -> dict[str, list[str]]:
+        """Cluster entity id -> member ids for clusters used AS route lights,
+        regardless of demand-response state. Backs both the DR expansion
+        above and the one-shot member restore on the DR-clear transition."""
+        if ctrl is None:
             return {}
         route_lights = self._config.all_route_lights
         return {

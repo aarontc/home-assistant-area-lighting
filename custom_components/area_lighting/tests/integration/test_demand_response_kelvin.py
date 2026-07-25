@@ -790,6 +790,44 @@ async def test_cluster_route_stable_reconcile_converges_member_drift(
     assert _light_calls(service_calls, "turn_on") == {"light.media_2"}
 
 
+@pytest.mark.integration
+async def test_cluster_route_dr_clear_restores_shed_member(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Clearing demand response must restore a previously shed cluster-route
+    member. The aggregate zone still reads "on" from its kept members, so
+    aggregate-level diffing alone would skip the turn_on and leave the shed
+    member physically off until the next route change."""
+    await _setup_media(hass, colortemp=5000)  # banded route (zone) active
+    ctrl = hass.data["area_lighting"]["controllers"]["media"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset({"light.media_3"})
+
+    # Physical result of the DR bring-up: kept members on, shed member off,
+    # and the aggregate zone reporting "on" from its kept members.
+    hass.states.async_set("light.media_1", "on", {})
+    hass.states.async_set("light.media_2", "on", {})
+    hass.states.async_set("light.media_3", "off", {})
+    hass.states.async_set(_MEDIA_ZONE, "on", {})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+
+    assert ctrl.dr_shed_ids == frozenset()
+    on = _light_calls(service_calls, "turn_on")
+    # The previously shed member is restored...
+    assert "light.media_3" in on
+    # ...without re-commanding the already-on kept members or the aggregate.
+    assert on.isdisjoint({"light.media_1", "light.media_2", _MEDIA_ZONE})
+    # The restore turns nothing off.
+    assert _light_calls(service_calls, "turn_off") == set()
+
+
 def _unrouted_cluster_config() -> dict:
     """A cluster that is NOT used in any route, plus an individual light
     (a member of that cluster) routed directly. The cluster must not drag
