@@ -34,8 +34,9 @@ suppression state to keep in sync (unlike alerts).
   first.
 - Off commands, alerts, and `manual` areas are untouched.
 - Two mechanisms enforce the mode (Section 5 and 6): steady-state filtering of
-  every new activation, and an edge reconcile of already-lit areas at the moment
-  the switch flips.
+  every new activation, and, at the moment the switch flips, re-activation of
+  already-lit areas through their NORMAL activation paths (Section 8). There is
+  no separate reconcile subsystem and no lock.
 
 ### Worked examples
 
@@ -121,7 +122,8 @@ Notes:
 - The on-set is drawn from `ordered_light_ids` (the area's own lights), so a
   target key that is not one of the area's lights is never counted or shed.
 - Shed bulbs are rewritten to an explicit `{"state": "off"}` target, not merely
-  removed. This is what makes tracking and reconcile idempotent (Section 5).
+  removed. This is what makes tracking (and every replay of the resolved
+  targets) idempotent (Section 5).
 
 ## 5. Idempotent target resolution (the heart)
 
@@ -251,9 +253,9 @@ flag:
 
 - Field `_demand_response_active: bool = False`; read-only property.
 - `async_set_demand_response_active(enabled)` — on change, notify listeners,
-  schedule save, and walk `hass.data[DOMAIN]["controllers"].values()` calling
-  each controller's DR reconcile (Section 8), mirroring the occupancy setter at
-  `global_state.py:80`.
+  schedule save, and walk `hass.data[DOMAIN]["controllers"].values()` creating
+  one task per controller calling `reactivate_for_demand_response()`
+  (Section 8), mirroring the occupancy setter at `global_state.py:80`.
 - Add `demand_response_active` to `state_dict()` and `load_persisted_state()`
   (persisted via the reserved global `StateStorage` key).
 
@@ -261,47 +263,53 @@ Add one row to `GLOBAL_SWITCH_DEFS` (`switch.py:30`) producing the owned entity
 `switch.area_lighting_demand_response_active`, and route it through the setter in
 `AreaLightingGlobalSwitch._set`.
 
-## 8. Reconcile on the switch edge
+## 8. Re-activation on the switch edge
 
 Steady-state filtering (Section 6) only affects *new* activations. Already-lit
-areas are handled by a reconcile fired from the setter, in both directions.
-`manual` and `off` areas are skipped.
+areas are handled on a flag flip by **re-driving each area through its NORMAL
+activation path**, in both directions. `manual` and `off` areas are skipped, as
+is an area an alert currently owns (the alert's finally block re-drives it
+after its restore, Section 6's alert bypass).
 
-The reconcile is a single **ON/OFF-only converge** per non-manual, non-off
-controller, mirroring the kelvin router's existing idempotent diff loop
-(`circadian_kelvin_router.py:129-140`): recompute the DR-effective targets for
-the current state, then diff against **live** light state and issue calls only on
-the ON/OFF dimension.
+The setter (`async_set_demand_response_active`) fans out one task per
+controller calling `reactivate_for_demand_response()`:
 
-- **Scene areas:** for each effective target, if it wants **off** and the bulb is
-  **on** -> `light.turn_off`; if it wants **on** and the bulb is **off** ->
-  `light.turn_on` to its unfiltered scene target. A bulb already at the correct
-  polarity (a kept bulb that is on) is **left untouched** — so a manual dim level
-  on kept bulbs survives the flip. `_active_scene_targets` is updated to the new
-  effective targets.
-- **Circadian areas:** re-run `_activate_circadian(source)`. Circadian values are
-  computed, so kept bulbs are re-sent the same value (no visible change) while the
-  DR filter turns shed bulbs off (activate) or brings them back (deactivate).
+- **Scene areas:** re-run `_activate_scene(scene_slug, source)` for the
+  currently-active slug. The DR filter folded into target resolution
+  (Section 5) sheds the tail on activate and replays the full scene on
+  deactivate. Tracking (`_active_scene_targets`, `dr_shed_ids`) is rebuilt by
+  the activation itself, exactly as for any other activation.
+- **Circadian areas:** re-run `_activate_circadian(source)`. Circadian values
+  are computed, so kept bulbs are re-sent the same value (no visible change)
+  while the DR filter turns shed bulbs off (activate) or brings them back
+  (deactivate).
 
-Both directions are idempotent: re-running activate when already shed turns
-nothing (shed bulbs already off); re-running deactivate when already restored
-turns nothing.
+Because DR is a pure idempotent filter applied at every activation, the flip
+needs no state of its own: there is **no separate reconcile subsystem, no
+lock, no serialization** between a flip and normal light control. A flip can
+never block (or be blocked by) an activation; concurrent triggers simply race
+as ordinary activations already do, and the last completed activation wins
+with self-consistent tracking. Both directions are idempotent: re-firing the
+activation when the area is already converged re-issues the same commands with
+the same result.
 
-**Behavior notes / accepted limitation:** kept bulbs that are on are never
-retouched, so their dim level is preserved across the flip. The one corner: a
-bulb the DR event **shed** while the area was `dimmed` is restored on deactivate
-at its **scene** brightness, not the exact dimmed level (that per-bulb level is
-not tracked in `_active_scene_targets`). This is a rare interaction
-(dimmed + DR), consistent with the user's "restore lighting as normal" intent,
-and reconstructing the exact dimmed level would require snapshotting live state
-(deferred, YAGNI).
+**Accepted tradeoff (reliability over DR precision):** the flip re-fires the
+active scene, so every bulb the scene manages is re-commanded to its scene
+target. A manual dim level set before the DR event is therefore not preserved
+across the flip (the bulbs return to scene brightness), and a `dimmed` area's
+shed bulbs likewise restore at scene brightness. This is deliberate: the prior
+design's diff-based edge reconcile preserved kept-bulb dim levels but required
+a second concurrent subsystem mutating activation tracking under a shared
+lock, which coupled normal light control to demand response (an activation
+could wait on, or be starved by, DR work). Reliable normal lighting is the
+priority; DR precision beyond "shed on, restore on clear" is not.
 
 ## 9. Manual and restart
 
 - A user externally turning on a shed bulb produces a real divergence from its
   off-target -> normal manual detection latches the area `manual` (user intent
-  wins). Manual areas are excluded from the edge reconcile, so the bulb stays on
-  and the area is not re-shed. Correct by default.
+  wins). Manual areas are excluded from the flip re-activation, so the bulb
+  stays on and the area is not re-shed. Correct by default.
 - `demand_response_active` persists. On restart mid-event the flag restores;
   target resolution stays shed because `_effective_scene_targets` reads the flag.
   The plan must ensure `_active_scene_targets` is rebuilt through the filtered
@@ -330,13 +338,15 @@ Integration (`pytest-homeassistant-custom-component`):
 - Switch entity exists, defaults off, persists across a reload.
 - DR on then scene activation: only `keep` bulbs come on; the config-order tail
   stays off; the exact worked-example counts (2->1, 25->5, 6->2).
-- Edge reconcile on activate: an already-lit area sheds its tail immediately;
-  kept bulbs and their brightness are untouched.
-- Edge reconcile on deactivate: shed bulbs return; a `dimmed` area restores them
-  to the dimmed level, not full brightness.
+- Flip re-activation on activate: an already-lit area sheds its tail
+  immediately; kept bulbs never receive a turn_off.
+- Flip re-activation on deactivate: shed bulbs return at their scene targets;
+  nothing is turned off.
+- No lock: a normal activation completes while a flip re-activation is
+  in flight (structural: no `_dr_lock` exists).
 - Off still fully turns the area off during DR.
 - Manual light-on during DR latches `manual` and survives the clear (not
-  re-shed, not reconciled).
+  re-shed, not re-activated).
 - External `scene.turn_on` during DR is filtered (the HA Scene-entity path).
 - Alerts during DR are unaffected (full pattern runs, then restores).
 - Cluster behavior: a partially-shed Hue Zone emits per-light calls; a fully-shed

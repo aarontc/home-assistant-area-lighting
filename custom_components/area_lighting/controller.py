@@ -146,18 +146,8 @@ class AreaLightingController:
 
         # Entity ids of individual lights the current activation shed for
         # demand response (empty when DR is inactive). Read by the kelvin
-        # router and the DR reconcile; surfaced in diagnostics.
+        # router; surfaced in diagnostics.
         self._dr_shed_ids: frozenset[str] = frozenset()
-
-        # Fully serializes scene/circadian activations with demand-response
-        # reconciles (and with an alert's start snapshot). An activation
-        # holds this lock for its whole duration, so a reconcile can never
-        # observe (or overwrite) mid-transition state and tracking; a
-        # reconcile queued behind an activation converges afterwards against
-        # the settled state, reading the LIVE flag, so the last holder
-        # through always converges to the final state. Nested activation
-        # work goes through the *_inner bodies, which never touch the lock.
-        self._dr_lock: asyncio.Lock = asyncio.Lock()
 
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
@@ -781,27 +771,12 @@ class AreaLightingController:
         Any transition OUT of a circadian state disables the circadian
         switches first so they don't fight the new scene's light settings.
 
-        The body runs holding _dr_lock for its whole duration, so a
-        demand-response reconcile (or an alert's start snapshot) can never
-        interleave with it: a reconcile queued mid-activation waits on the
-        lock and converges afterwards against the settled state, reading
-        the LIVE flag. A flag edge that lands mid-activation always queues
-        its own reconcile task (the global setter schedules one per
-        controller), so no end-of-activation settle is needed here. Must
-        NOT be called with _dr_lock already held; nested activation work
-        uses the *_inner bodies instead.
+        Demand response needs no coordination here: the shed filter is
+        folded into target resolution (_effective_scene_targets /
+        _apply_scene_data), and a flag flip re-drives the area through
+        this same path (reactivate_for_demand_response). Activations never
+        wait on any demand-response state.
         """
-        async with self._dr_lock:
-            await self._activate_scene_inner(scene_slug, source, transition)
-
-    async def _activate_scene_inner(
-        self,
-        scene_slug: str,
-        source: ActivationSource,
-        transition: float | None,
-    ) -> None:
-        """Body of _activate_scene; runs with _dr_lock held by the caller
-        (_activate_scene or nobody else) and never acquires it itself."""
         from .area_state import LeaderReason
 
         if scene_slug == SCENE_OFF_INTERNAL:
@@ -819,9 +794,7 @@ class AreaLightingController:
 
         if scene_slug == SCENE_CIRCADIAN:
             self._active_scene_targets = {}
-            # Nested call: _dr_lock is already held, so go through the
-            # inner body (the outer _activate_circadian would deadlock).
-            await self._activate_circadian_inner(source)
+            await self._activate_circadian(source)
             if source != ActivationSource.LEADER:
                 self._propagate_to_followers(
                     SCENE_CIRCADIAN,
@@ -851,9 +824,6 @@ class AreaLightingController:
                     scene_slug,
                     LeaderReason.SCENE_ACTIVATED,
                 )
-        # A demand-response edge that landed mid-activation queued its own
-        # reconcile task on _dr_lock; it converges right after this body's
-        # caller releases the lock.
 
     def _route_source_colortemp(self) -> float | None:
         """Colortemp the kelvin router routes on, read through the router
@@ -911,30 +881,15 @@ class AreaLightingController:
         self,
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
-        """Activate circadian mode (direct, top-level entry).
+        """Activate circadian mode.
 
-        Holds _dr_lock for the whole activation, exactly like
-        _activate_scene: a demand-response reconcile queued mid-activation
-        waits on the lock and converges afterwards against the settled
-        state, reading the LIVE flag. Must NOT be called with _dr_lock
-        already held; nested callers (_activate_scene_inner's circadian
-        branch, the reconcile's circadian path) use
-        _activate_circadian_inner instead.
+        Applies the demand-response shed filter at activation time
+        (_compute_circadian_shed_ids); a flag flip re-runs this same
+        method via reactivate_for_demand_response. The kelvin-router sync
+        at the end acquires only the router's _reconcile_lock, and
+        recompute_and_apply_circadian_dr, which the router calls back,
+        takes no lock at all.
         """
-        async with self._dr_lock:
-            await self._activate_circadian_inner(source)
-
-    async def _activate_circadian_inner(
-        self,
-        source: ActivationSource,
-    ) -> None:
-        """Body of _activate_circadian; runs with _dr_lock held by the
-        caller (_activate_circadian, _activate_scene_inner, or
-        async_reconcile_demand_response) and never acquires it itself.
-        The kelvin-router sync at the end acquires only the router's
-        _reconcile_lock (lock order: _dr_lock then _reconcile_lock,
-        never the reverse), and recompute_and_apply_circadian_dr, which
-        the router calls back, takes no lock at all."""
         self._state.transition_to_circadian(source)
         self._dr_shed_ids = self._compute_circadian_shed_ids()
         self._enforce_occupancy_timer()
@@ -1176,8 +1131,9 @@ class AreaLightingController:
         # Skeleton fallback: role-based on/off, no attribute targets. Lights
         # in the scene's group_exclude are OMITTED entirely (matching
         # scene.py._apply_skeleton, which never commands them): group_exclude
-        # means left untouched, so an off-target here would let a DR
-        # reconcile or self-heal turn off a light the scene must not manage.
+        # means left untouched, so an off-target here would let a demand-
+        # response re-activation or self-heal turn off a light the scene
+        # must not manage.
         # Their absence also keeps them out of the on-set used to size the
         # DR shed, so shed sizing agrees with the scene entity's apply path.
         excluded = set(scene_cfg.group_exclude) if scene_cfg else set()
@@ -1235,8 +1191,8 @@ class AreaLightingController:
         when the global DR flag is active. Shed bulbs carry an off-target so
         manual detection and self-heal treat them as intended-off. Cluster
         entities are dropped under DR: a snapshot's zone entry would survive
-        as an `on` target (only individual lights are shed) and reconcile or
-        self-heal would relight shed members through the zone."""
+        as an `on` target (only individual lights are shed) and self-heal
+        would relight shed members through the zone."""
         targets = self._resolve_raw_scene_targets(scene_slug)
         if self._demand_response_active():
             targets = apply_demand_response(targets, [light.id for light in self.area.lights])
@@ -1252,64 +1208,23 @@ class AreaLightingController:
         on_ids = [eid for eid in ordered if raw.get(eid, {}).get("state") == "on"]
         return frozenset(demand_response_shed_ids(ordered, on_ids))
 
-    async def async_reconcile_demand_response(self) -> None:
-        """Re-evaluate shed bulbs after the global demand-response flag flipped.
+    async def reactivate_for_demand_response(self) -> None:
+        """Re-drive this area through its normal activation path so the
+        (now-flipped) demand-response filter is applied.
 
-        Idempotent ON/OFF-only converge (mirrors the kelvin router's diff loop):
-        shed bulbs are turned off, previously shed bulbs are turned back on to
-        their scene target, and bulbs already at the correct polarity (kept
-        bulbs that are on) are left untouched so a manual dim level survives the
-        flip. Manual and off areas are skipped. Called for every controller by
-        the global demand-response setter.
-
-        Deferred while an alert owns the lights (execute_alert re-runs the
-        reconcile once the alert finishes), and serialized under _dr_lock so
-        rapid flag flips cannot interleave converges. The alert check sits
-        inside the lock so a reconcile that queued behind an in-flight one
-        re-checks after acquiring it (an alert may have started while it
-        waited). execute_alert sets _alert_active under this same lock, so
-        an alert's start also waits out a reconcile that is already
-        mid-converge: the two can never overlap.
-
-        Scene/circadian activations hold _dr_lock for their whole duration,
-        so a reconcile can never enter mid-activation: it waits on the lock
-        and converges here against the settled state, reading the LIVE
-        flag. That also covers an activation that raised mid-body: the
-        async-with releases the lock and the queued reconcile still runs.
+        Called for every controller by the global demand-response setter,
+        and by execute_alert when an alert overlapped a flip. No lock:
+        this is an ordinary activation, so it can never block or be
+        blocked by normal light control. Manual and off areas are skipped
+        (user intent wins); an area an alert currently owns is re-driven
+        by the alert's own finally block instead.
         """
-        async with self._dr_lock:
-            if self._alert_active:
-                return
-            if self._state.is_off or self._state.is_manual:
-                return
-            if self._state.is_circadian:
-                # Circadian values are computed; re-running recomputes the same
-                # kept values (no visible change) and applies/removes the shed
-                # filter. Inner body: _dr_lock is already held here.
-                await self._activate_circadian_inner(self._state.source)
-                return
-            if not self._state.is_scene:
-                return
-
-            scene_slug = self._state.scene_slug
-            raw = self._resolve_raw_scene_targets(scene_slug)
-            effective = self._effective_scene_targets(scene_slug)
-            self._active_scene_targets = effective
-            self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
-            self._stamp_targets_with_command_metadata(None)
-
-            tasks: list = []
-            for entity_id, target in effective.items():
-                st = self.hass.states.get(entity_id)
-                is_on = st is not None and st.state == STATE_ON
-                want_on = target.get("state") == "on"
-                if want_on and not is_on:
-                    tasks.append(self._apply_light_state(entity_id, raw[entity_id]))
-                elif not want_on and is_on:
-                    tasks.append(self._apply_light_state(entity_id, {"state": "off"}))
-            if tasks:
-                await asyncio.gather(*tasks)
-            self._notify_state_change()
+        if self._state.is_off or self._state.is_manual or self._alert_active:
+            return
+        if self._state.is_circadian:
+            await self._activate_circadian(self._state.source)
+        elif self._state.is_scene:
+            await self._activate_scene(self._state.scene_slug, self._state.source)
 
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
         """Check whether a light's HA state matches the active scene target.
@@ -1504,7 +1419,7 @@ class AreaLightingController:
         shed tail is explicitly turned OFF so a bulb a preceding scene
         activation lit does not survive the all-lights shed, and tracking is
         updated to match: _dr_shed_ids becomes the all-lights shed set and the
-        shed ids carry off-targets so self-heal and the DR reconcile treat
+        shed ids carry off-targets so manual detection and self-heal treat
         them as intended-off.
         """
         brightness = max(1, min(255, round(255 * pct / 100)))

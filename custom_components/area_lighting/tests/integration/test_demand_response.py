@@ -176,9 +176,9 @@ async def test_skeleton_group_exclude_light_left_untracked_and_untouched(
 ) -> None:
     """group_exclude means LEFT UNTOUCHED: a physically-on excluded light
     gets no command from either apply path, has no entry in the tracked
-    targets (an off-target there would let reconcile or self-heal turn it
-    off), and survives a DR reconcile unchanged. The shed is still sized
-    over the exclude-filtered on-set, matching scene.py."""
+    targets (an off-target there would let self-heal turn it off), and
+    survives a demand-response re-activation unchanged. The shed is still
+    sized over the exclude-filtered on-set, matching scene.py."""
     for i in range(1, 7):
         hass.states.async_set(f"light.g_room_{i}", "off", {})
     # The excluded light is physically ON before the scene lands.
@@ -213,18 +213,19 @@ async def test_skeleton_group_exclude_light_left_untracked_and_untouched(
     assert ctrl.dr_shed_ids == frozenset({"light.g_room_5", "light.g_room_6"})
     assert ctrl._active_scene_targets["light.g_room_1"]["state"] == "on"
     assert ctrl._active_scene_targets["light.g_room_5"]["state"] == "off"
-    # No entry at all: an off-target would make reconcile turn it off.
+    # No entry at all: an off-target would make self-heal turn it off.
     assert "light.g_room_2" not in ctrl._active_scene_targets
 
-    # A DR reconcile only iterates tracked targets, so the physically-on
-    # excluded light must survive it untouched.
+    # A demand-response re-activation replays the scene, which skips
+    # excluded lights entirely, so the physically-on excluded light must
+    # survive it untouched.
     service_calls.clear()
-    await ctrl.async_reconcile_demand_response()
+    await ctrl.reactivate_for_demand_response()
     await hass.async_block_till_done()
-    reconcile_on, reconcile_off = _on_off(service_calls)
+    reactivate_on, reactivate_off = _on_off(service_calls)
     # No command of any kind for the excluded light, and its (seeded) HA
-    # state is still on: reconcile left it fully untouched.
-    assert "light.g_room_2" not in (reconcile_on | reconcile_off)
+    # state is still on: the re-activation left it fully untouched.
+    assert "light.g_room_2" not in (reactivate_on | reactivate_off)
     assert hass.states.get("light.g_room_2").state == "on"
 
 
@@ -448,9 +449,10 @@ async def test_dr_flip_during_alert_applies_after_restore(
 
     The alert is parked deterministically inside its first light command
     (recorder gate), the flag flips through the real setter, then the
-    alert finishes. The reconcile must not fight the running alert, and
-    the alert's finally block must re-run it so the shed lands once the
-    captured states are restored.
+    alert finishes. The flip's re-activation must not fight the running
+    alert (it skips alert-owning areas), and the alert's finally block
+    must re-drive the area so the shed lands once the captured states are
+    restored.
     """
     await _setup(hass, _alert_config(), 6)
     ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
@@ -480,7 +482,7 @@ async def test_dr_flip_during_alert_applies_after_restore(
     await hass.async_block_till_done()
 
     # Final commanded polarity per bulb: restore relights everything,
-    # then the deferred DR reconcile sheds the tail again.
+    # then the post-alert re-activation sheds the tail again.
     final = {eid: svc for svc, eid in chrono}
     assert final["light.bright_room_1"] == "turn_on"
     assert final["light.bright_room_2"] == "turn_on"
@@ -495,10 +497,10 @@ async def test_dr_off_during_alert_restores_shed(
 ) -> None:
     """A DR-off edge arriving mid-alert restores shed bulbs after the alert.
 
-    The mid-alert reconcile is deferred while the alert owns the lights.
-    Even though the flag is already off when the alert ends, the finally
-    block must still reconcile (dr_shed_ids is stale) so previously shed
-    bulbs are relit and the shed set empties.
+    The flip's re-activation is deferred while the alert owns the lights.
+    The flag changed during the alert, so the finally block must re-drive
+    the area through its normal activation path so previously shed bulbs
+    are relit and the shed set empties.
     """
     await _setup(hass, _alert_config(), 6)
     ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
@@ -532,7 +534,8 @@ async def test_dr_off_during_alert_restores_shed(
     await hass.async_block_till_done()
 
     # Restore put shed bulbs back to their captured-off state; the finally
-    # block reconcile must then relight them because DR is no longer active.
+    # block re-activation must then relight them because DR is no longer
+    # active.
     final = {eid: svc for svc, eid in chrono}
     for i in range(1, 7):
         assert final[f"light.bright_room_{i}"] == "turn_on"

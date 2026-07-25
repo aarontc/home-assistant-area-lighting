@@ -238,15 +238,16 @@ async def execute_alert(
 ) -> None:
     """Execute an alert pattern on an area's lights.
 
-    1. Set _alert_active flag and snapshot scene state/targets under
-       _dr_lock (suppresses manual detection and serializes the start
-       with any in-flight DR reconcile)
+    1. Set _alert_active flag and snapshot scene state/targets
+       (suppresses manual detection)
     2. Capture light states
     3. Snapshot + cancel timers
     4. Execute steps x repeat
     5. Restore light states (if pattern.restore)
     6. Restore timer deadlines
-    7. Clear _alert_active flag
+    7. Clear _alert_active flag; if the demand-response flag flipped
+       during the alert (or an active shed may have been disturbed),
+       re-drive the area through its normal activation path
     """
     # Classify on individual lights (not clusters) so target filtering
     # sees per-entity supported_color_modes.  Cluster optimization is
@@ -266,19 +267,14 @@ async def execute_alert(
         "_occupancy_timer": controller._occupancy_timer,
     }
 
-    # Set the flag under _dr_lock so the alert's start serializes with any
-    # in-flight demand-response reconcile: acquiring the lock waits out a
-    # converge that is mid-execution, and once the flag is set every later
-    # reconcile sees it inside the lock and defers. The lock is released
-    # immediately; the pattern itself never holds it. The state/target
-    # snapshot is taken inside the lock AFTER the flag is set, so it
-    # reflects every reconcile that finished (or was queued) before the
-    # alert started; a snapshot taken before the lock would restore stale
-    # tracking over a queued reconcile's converge.
-    async with controller._dr_lock:
-        controller._alert_active = True
-        saved_state = controller._state.to_dict()
-        saved_targets = dict(controller._active_scene_targets)
+    # Capture the demand-response flag now so the finally block can tell
+    # whether it flipped during the alert. Once _alert_active is set, a
+    # flip's re-activation skips this area and defers to the finally
+    # block below.
+    dr_active_at_start = controller.demand_response_active
+    controller._alert_active = True
+    saved_state = controller._state.to_dict()
+    saved_targets = dict(controller._active_scene_targets)
     try:
         captured = capture_light_states(individual_light_ids, hass.states.get)
 
@@ -312,12 +308,16 @@ async def execute_alert(
         controller._notify_state_change()
 
         controller._alert_active = False
-        if controller.demand_response_active or controller.dr_shed_ids:
-            # A DR edge that arrived mid-alert was deferred (the reconcile
-            # short-circuits while _alert_active); apply it now that the
-            # captured states are restored, refreshing _dr_shed_ids. The
-            # dr_shed_ids check catches a DR-off edge: the flag is already
-            # clear, but the reconcile must still run to relight the shed
-            # bulbs and empty the stale shed set.
-            await controller.async_reconcile_demand_response()
+        dr_active_now = controller.demand_response_active
+        if dr_active_now != dr_active_at_start or (dr_active_now and controller.dr_shed_ids):
+            # A demand-response edge that arrived mid-alert was deferred
+            # (reactivate_for_demand_response skips alert-owning areas):
+            # re-drive the area through its normal activation path now
+            # that the captured states are restored, so the post-alert
+            # state reflects the current flag. The unchanged-but-active
+            # case with a non-empty shed re-asserts the shed too: a
+            # restore-less pattern can leave shed bulbs on. When the flag
+            # did not change and nothing is shed, the snapshot restore
+            # already produced the correct state.
+            await controller.reactivate_for_demand_response()
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

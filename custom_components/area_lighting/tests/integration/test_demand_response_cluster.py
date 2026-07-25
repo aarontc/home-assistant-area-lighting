@@ -4,10 +4,10 @@ A stored snapshot captures `area.all_lights`, which includes the cluster
 entity (e.g. `light.zone_all`) with state `on`. `apply_demand_response`
 only sheds individual lights, so without a dedicated filter the zone
 survives as an `on` target: applying it turns the whole zone on,
-relighting shed members, and a later reconcile sees the zone `off` and
-turns it back on (idempotency break). Under DR, the individual members
-are the targets; clusters remain a pure batching optimization, so a
-cluster whose members are all kept still coalesces into one zone command.
+relighting shed members (and any later replay of the targets repeats
+that). Under DR, the individual members are the targets; clusters remain
+a pure batching optimization, so a cluster whose members are all kept
+still coalesces into one zone command.
 """
 
 from __future__ import annotations
@@ -103,8 +103,9 @@ async def test_dr_scene_activation_never_drives_cluster_entity(
     assert ZONE not in ctrl._active_scene_targets
 
     # Idempotency: with the physical states matching the DR outcome
-    # (kept on, shed off, zone aggregate off), a reconcile must not turn
-    # anything back on, neither shed members nor the zone.
+    # (kept on, shed off, zone aggregate off), re-driving the area through
+    # its activation path replays the same filtered commands: shed members
+    # and the zone must not be turned on.
     for entity_id in KEPT:
         hass.states.async_set(entity_id, "on", {"brightness": 200})
     for entity_id in SHED:
@@ -112,11 +113,13 @@ async def test_dr_scene_activation_never_drives_cluster_entity(
     hass.states.async_set(ZONE, "off", {})
 
     service_calls.clear()
-    await ctrl.async_reconcile_demand_response()
+    await ctrl.reactivate_for_demand_response()
     await hass.async_block_till_done()
 
-    on, _ = _on_off(service_calls)
-    assert on == set()
+    on, off = _on_off(service_calls)
+    assert on == KEPT
+    assert ZONE not in on
+    assert off >= SHED
 
 
 @pytest.mark.integration

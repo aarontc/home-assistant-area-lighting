@@ -887,12 +887,13 @@ load during a utility demand-response event:
 - Bulbs are shed from the config-order tail of the on-set, so the first-declared
   lights in each area survive. Order your `lights` most-important-first.
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
-  switch immediately sheds already-lit non-manual areas; clearing it restores
-  them. An alert and a shed reconcile never overlap: an alert waits for an
-  in-flight reconcile to finish before capturing light states (and snapshots
-  the area's scene tracking only after that wait, so a reconcile that beat
-  it to the start is what the alert later restores), and a flip that lands
-  mid-alert is applied right after the alert restores them.
+  switch re-drives each already-lit non-manual area through its normal
+  activation path: the shed tail goes off immediately, and clearing the switch
+  replays the scene so the shed bulbs return. A flip that lands mid-alert is
+  applied right after the alert restores its captured states. Demand response
+  never blocks normal light control: there is no shared lock, and a flip is
+  just another activation. Because the flip re-fires the active scene, a
+  manual dim level set before the event returns to scene brightness.
 - While shedding, `light_clusters` entities (Hue Zones) are never driven on
   in any path: they are ignored as direct scene targets, skipped by circadian
   activation (even when a cluster carries a `circadian_switch`), excluded

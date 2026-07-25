@@ -26,7 +26,7 @@ class _FakeController:
     def __init__(self) -> None:
         self.enforced = 0
         self.cancelled = 0
-        self.reconciled = 0
+        self.reactivated = 0
 
     def enforce_occupancy_timer(self) -> None:
         self.enforced += 1
@@ -34,8 +34,8 @@ class _FakeController:
     def cancel_occupancy_timer(self) -> None:
         self.cancelled += 1
 
-    async def async_reconcile_demand_response(self) -> None:
-        self.reconciled += 1
+    async def reactivate_for_demand_response(self) -> None:
+        self.reactivated += 1
 
 
 class _FakeHass:
@@ -169,7 +169,7 @@ async def test_set_demand_response_fans_out_and_persists():
     await hass.drain()
 
     assert t.demand_response_active is True
-    assert (c1.reconciled, c2.reconciled) == (1, 1)
+    assert (c1.reactivated, c2.reactivated) == (1, 1)
     assert storage.saved[-1]["demand_response_active"] is True
 
 
@@ -183,5 +183,5 @@ async def test_set_demand_response_idempotent():
     await t.async_set_demand_response_active(False)  # already False
     await hass.drain()
 
-    assert c1.reconciled == 0
+    assert c1.reactivated == 0
     assert storage.saved == []

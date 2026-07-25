@@ -80,6 +80,9 @@ async def test_switch_service_call_sheds_then_restores(
     assert off == {f"light.loft_{i}" for i in (3, 4, 5, 6)}
 
     # Simulate the shed bulbs now being physically off, then clear DR.
+    # Clearing re-drives the area through its normal activation path,
+    # replaying the full unfiltered scene: the shed bulbs are relit and
+    # nothing is turned off.
     for i in (3, 4, 5, 6):
         hass.states.async_set(f"light.loft_{i}", "off", {})
     service_calls.clear()
@@ -93,7 +96,13 @@ async def test_switch_service_call_sheds_then_restores(
     on = {
         c.data["entity_id"] for c in service_calls if c.domain == "light" and c.service == "turn_on"
     }
-    assert on == {f"light.loft_{i}" for i in (3, 4, 5, 6)}
+    off = {
+        c.data["entity_id"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert {f"light.loft_{i}" for i in (3, 4, 5, 6)} <= on
+    assert off == set()
 
 
 @pytest.mark.integration

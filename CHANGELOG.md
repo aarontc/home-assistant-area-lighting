@@ -51,26 +51,19 @@ readable companion that highlights user-facing changes.
   every path that leaves circadian (scene changes, off fades, manual
   changes, the area's scene select entity) or suspends it (dimming)
   detaches the route listener before the circadian switches turn off, so
-  the outgoing circadian setup never fights the incoming state. A flag flip that lands while an alert is
-  running is deferred and applied right after the alert restores its
-  captured states, including a flip to off: the post-alert reconcile
-  still runs so previously shed bulbs are relit and the shed tracking
-  clears. Per-area reconciles are serialized so rapid flips converge to
-  the final flag state (a reconcile that queued behind an in-flight one
-  re-checks for a started alert before touching lights, and an alert's
-  start waits for an in-flight reconcile to finish before capturing light
-  states, snapshotting the area's scene tracking only after that wait so
-  a reconcile that beat it to the start is what it later restores, so the
-  two never overlap). Scene and circadian activations are fully
-  serialized with the reconcile on the same per-area lock: an activation
-  that starts while a reconcile is mid-converge waits for it to finish,
-  and a flip that lands mid-activation queues its reconcile behind the
-  activation and converges right after it, against the settled state.
-  Each reconcile reads the live flag, so even a double flip that returns
-  the flag to its starting value converges to the final state, and an
-  activation that fails partway still releases the lock so a queued flip
-  is never lost. The incoming scene's tracking is never overwritten with
-  the outgoing scene's.
+  the outgoing circadian setup never fights the incoming state. Flipping
+  the flag re-drives each already-lit non-manual area through its NORMAL
+  activation path with the filter applied, so the tail sheds on activate
+  and the scene replays in full on clear. There is no separate reconcile
+  subsystem and no lock: demand response can never block (or be blocked
+  by) normal light control, and each re-activation reads the live flag,
+  so rapid flips converge to the final flag state. A flag flip that
+  lands while an alert is running is deferred and applied right after
+  the alert restores its captured states, including a flip to off:
+  previously shed bulbs are relit and the shed tracking clears. Because
+  the flip re-fires the active scene, a manual dim level set before the
+  event returns to scene brightness on the flip (an accepted tradeoff,
+  prioritizing reliable lighting over demand-response precision).
   Raising or lowering a fully-dark area (which restores the remembered
   scene, then brings every light to the minimum step) converges to the
   all-lights shed: the shed tail is explicitly turned off, so a bulb the
@@ -78,7 +71,7 @@ readable companion that highlights user-facing changes.
   follows. Skeleton scenes honor `group_exclude` identically in the
   controller and the scene entity (excluded lights are left untouched
   and never counted when sizing the shed): they carry no tracked scene
-  target, so a demand-response reconcile cannot turn them off and
+  target, so a demand-response re-activation cannot turn them off and
   toggling one never flips the area to manual. A restart into an active
   scene or circadian area recomputes the diagnostics shed list
   immediately, without driving any lights. An externally activated visual

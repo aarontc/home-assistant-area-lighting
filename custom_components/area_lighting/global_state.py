@@ -104,6 +104,10 @@ class GlobalToggles:
         self._demand_response_active = enabled
         controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
         for ctrl in controllers.values():
-            self._hass.async_create_task(ctrl.async_reconcile_demand_response())
+            # Re-drive each area through its NORMAL activation path, which
+            # applies the flipped filter at target resolution. These are
+            # plain activations with no shared lock, so a flip can never
+            # block (or be blocked by) normal light control.
+            self._hass.async_create_task(ctrl.reactivate_for_demand_response())
         self._notify()
         self._schedule_save()
