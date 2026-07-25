@@ -58,9 +58,12 @@ readable companion that highlights user-facing changes.
   subsystem and no lock: demand response can never block (or be blocked
   by) normal light control, and each re-activation reads the live flag,
   so rapid flips converge to the final flag state. A flag flip that
-  lands while an alert is running is deferred and applied right after
-  the alert restores its captured states, including a flip to off:
-  previously shed bulbs are relit and the shed tracking clears. Because
+  lands while an alert is running, or whose re-activation the alert
+  outran, is deferred and applied right after the alert restores its
+  captured states, including a flip to off: previously shed bulbs are
+  relit and the shed tracking clears. The flip re-drives leader and
+  follower areas independently, without leader-to-follower propagation,
+  so a follower keeps its own active scene across a flip. Because
   the flip re-fires the active scene, a manual dim level set before the
   event returns to scene brightness on the flip (an accepted tradeoff,
   prioritizing reliable lighting over demand-response precision).

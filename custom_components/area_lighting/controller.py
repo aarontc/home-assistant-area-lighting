@@ -764,6 +764,8 @@ class AreaLightingController:
         scene_slug: str,
         source: ActivationSource = ActivationSource.USER,
         transition: float | None = None,
+        *,
+        propagate_to_followers: bool = True,
     ) -> None:
         """Activate a scene by slug, transitioning state with the given source.
 
@@ -776,6 +778,12 @@ class AreaLightingController:
         _apply_scene_data), and a flag flip re-drives the area through
         this same path (reactivate_for_demand_response). Activations never
         wait on any demand-response state.
+
+        `propagate_to_followers=False` suppresses follower propagation on
+        top of the usual LEADER-source recursion guard. It is used by the
+        demand-response re-drive, which re-activates every controller
+        independently: propagating there would overwrite a follower's own
+        scene with the leader's slug.
         """
         from .area_state import LeaderReason
 
@@ -788,14 +796,14 @@ class AreaLightingController:
             self._enforce_occupancy_timer()
             self._notify_state_change()
             await self._sync_kelvin_router()
-            if source != ActivationSource.LEADER:
+            if propagate_to_followers and source != ActivationSource.LEADER:
                 self._propagate_to_followers(None, LeaderReason.OFF)
             return
 
         if scene_slug == SCENE_CIRCADIAN:
             self._active_scene_targets = {}
             await self._activate_circadian(source)
-            if source != ActivationSource.LEADER:
+            if propagate_to_followers and source != ActivationSource.LEADER:
                 self._propagate_to_followers(
                     SCENE_CIRCADIAN,
                     LeaderReason.SCENE_ACTIVATED,
@@ -816,7 +824,7 @@ class AreaLightingController:
         self._notify_state_change()
         await self._sync_kelvin_router()
 
-        if source != ActivationSource.LEADER:
+        if propagate_to_followers and source != ActivationSource.LEADER:
             if scene_slug in ("ambient", "christmas", "halloween"):
                 self._propagate_to_followers(scene_slug, LeaderReason.AMBIENT)
             else:
@@ -1218,13 +1226,22 @@ class AreaLightingController:
         blocked by normal light control. Manual and off areas are skipped
         (user intent wins); an area an alert currently owns is re-driven
         by the alert's own finally block instead.
+
+        Follower propagation is suppressed: the setter already re-drives
+        every controller (followers included) with its own scene, so a
+        leader's re-drive propagating its slug would overwrite a follower
+        that is independently in a different scene.
         """
         if self._state.is_off or self._state.is_manual or self._alert_active:
             return
         if self._state.is_circadian:
             await self._activate_circadian(self._state.source)
         elif self._state.is_scene:
-            await self._activate_scene(self._state.scene_slug, self._state.source)
+            await self._activate_scene(
+                self._state.scene_slug,
+                self._state.source,
+                propagate_to_followers=False,
+            )
 
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
         """Check whether a light's HA state matches the active scene target.

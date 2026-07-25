@@ -889,8 +889,10 @@ load during a utility demand-response event:
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
   switch re-drives each already-lit non-manual area through its normal
   activation path: the shed tail goes off immediately, and clearing the switch
-  replays the scene so the shed bulbs return. A flip that lands mid-alert is
-  applied right after the alert restores its captured states. Demand response
+  replays the scene so the shed bulbs return. A flip that lands mid-alert, or
+  just before an alert takes over the area, is applied right after the alert
+  restores its captured states. Each area is re-driven with its own scene: a
+  leader's re-drive does not push its scene onto followers. Demand response
   never blocks normal light control: there is no shared lock, and a flip is
   just another activation. Because the flip re-fires the active scene, a
   manual dim level set before the event returns to scene brightness.

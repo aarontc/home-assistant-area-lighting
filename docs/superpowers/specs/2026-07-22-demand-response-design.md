@@ -268,17 +268,24 @@ Add one row to `GLOBAL_SWITCH_DEFS` (`switch.py:30`) producing the owned entity
 Steady-state filtering (Section 6) only affects *new* activations. Already-lit
 areas are handled on a flag flip by **re-driving each area through its NORMAL
 activation path**, in both directions. `manual` and `off` areas are skipped, as
-is an area an alert currently owns (the alert's finally block re-drives it
-after its restore, Section 6's alert bypass).
+is an area an alert currently owns: the alert's finally block re-drives it
+after its restore (Section 6's alert bypass) whenever the flag is active or a
+shed set is still tracked. That condition is deliberately independent of
+whether the flag changed during the alert, so a flip whose re-activation the
+alert outran (scheduled just before the alert started) is applied too.
 
 The setter (`async_set_demand_response_active`) fans out one task per
 controller calling `reactivate_for_demand_response()`:
 
 - **Scene areas:** re-run `_activate_scene(scene_slug, source)` for the
-  currently-active slug. The DR filter folded into target resolution
-  (Section 5) sheds the tail on activate and replays the full scene on
-  deactivate. Tracking (`_active_scene_targets`, `dr_shed_ids`) is rebuilt by
-  the activation itself, exactly as for any other activation.
+  currently-active slug, with follower propagation suppressed
+  (`propagate_to_followers=False`): the setter already re-drives every
+  controller with its own scene, so a leader's re-drive must not overwrite a
+  follower that is independently in a different scene. The DR filter folded
+  into target resolution (Section 5) sheds the tail on activate and replays
+  the full scene on deactivate. Tracking (`_active_scene_targets`,
+  `dr_shed_ids`) is rebuilt by the activation itself, exactly as for any
+  other activation.
 - **Circadian areas:** re-run `_activate_circadian(source)`. Circadian values
   are computed, so kept bulbs are re-sent the same value (no visible change)
   while the DR filter turns shed bulbs off (activate) or brings them back

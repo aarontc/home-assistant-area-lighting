@@ -8,8 +8,10 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting.alert import execute_alert
 from custom_components.area_lighting.area_state import ActivationSource
 from custom_components.area_lighting.global_state import GlobalToggles
+from custom_components.area_lighting.models import AlertPattern, AlertStep
 
 
 def _toggles(hass: HomeAssistant) -> GlobalToggles:
@@ -536,6 +538,133 @@ async def test_dr_off_during_alert_restores_shed(
     # Restore put shed bulbs back to their captured-off state; the finally
     # block re-activation must then relight them because DR is no longer
     # active.
+    final = {eid: svc for svc, eid in chrono}
+    for i in range(1, 7):
+        assert final[f"light.bright_room_{i}"] == "turn_on"
+    assert ctrl.dr_shed_ids == frozenset()
+    assert ctrl._active_scene_targets["light.bright_room_4"]["state"] == "on"
+
+
+def _park_reactivation(ctrl) -> asyncio.Event:
+    """Make the next fan-out re-activation behave like a task that is
+    scheduled but has not yet run: it parks until the returned event is
+    set, then calls the real method (which applies the usual skip rules).
+
+    hass.async_create_task is eager, so without this the setter's fan-out
+    would run its _alert_active check synchronously at flip time; parking
+    it reproduces the scheduling gap where an alert starts in between.
+    The instance attribute is removed after the parked call resolves, so
+    later callers (the alert's finally block) reach the real method.
+    """
+    real = ctrl.reactivate_for_demand_response
+    release = asyncio.Event()
+
+    async def deferred_reactivate() -> None:
+        await release.wait()
+        del ctrl.reactivate_for_demand_response
+        await real()
+
+    ctrl.reactivate_for_demand_response = deferred_reactivate
+    return release
+
+
+@pytest.mark.integration
+async def test_dr_flip_on_just_before_alert_applies_after_restore(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR-on edge whose re-activation runs just after the alert starts.
+
+    The flag flips before the alert begins, so the alert reads the
+    already-flipped flag as its start value; the flip's scheduled
+    re-activation then runs while _alert_active is set and skips. At
+    completion the flag equals its start value and nothing was shed yet,
+    so only a post-restore condition that does not depend on a mid-alert
+    change re-drives the area: the shed must be applied after the alert.
+    """
+    await _setup(hass, _alert_config(), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    # Lit scene pre-alert: all bulbs physically on, DR off, nothing shed.
+    for i in range(1, 7):
+        hass.states.async_set(f"light.bright_room_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset()
+
+    release = _park_reactivation(ctrl)
+    await _toggles(hass).async_set_demand_response_active(True)
+
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+    chrono = _register_chrono_light_recorder(hass, gate=gate, reached=reached)
+    pattern = AlertPattern(steps=[AlertStep(target="all", state="on", brightness=255)])
+    alert_task = hass.async_create_task(execute_alert(hass, ctrl, pattern))
+    await reached.wait()
+    assert ctrl._alert_active is True
+    # Release the parked re-activation: it must skip the alert-owning
+    # area, so no shed turn_off may appear while the alert runs.
+    release.set()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert len(chrono) == 6
+    assert all(svc == "turn_on" for svc, _ in chrono)
+    gate.set()
+    await alert_task
+    await hass.async_block_till_done()
+
+    # Restore relights everything, then the post-alert re-drive applies
+    # the shed that the pre-alert flip asked for.
+    final = {eid: svc for svc, eid in chrono}
+    assert final["light.bright_room_1"] == "turn_on"
+    assert final["light.bright_room_2"] == "turn_on"
+    for i in (3, 4, 5, 6):
+        assert final[f"light.bright_room_{i}"] == "turn_off"
+    assert ctrl.dr_shed_ids == frozenset({f"light.bright_room_{i}" for i in (3, 4, 5, 6)})
+
+
+@pytest.mark.integration
+async def test_dr_flip_off_just_before_alert_restores_shed(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR-off edge whose re-activation runs just after the alert starts.
+
+    Mirror of the flip-on edge: the area is shed, the flag flips off just
+    before the alert begins, and the flip's re-activation skips because
+    the alert already owns the area. The flag never changes during the
+    alert, but the stale non-empty shed set must still be restored after
+    it: previously shed bulbs are relit and the shed tracking empties.
+    """
+    await _setup(hass, _alert_config(), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    # Physical shed state pre-alert: kept bulbs on, shed tail off.
+    for i in (1, 2):
+        hass.states.async_set(f"light.bright_room_{i}", "on", {"brightness": 200})
+    for i in (3, 4, 5, 6):
+        hass.states.async_set(f"light.bright_room_{i}", "off", {})
+    assert ctrl.dr_shed_ids == frozenset({f"light.bright_room_{i}" for i in (3, 4, 5, 6)})
+
+    release = _park_reactivation(ctrl)
+    await _toggles(hass).async_set_demand_response_active(False)
+
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+    chrono = _register_chrono_light_recorder(hass, gate=gate, reached=reached)
+    pattern = AlertPattern(steps=[AlertStep(target="all", state="on", brightness=255)])
+    alert_task = hass.async_create_task(execute_alert(hass, ctrl, pattern))
+    await reached.wait()
+    assert ctrl._alert_active is True
+    release.set()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert len(chrono) == 6  # the skipped re-activation issued nothing
+    gate.set()
+    await alert_task
+    await hass.async_block_till_done()
+
+    # Restore put the shed bulbs back to their captured-off state; the
+    # post-alert re-drive must relight them because DR is off now.
     final = {eid: svc for svc, eid in chrono}
     for i in range(1, 7):
         assert final[f"light.bright_room_{i}"] == "turn_on"

@@ -245,9 +245,9 @@ async def execute_alert(
     4. Execute steps x repeat
     5. Restore light states (if pattern.restore)
     6. Restore timer deadlines
-    7. Clear _alert_active flag; if the demand-response flag flipped
-       during the alert (or an active shed may have been disturbed),
-       re-drive the area through its normal activation path
+    7. Clear _alert_active flag; if demand response is active, or a shed
+       from before the alert is still tracked, re-drive the area through
+       its normal activation path
     """
     # Classify on individual lights (not clusters) so target filtering
     # sees per-entity supported_color_modes.  Cluster optimization is
@@ -267,11 +267,8 @@ async def execute_alert(
         "_occupancy_timer": controller._occupancy_timer,
     }
 
-    # Capture the demand-response flag now so the finally block can tell
-    # whether it flipped during the alert. Once _alert_active is set, a
-    # flip's re-activation skips this area and defers to the finally
-    # block below.
-    dr_active_at_start = controller.demand_response_active
+    # Once _alert_active is set, a demand-response flip's re-activation
+    # skips this area and defers to the finally block below.
     controller._alert_active = True
     saved_state = controller._state.to_dict()
     saved_targets = dict(controller._active_scene_targets)
@@ -308,16 +305,18 @@ async def execute_alert(
         controller._notify_state_change()
 
         controller._alert_active = False
-        dr_active_now = controller.demand_response_active
-        if dr_active_now != dr_active_at_start or (dr_active_now and controller.dr_shed_ids):
-            # A demand-response edge that arrived mid-alert was deferred
-            # (reactivate_for_demand_response skips alert-owning areas):
-            # re-drive the area through its normal activation path now
-            # that the captured states are restored, so the post-alert
-            # state reflects the current flag. The unchanged-but-active
-            # case with a non-empty shed re-asserts the shed too: a
-            # restore-less pattern can leave shed bulbs on. When the flag
-            # did not change and nothing is shed, the snapshot restore
-            # already produced the correct state.
+        if controller.demand_response_active or controller.dr_shed_ids:
+            # A demand-response edge deferred to this alert
+            # (reactivate_for_demand_response skips alert-owning areas)
+            # may have arrived mid-alert OR just before the alert
+            # started, so a changed-during-alert comparison would miss
+            # the pre-alert flip. Instead, re-drive the area through its
+            # normal activation path whenever the flag is active (the
+            # shed must be re-asserted over the alert's restore, and a
+            # restore-less pattern can leave shed bulbs on) or a stale
+            # shed set is still tracked (the flag went off, so those
+            # bulbs must be relit). Only an inactive flag with nothing
+            # shed skips the re-drive: the snapshot restore already
+            # produced the correct state.
             await controller.reactivate_for_demand_response()
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

@@ -182,6 +182,93 @@ async def test_flip_defers_to_running_alert(
     ctrl._alert_active = False
 
 
+def _leader_follower_config() -> dict:
+    """Two-area config: den leads, study follows; both define bright and dim."""
+
+    def lights(area: str) -> list[dict]:
+        return [{"id": f"light.{area}_{i}", "roles": ["dimming"]} for i in range(1, 5)]
+
+    def scenes(area: str) -> list[dict]:
+        bright = {f"light.{area}_{i}": {"state": "on", "brightness": 200} for i in range(1, 5)}
+        dim = {f"light.{area}_{i}": {"state": "on", "brightness": 80} for i in (1, 2)}
+        return [
+            {"id": "circadian", "name": "Circadian"},
+            {"id": "bright", "name": "Bright", "entities": bright},
+            {"id": "dim", "name": "Dim", "entities": dim},
+            {"id": "off", "name": "Off"},
+        ]
+
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "den",
+                    "name": "Den",
+                    "event_handlers": True,
+                    "lights": lights("den"),
+                    "scenes": scenes("den"),
+                },
+                {
+                    "id": "study",
+                    "name": "Study",
+                    "event_handlers": True,
+                    "lights": lights("study"),
+                    "scenes": scenes("study"),
+                    "leader_area_id": "den",
+                },
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_flip_does_not_propagate_leader_scene_to_follower(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """The setter re-drives EVERY controller itself, followers included, so
+    the leader's re-drive must not also propagate its scene to followers: a
+    follower independently in a different scene would be overwritten by the
+    leader's slug instead of having its own scene re-driven."""
+    for area in ("den", "study"):
+        for i in range(1, 5):
+            hass.states.async_set(f"light.{area}_{i}", "off", {})
+    assert await async_setup_component(hass, "area_lighting", _leader_follower_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    den = hass.data["area_lighting"]["controllers"]["den"]
+    study = hass.data["area_lighting"]["controllers"]["study"]
+
+    # Leader in bright; follower independently in dim (its own USER scene).
+    for i in range(1, 5):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+    for i in (1, 2):
+        hass.states.async_set(f"light.study_{i}", "on", {"brightness": 80})
+    await den._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    await study._activate_scene("dim", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert study._state.scene_slug == "dim"
+
+    await _toggles(hass).async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    # Each area shed its OWN scene; the follower was not switched to bright.
+    assert den._state.scene_slug == "bright"
+    assert study._state.scene_slug == "dim"
+    assert den.dr_shed_ids == frozenset({"light.den_3", "light.den_4"})
+    assert study.dr_shed_ids == frozenset({"light.study_2"})
+
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+
+    assert den._state.scene_slug == "bright"
+    assert study._state.scene_slug == "dim"
+    assert study._state.source == ActivationSource.USER
+    assert den.dr_shed_ids == frozenset()
+    assert study.dr_shed_ids == frozenset()
+
+
 @pytest.mark.integration
 async def test_activation_never_waits_on_demand_response(
     hass: HomeAssistant, helper_entities, service_calls, monkeypatch
