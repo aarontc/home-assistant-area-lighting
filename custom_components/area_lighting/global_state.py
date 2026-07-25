@@ -28,6 +28,7 @@ class GlobalToggles:
         self._motion_lights_enabled = True
         self._occupancy_timeout_enabled = True
         self._demand_response_active = False
+        self._dr_generation = 0
         self._listeners: list[Callable[[], None]] = []
 
     @property
@@ -41,6 +42,16 @@ class GlobalToggles:
     @property
     def demand_response_active(self) -> bool:
         return self._demand_response_active
+
+    @property
+    def demand_response_generation(self) -> int:
+        """Monotonic count of demand-response flag changes.
+
+        Bumped on every ACTUAL flip of the flag, so a consumer comparing
+        generations across an await window detects an off-on-off (or
+        on-off-on) double flip that leaves the boolean itself unchanged.
+        """
+        return self._dr_generation
 
     # ── listener plumbing (mirrors controller.add_state_listener) ──
     def add_state_listener(self, cb: Callable[[], None]) -> None:
@@ -102,6 +113,7 @@ class GlobalToggles:
         if self._demand_response_active == enabled:
             return
         self._demand_response_active = enabled
+        self._dr_generation += 1
         controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
         for ctrl in controllers.values():
             self._hass.async_create_task(ctrl.async_reconcile_demand_response())

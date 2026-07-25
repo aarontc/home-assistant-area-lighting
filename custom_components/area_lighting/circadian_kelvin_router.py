@@ -193,17 +193,33 @@ class CircadianKelvinRouter:
                 return
             shed = frozenset(ctrl.dr_shed_ids) if ctrl is not None else frozenset()
 
-            if new_index == prev_index and shed == self._last_shed_ids:
+            stable = new_index == prev_index and shed == self._last_shed_ids
+            cluster_members = self._cluster_members_under_dr(ctrl)
+            if stable and not cluster_members:
+                # Same route, same shed set, no cluster expansion in play:
+                # the previous dispatch's targets still stand, so skip the
+                # diff entirely (this also leaves manual per-light changes
+                # alone on stable reconciles).
                 return
 
             self._last_shed_ids = shed
             active = self._config.routes[new_index]
-            cluster_members = self._cluster_members_under_dr(ctrl)
             active_lights = self._expand_clusters(active.lights, cluster_members) - shed
             inactive_lights = (
                 self._expand_clusters(self._config.all_route_lights, cluster_members)
                 - active_lights
             )
+            if stable:
+                # Same route and shed set, but cluster routes expand to
+                # members whose physical state can drift while stable (e.g.
+                # a shed member relit through the aggregate zone): converge
+                # ONLY the expanded members against live state; every other
+                # route light keeps the stable-path hands-off behavior.
+                member_ids = {m for members in cluster_members.values() for m in members}
+                active_lights &= member_ids
+                inactive_lights &= member_ids
+                if not active_lights and not inactive_lights:
+                    return
 
             # Diff against current HA state: only issue calls for lights that
             # need to change, so reconciliation is truly idempotent.
@@ -217,6 +233,11 @@ class CircadianKelvinRouter:
                 for eid in sorted(active_lights)
                 if (s := self._hass.states.get(eid)) is None or s.state != "on"
             ]
+
+            if stable and not off_calls_to_issue and not on_calls_to_issue:
+                # Member state already consistent: keep the stable path
+                # silent, exactly like the no-expansion early return.
+                return
 
             _LOGGER.info(
                 "Area %s: kelvin_router routing -> %s (colortemp=%s, prev=%s, turn_off=%d, turn_on=%d)",

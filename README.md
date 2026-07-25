@@ -888,7 +888,9 @@ load during a utility demand-response event:
   lights in each area survive. Order your `lights` most-important-first.
 - Off commands, alerts, and areas in `manual` are never affected. Flipping the
   switch immediately sheds already-lit non-manual areas; clearing it restores
-  them.
+  them. An alert and a shed reconcile never overlap: an alert waits for an
+  in-flight reconcile to finish before capturing light states, and a flip
+  that lands mid-alert is applied right after the alert restores them.
 - While shedding, `light_clusters` entities (Hue Zones) are never driven on
   in any path: they are ignored as direct scene targets, skipped by circadian
   activation (even when a cluster carries a `circadian_switch`), excluded
@@ -896,16 +898,18 @@ load during a utility demand-response event:
   cluster entity is expanded to its member bulbs. The individual members are
   driven instead, so a zone command cannot relight shed bulbs. Kept members
   still coalesce into a single zone command when every member of that zone is
-  kept, and without demand response clusters batch exactly as before.
+  kept, and without demand response clusters batch exactly as before. A
+  stable route reconcile (same route, same shed set) still corrects a member
+  whose physical state drifted, without relighting shed members.
 - With `circadian_kelvin_routes`, circadian shedding counts only the currently
   active route's lights (plus circadian lights outside any route), selected
   with the same hysteresis the router uses, and is
   recomputed when the route changes, so a route swap re-sheds correctly. A
   recompute only re-drives lights whose shed status actually changed, and
-  every path that leaves circadian (scene changes, off fades, manual changes)
-  or suspends it (dimming) stops route reconciliation before the circadian
-  switches turn off, so the outgoing circadian setup never fights the next
-  state.
+  every path that leaves circadian (scene changes, off fades, manual changes,
+  the area's scene select entity) or suspends it (dimming) stops route
+  reconciliation before the circadian switches turn off, so the outgoing
+  circadian setup never fights the next state.
 - Raise / lower from a fully-dark area converges to the all-lights shed: the
   kept bulbs come up at the minimum step and the shed tail is turned off,
   even when the restored scene had lit one of the shed bulbs. Scenes with

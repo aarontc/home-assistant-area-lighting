@@ -436,6 +436,11 @@ class AreaLightingController:
     @current_scene.setter
     def current_scene(self, value: str) -> None:
         """Allow the select entity to manually set the scene."""
+        if self._state.is_circadian and value != "circadian" and self._kelvin_router is not None:
+            # This state-only path bypasses _activate_scene (and with it
+            # _disable_circadian_switches): stop the kelvin router here so
+            # a later source update cannot dispatch the stale route.
+            self._kelvin_router.deactivate()
         if value == "off":
             self._state.transition_to_off(ActivationSource.USER)
         elif value == "manual":
@@ -791,7 +796,7 @@ class AreaLightingController:
 
         # Visual scene → disable circadian first so the switches stop
         # overriding the scene's color/brightness, then apply + transition.
-        dr_at_start = self._demand_response_active()
+        gen_at_start = self._demand_response_generation()
         await self._disable_circadian_switches()
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
@@ -813,11 +818,13 @@ class AreaLightingController:
                     LeaderReason.SCENE_ACTIVATED,
                 )
 
-        # The global DR flag flipped while this activation was applying:
+        # The global DR flag changed while this activation was applying:
         # the setter's reconcile saw the pre-transition state and skipped,
-        # so converge once now that tracking reflects the new scene. No
+        # so converge once now that tracking reflects the new scene. The
+        # setter bumps a generation on every actual flip, so even an
+        # off-on-off double flip (same boolean at both ends) is caught. No
         # recursion: the scene reconcile path never calls _activate_scene.
-        if self._demand_response_active() != dr_at_start:
+        if self._demand_response_generation() != gen_at_start:
             await self.async_reconcile_demand_response()
 
     def _route_source_colortemp(self) -> float | None:
@@ -1146,6 +1153,15 @@ class AreaLightingController:
         toggles = self.hass.data.get(DOMAIN, {}).get("global")
         return toggles is not None and toggles.demand_response_active
 
+    def _demand_response_generation(self) -> int:
+        """Monotonic count of global DR flag changes (0 with no global).
+
+        Comparing generations across an await window detects a double flip
+        that leaves the boolean itself unchanged (ABA).
+        """
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        return 0 if toggles is None else toggles.demand_response_generation
+
     def _cluster_entity_ids(self) -> set[str]:
         """Entity ids of the area's Hue-Zone-style light clusters."""
         return {cluster.id for cluster in self.area.light_clusters}
@@ -1209,9 +1225,9 @@ class AreaLightingController:
         rapid flag flips cannot interleave converges. The alert check sits
         inside the lock so a reconcile that queued behind an in-flight one
         re-checks after acquiring it (an alert may have started while it
-        waited). A reconcile already past the check when an alert begins can
-        still overlap the alert's first moments; that narrow window is
-        accepted.
+        waited). execute_alert sets _alert_active under this same lock, so
+        an alert's start also waits out a reconcile that is already
+        mid-converge: the two can never overlap.
         """
         async with self._dr_lock:
             if self._alert_active:

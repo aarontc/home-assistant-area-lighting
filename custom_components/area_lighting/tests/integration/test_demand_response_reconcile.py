@@ -16,6 +16,16 @@ def _toggles(hass: HomeAssistant) -> GlobalToggles:
     return hass.data["area_lighting"]["global"]
 
 
+def _flip_flag(hass: HomeAssistant, value: bool) -> None:
+    """Mutate the DR flag the way the setter would, WITHOUT its reconcile
+    fan-out: flag plus generation bump (the setter bumps the generation on
+    every actual change). Lets tests exercise the end-of-activation check
+    in isolation."""
+    toggles = _toggles(hass)
+    toggles._demand_response_active = value
+    toggles._dr_generation += 1
+
+
 def _config() -> dict:
     entities = {f"light.den_{i}": {"state": "on", "brightness": 200} for i in range(1, 7)}
     return {
@@ -255,7 +265,7 @@ async def test_scene_activation_mid_flip_ends_shed(
 
     Branch-level test: the flag is mutated directly inside a patched
     _apply_scene_data, so no setter-driven reconcile ever runs. The
-    end-of-activation dr_at_start comparison alone must notice the flip
+    end-of-activation generation comparison alone must notice the flip
     and converge to the shed state.
     """
     await _setup(hass, _config())
@@ -267,7 +277,7 @@ async def test_scene_activation_mid_flip_ends_shed(
 
     async def flip_after_apply(scene_slug, transition=None):
         await original(scene_slug, transition)
-        _toggles(hass)._demand_response_active = True
+        _flip_flag(hass, True)
 
     monkeypatch.setattr(ctrl, "_apply_scene_data", flip_after_apply)
 
@@ -291,3 +301,97 @@ async def test_scene_activation_mid_flip_ends_shed(
         assert final[f"light.den_{i}"] == "turn_off"
     assert ctrl.dr_shed_ids == frozenset({f"light.den_{i}" for i in (3, 4, 5, 6)})
     assert ctrl._active_scene_targets["light.den_4"]["state"] == "off"
+
+
+@pytest.mark.integration
+async def test_scene_activation_aba_double_flip_converges(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """DR flipping on AND back off mid-activation converges to the final flag.
+
+    An off-on-off double flip returns the boolean to its starting value, so
+    a boolean dr_at_start comparison misses it, leaving the apply's shed
+    turn_offs standing against all-on tracking. Each flip bumps the setter's
+    generation counter, so the end-of-activation generation comparison
+    catches the ABA sequence and reconciles. As in the single-flip test, the
+    flag is mutated directly (with the generation bump the setter performs)
+    so no setter-driven reconcile ever runs.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    for i in range(1, 7):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+
+    chrono = _register_stateful_light_recorder(hass)
+    original = ctrl._apply_scene_data
+
+    async def flip_twice_around_apply(scene_slug, transition=None):
+        _flip_flag(hass, True)  # the apply below sheds the tail
+        await original(scene_slug, transition)
+        _flip_flag(hass, False)  # back off before the activation ends
+
+    monkeypatch.setattr(ctrl, "_apply_scene_data", flip_twice_around_apply)
+
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    # The end-of-activation reconcile converged to the FINAL flag (DR off):
+    # the bulbs the apply shed are relit and tracking carries no shed state.
+    final = {eid: svc for svc, eid in chrono}
+    for i in range(1, 7):
+        assert final[f"light.den_{i}"] == "turn_on"
+    assert ctrl.dr_shed_ids == frozenset()
+    assert ctrl._active_scene_targets["light.den_4"]["state"] == "on"
+
+
+@pytest.mark.integration
+async def test_alert_start_waits_for_inflight_reconcile(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """An alert's start serializes with an in-flight reconcile on _dr_lock.
+
+    Reconcile A parks mid-converge while holding _dr_lock; execute_alert
+    then starts. The alert must not begin (no flag set, no capture, no
+    flash command) until A releases the lock: the alert's first light
+    command lands strictly after A's last.
+    """
+    from custom_components.area_lighting.alert import execute_alert
+    from custom_components.area_lighting.models import AlertPattern, AlertStep
+
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    for i in range(1, 7):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    chrono = _register_stateful_light_recorder(hass)
+    gate, reached = _gate_first_apply(ctrl, monkeypatch)
+
+    _toggles(hass)._demand_response_active = True
+    task_a = hass.async_create_task(ctrl.async_reconcile_demand_response())
+    await reached.wait()  # A holds _dr_lock, parked mid-apply
+
+    pattern = AlertPattern(
+        steps=[AlertStep(target="all", state="on", brightness=255)],
+        repeat=1,
+        restore=False,
+    )
+    alert_task = hass.async_create_task(execute_alert(hass, ctrl, pattern))
+    for _ in range(5):
+        await asyncio.sleep(0)  # give the alert every chance to (wrongly) start
+
+    # The alert is parked on _dr_lock: not started, nothing flashed.
+    assert ctrl._alert_active is False
+    assert all(svc == "turn_off" for svc, _ in chrono)
+
+    gate.set()
+    await asyncio.gather(task_a, alert_task)
+    await hass.async_block_till_done()
+
+    # A's four shed turn_offs (the first four commands) all landed before
+    # the alert's first flash turn_on.
+    first_on = next(i for i, (svc, _) in enumerate(chrono) if svc == "turn_on")
+    reconcile_offs = [i for i, (svc, _) in enumerate(chrono) if svc == "turn_off"][:4]
+    assert len(reconcile_offs) == 4
+    assert first_on > max(reconcile_offs)

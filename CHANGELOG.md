@@ -49,16 +49,20 @@ readable companion that highlights user-facing changes.
   outside any route) and is recomputed whenever the route changes. A
   recompute only re-drives lights whose shed status actually changed, and
   every path that leaves circadian (scene changes, off fades, manual
-  changes) or suspends it (dimming) detaches the route listener before the
-  circadian switches turn off, so the outgoing circadian setup never
-  fights the incoming state. A flag flip that lands while an alert is
+  changes, the area's scene select entity) or suspends it (dimming)
+  detaches the route listener before the circadian switches turn off, so
+  the outgoing circadian setup never fights the incoming state. A flag flip that lands while an alert is
   running is deferred and applied right after the alert restores its
   captured states, including a flip to off: the post-alert reconcile
   still runs so previously shed bulbs are relit and the shed tracking
   clears. Per-area reconciles are serialized so rapid flips converge to
   the final flag state (a reconcile that queued behind an in-flight one
-  re-checks for a started alert before touching lights), and a flip that
-  lands mid scene-activation is converged at the end of that activation.
+  re-checks for a started alert before touching lights, and an alert's
+  start waits for an in-flight reconcile to finish before capturing light
+  states, so the two never overlap), and a flip that lands mid
+  scene-activation is converged at the end of that activation, even a
+  double flip that returns the flag to its starting value (every flip
+  bumps a generation counter, so the activation cannot miss it).
   Raising or lowering a fully-dark area (which restores the remembered
   scene, then brings every light to the minimum step) converges to the
   all-lights shed: the shed tail is explicitly turned off, so a bulb the
@@ -78,7 +82,9 @@ readable companion that highlights user-facing changes.
   path: circadian activation skips a cluster bound to a circadian switch,
   brightness raise/lower steps only individual member bulbs, and a kelvin
   route whose light is a cluster entity is expanded to its members (kept
-  on, shed off); without demand response, clusters batch exactly as
+  on, shed off), and a stable route reconcile (same route, same shed set)
+  still corrects a member whose physical state drifted, without relighting
+  shed members; without demand response, clusters batch exactly as
   before. A route reconcile that loses its listener while asking the
   controller to refresh the shed set (the area is leaving circadian)
   drops its route commands instead of fighting the incoming scene.

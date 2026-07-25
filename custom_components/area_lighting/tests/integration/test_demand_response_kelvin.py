@@ -744,6 +744,53 @@ async def test_cluster_route_expands_to_members_under_dr(
 
 
 @pytest.mark.integration
+async def test_cluster_route_stable_reconcile_converges_member_drift(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A stable reconcile (same route index, same shed set) must still
+    converge cluster-route MEMBER physical state under DR: a member left in
+    the wrong state (e.g. relit through the aggregate zone) is corrected,
+    and a shed member that is off is never relit."""
+    await _setup_media(hass, colortemp=5000)  # banded route (zone) active
+    ctrl = hass.data["area_lighting"]["controllers"]["media"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset({"light.media_3"})
+
+    # Physical result of the bring-up: kept members on, shed member off.
+    hass.states.async_set("light.media_1", "on", {})
+    hass.states.async_set("light.media_2", "on", {})
+    hass.states.async_set("light.media_3", "off", {})
+    await hass.async_block_till_done()
+
+    # Consistent stable reconcile first: no calls at all, and in particular
+    # the shed member is NOT relit.
+    service_calls.clear()
+    hass.states.async_set(_MEDIA_SOURCE, "1", {"colortemp": 5000})
+    await hass.async_block_till_done()
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+    # Drift while route and shed set stay stable: the SHED member is relit
+    # outside the router (through the zone aggregate) and a KEPT member
+    # drops off.
+    hass.states.async_set("light.media_3", "on", {})
+    hass.states.async_set("light.media_2", "off", {})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    hass.states.async_set(_MEDIA_SOURCE, "2", {"colortemp": 5000})
+    await hass.async_block_till_done()
+
+    # Same route, same shed set, but the members are converged: the shed
+    # member goes back off, the kept member comes back on, and neither the
+    # cluster entity nor the non-member fallback lamp is ever commanded.
+    assert _light_calls(service_calls, "turn_off") == {"light.media_3"}
+    assert _light_calls(service_calls, "turn_on") == {"light.media_2"}
+
+
+@pytest.mark.integration
 async def test_cluster_route_batches_without_dr(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:

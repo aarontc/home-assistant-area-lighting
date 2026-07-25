@@ -300,6 +300,52 @@ async def test_listener_inactive_outside_circadian(
 
 @pytest.mark.integration
 @pytest.mark.usefixtures("_stub_kitchen_entities")
+async def test_select_scene_change_deactivates_router(
+    hass: HomeAssistant,
+    helper_entities,
+    service_calls,
+    kitchen_with_routes_config,
+) -> None:
+    """Leaving circadian through the current_scene property setter (the
+    select entity's state-only path, which bypasses _activate_scene and
+    _disable_circadian_switches) must still deactivate the kelvin router,
+    so a later source update cannot dispatch the stale route."""
+    kitchen_with_routes_config["area_lighting"]["areas"][0]["scenes"].append(
+        {
+            "id": "bright",
+            "name": "Bright",
+            "entities": {"light.kitchen_fluorescent": {"state": "on", "brightness": 200}},
+        }
+    )
+    hass.states.async_set(
+        "switch.circadian_lighting_kitchen_kitchen_circadian",
+        "on",
+        {"brightness": 100.0, "colortemp": 5000},
+    )
+    await _setup(hass, kitchen_with_routes_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl._kelvin_router._unsub is not None
+
+    ctrl.current_scene = "bright"
+    assert ctrl._kelvin_router._unsub is None
+
+    # A source colortemp change that would swap routes (banded -> fallback)
+    # issues no route commands: the router is deregistered.
+    service_calls.clear()
+    hass.states.async_set(
+        "switch.circadian_lighting_kitchen_kitchen_circadian",
+        "on",
+        {"brightness": 100.0, "colortemp": 3000},
+    )
+    await hass.async_block_till_done()
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("_stub_kitchen_entities")
 async def test_crossfade_passed_as_transition(
     hass: HomeAssistant,
     helper_entities,
