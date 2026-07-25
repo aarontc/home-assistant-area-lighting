@@ -309,18 +309,26 @@ class AreaLightingController:
         state was actually loaded from persistence (not on first-ever
         startup with default OFF).
 
-        When the persisted state is a scene or circadian and demand
-        response is already active, the shed set is recomputed so
-        diagnostics are accurate immediately after restart. No lights are
-        driven here: physical state is preserved.
+        When the persisted state is a scene, the scene's target tracking
+        is rebuilt (persistence stores only the slug): without it, the
+        first post-grace light state report after a restart would have no
+        target to match and falsely latch the area to manual. The rebuilt
+        targets are stamped with command metadata exactly like a normal
+        activation so the grace/settle logic behaves, and under demand
+        response they carry the shed filter with the shed set recomputed
+        so diagnostics are accurate immediately after restart. Circadian
+        tracks no scene targets (manual detection skips circadian areas),
+        so only its shed set is recomputed. No lights are driven here:
+        physical state is preserved.
         """
         if not self._state_was_persisted:
             return
-        if self._demand_response_active():
-            if self._state.is_scene:
-                self._dr_shed_ids = self._compute_scene_shed_ids(self._state.scene_slug)
-            elif self._state.is_circadian:
-                self._dr_shed_ids = self._compute_circadian_shed_ids()
+        if self._state.is_scene:
+            self._active_scene_targets = self._effective_scene_targets(self._state.scene_slug)
+            self._dr_shed_ids = self._compute_scene_shed_ids(self._state.scene_slug)
+            self._stamp_targets_with_command_metadata(None)
+        elif self._state.is_circadian and self._demand_response_active():
+            self._dr_shed_ids = self._compute_circadian_shed_ids()
         if not self._state.is_off:
             return
         for light in self.area.lights:
@@ -1867,11 +1875,19 @@ class AreaLightingController:
         self._notify_state_change()
         await self._sync_kelvin_router()
 
-    async def handle_manual_light_change(self) -> None:
+    async def handle_manual_light_change(self, force_when_dimmed: bool = False) -> None:
         """A light was manually adjusted outside the scene system.
 
         Disables circadian switches so they don't immediately overwrite
         the user's manual change with a circadian-calculated one.
+
+        While the area is dimmed the latch is normally skipped: the
+        raise/lower stepping itself diverges from scene targets, and this
+        guard also covers the race where a step's own state echo is
+        classified before the dimmed flag lands. Callers pass
+        force_when_dimmed=True when the trigger can never be a brightness
+        step, e.g. a bulb with an off target (shed for demand response)
+        manually relit while the area is dimmed.
         """
         _LOGGER.debug(
             "Area %s: handle_manual_light_change current_scene=%s dimmed=%s",
@@ -1879,7 +1895,7 @@ class AreaLightingController:
             self._state.scene_slug,
             self._state.dimmed,
         )
-        if not self._state.dimmed:
+        if force_when_dimmed or not self._state.dimmed:
             await self._disable_circadian_switches()
             self._state.transition_to_manual()
             self._enforce_occupancy_timer()

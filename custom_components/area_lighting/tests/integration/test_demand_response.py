@@ -285,6 +285,98 @@ async def test_startup_restore_populates_scene_shed_diagnostics(
 
 
 @pytest.mark.integration
+async def test_startup_restore_rebuilds_scene_targets_without_driving_lights(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A controller restored into a scene rebuilds its target tracking
+    (with the DR shed filter applied and command metadata stamped) so
+    manual detection has targets to compare against, without driving any
+    lights: physical state is preserved across restart."""
+    from custom_components.area_lighting.controller import AreaLightingController
+
+    await _setup(hass, _config(6, 6), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    ctrl._state.transition_to_scene("bright", ActivationSource.USER)
+    saved = ctrl.state_dict()
+
+    fresh = AreaLightingController(hass, ctrl.area, ctrl._global_config)
+    fresh.load_persisted_state(saved)
+    service_calls.clear()
+    fresh.reconcile_startup_state()
+    await hass.async_block_till_done()
+
+    assert fresh._active_scene_targets["light.bright_room_1"]["state"] == "on"
+    assert fresh._active_scene_targets["light.bright_room_4"]["state"] == "off"
+    for target in fresh._active_scene_targets.values():
+        assert "commanded_at" in target
+        assert target["transition"] == pytest.approx(0.0)
+    assert len(service_calls) == 0
+
+
+@pytest.mark.integration
+async def test_dimmed_manual_relight_of_shed_bulb_latches_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR-shed bulb has an explicit off target; the user relighting it
+    while the area is dimmed is a genuine manual override, not raise/lower
+    stepping, so the dimmed suppression must not swallow it."""
+    import time as _time
+
+    await _setup(hass, _config(6, 6), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert "light.bright_room_4" in ctrl.dr_shed_ids
+
+    ctrl._state.mark_dimmed()
+    # Expire the area grace and every per-entity settle/glitch window so
+    # the event is judged on its own merits.
+    ctrl._state.last_scene_change_monotonic = _time.monotonic() - 200.0
+    for target in ctrl._active_scene_targets.values():
+        target["commanded_at"] = _time.monotonic() - 200.0
+
+    hass.states.async_set("light.bright_room_4", "on", {"brightness": 120})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert not ctrl._state.dimmed
+
+
+@pytest.mark.integration
+async def test_dimmed_brightness_divergence_on_kept_bulb_stays_suppressed(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """The dimmed suppression still holds for on-target bulbs: raise/lower
+    stepping makes brightness divergence expected there, so it must not
+    latch manual."""
+    import time as _time
+
+    await _setup(hass, _config(6, 6), 6)
+    ctrl = hass.data["area_lighting"]["controllers"]["bright_room"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    # Kept bulb physically on at its scene brightness.
+    hass.states.async_set("light.bright_room_1", "on", {"brightness": 200})
+    await hass.async_block_till_done()
+
+    ctrl._state.mark_dimmed()
+    ctrl._state.last_scene_change_monotonic = _time.monotonic() - 200.0
+    for target in ctrl._active_scene_targets.values():
+        target["commanded_at"] = _time.monotonic() - 200.0
+
+    # Raise/lower stepping: brightness diverges on an on-target bulb.
+    hass.states.async_set("light.bright_room_1", "on", {"brightness": 90})
+    await hass.async_block_till_done()
+
+    assert not ctrl._state.is_manual
+    assert ctrl._state.dimmed
+
+
+@pytest.mark.integration
 async def test_alert_bypasses_demand_response(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:

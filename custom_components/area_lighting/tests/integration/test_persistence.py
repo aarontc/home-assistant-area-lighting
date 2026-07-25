@@ -165,3 +165,45 @@ async def test_occupancy_timeout_enabled_defaults_true_when_missing(
     legacy = {"motion_light_enabled": False, "ambience_enabled": True}
     fresh.load_persisted_state(legacy)
     assert fresh.occupancy_timeout_enabled is True
+
+
+@pytest.mark.integration
+async def test_restart_into_scene_matching_report_does_not_latch_manual(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    """Restoring into a scene rebuilds _active_scene_targets.
+
+    Persistence stores only the scene slug, never the target tracking.
+    Without a rebuild at startup, the first post-grace light state
+    report has no target to match, so a report fully CONSISTENT with
+    the restored scene falsely latched the area to manual.
+    """
+    import time
+
+    await _setup_with_config(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    ctrl._state.transition_to_scene("daylight", ActivationSource.USER)
+    saved = ctrl.state_dict()
+
+    # Simulate the restart on the still-wired controller: in-memory scene
+    # tracking is gone; persisted state is loaded and reconciled.
+    ctrl._active_scene_targets = {}
+    ctrl.load_persisted_state(saved)
+    ctrl.reconcile_startup_state()
+
+    # The rebuild stamps command metadata like a normal activation.
+    assert ctrl._active_scene_targets
+    for target in ctrl._active_scene_targets.values():
+        assert "commanded_at" in target
+
+    # Grace and per-entity settle windows are long past.
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 200.0
+    for target in ctrl._active_scene_targets.values():
+        target["commanded_at"] = time.monotonic() - 200.0
+
+    # A bulb reports on: consistent with the restored skeleton scene.
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 180})
+    await hass.async_block_till_done()
+
+    assert not ctrl._state.is_manual
+    assert ctrl.current_scene == "daylight"
