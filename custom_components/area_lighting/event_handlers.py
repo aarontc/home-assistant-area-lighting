@@ -503,14 +503,17 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
 
         # While the area is dimmed, brightness divergence is expected
         # (raise/lower stepping), so detection is suppressed. Exception:
-        # this bulb's active target is off (e.g. shed for demand response)
-        # and it now reports on — a brightness step never relights an off
-        # bulb, so that is a genuine manual override and detection must
-        # proceed (the latch below forces past the dimmed guard).
+        # this bulb was forced off — its active target is off, or it is in
+        # the demand-response shed set (circadian activation clears the
+        # target map, so a shed bulb may carry no target at all) — and it
+        # now reports on. A brightness step never relights an off bulb, so
+        # that is a genuine manual override and detection must proceed
+        # (the latch below forces past the dimmed guard).
         dimmed_off_target_override = False
         if ctrl.dimmed:
             target = ctrl._active_scene_targets.get(entity_id)
-            if target is None or target.get("state") != "off":
+            has_off_target = target is not None and target.get("state") == "off"
+            if not has_off_target and entity_id not in ctrl.dr_shed_ids:
                 _skip("dimmed (raise/lower in progress)", entity_id)
                 return
             dimmed_off_target_override = True

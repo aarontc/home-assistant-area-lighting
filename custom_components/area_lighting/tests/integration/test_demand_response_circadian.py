@@ -159,6 +159,70 @@ async def test_manual_relight_of_shed_bulb_during_circadian_latches_manual(
 
 
 @pytest.mark.integration
+async def test_shed_bulb_relight_while_circadian_area_dimmed_latches_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Raise/lower in circadian leaves the area circadian AND dimmed, and
+    circadian activation cleared _active_scene_targets, so a shed bulb has
+    no off target for the dimmed guard's exception to find. The shed set,
+    not the target map, must mark the bulb as not raise/lower-driven: the
+    relight latches manual and survives a later flag flip."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert "light.study_3" in ctrl.dr_shed_ids
+
+    # Physical result of the shed activation: kept on, shed off.
+    for i in (1, 2):
+        hass.states.async_set(f"light.study_{i}", "on", {"brightness": 204})
+    for i in (3, 4, 5, 6):
+        hass.states.async_set(f"light.study_{i}", "off", {})
+    await hass.async_block_till_done()
+
+    # Raise/lower stepping: the area is now circadian AND dimmed, with no
+    # scene targets (circadian activation set them to {}).
+    await ctrl.lighting_lower()
+    await hass.async_block_till_done()
+    assert ctrl._state.is_circadian
+    assert ctrl._state.dimmed
+    assert ctrl._active_scene_targets == {}
+
+    # Expire the post-activation grace window so the event is judged on
+    # its own merits.
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
+
+    service_calls.clear()
+    hass.states.async_set("light.study_3", "on", {"brightness": 150})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert not ctrl._state.dimmed
+    off = {
+        c.data["entity_id"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert "light.study_3" not in off
+    assert hass.states.get("light.study_3").state == "on"
+
+    # Flip the flag off then on via the real setter: the manual area is
+    # skipped by reactivate_for_demand_response, so no light command may
+    # land and the user's relight survives.
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+    await _toggles(hass).async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert [c for c in service_calls if c.domain == "light"] == []
+    assert hass.states.get("light.study_3").state == "on"
+
+
+@pytest.mark.integration
 async def test_circadian_tick_on_kept_light_stays_circadian_under_dr(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
