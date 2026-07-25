@@ -519,7 +519,13 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             _skip("area state is off", entity_id)
             return
 
-        if ctrl._state.is_circadian:
+        # While the area is circadian, light updates are driven by the
+        # circadian switches, so detection is normally skipped entirely.
+        # Exception: a demand-response-shed bulb is NOT circadian-driven
+        # (it was forced off), so an on-report for it (all events past
+        # the STATE_ON gate above are on-reports) is a genuine manual
+        # relight and detection must proceed.
+        if ctrl._state.is_circadian and entity_id not in ctrl.dr_shed_ids:
             _skip("area state is circadian", entity_id)
             return
 

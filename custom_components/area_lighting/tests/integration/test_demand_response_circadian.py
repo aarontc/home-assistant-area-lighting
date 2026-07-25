@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
@@ -101,6 +103,85 @@ async def test_external_circadian_sets_and_off_clears_shed_set(
     await ctrl.handle_scene_activated("off")
     await hass.async_block_till_done()
     assert ctrl.dr_shed_ids == frozenset()
+
+
+@pytest.mark.integration
+async def test_manual_relight_of_shed_bulb_during_circadian_latches_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A DR-shed bulb is not driven by the circadian switches: the user
+    relighting it is a genuine override, so the area must latch manual,
+    and a later flag flip must not re-fire circadian over that state."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert "light.study_3" in ctrl.dr_shed_ids
+
+    # Physical result of the shed activation: kept on, shed off.
+    for i in (1, 2):
+        hass.states.async_set(f"light.study_{i}", "on", {"brightness": 204})
+    for i in (3, 4, 5, 6):
+        hass.states.async_set(f"light.study_{i}", "off", {})
+    await hass.async_block_till_done()
+
+    # Expire the post-activation grace window so the event is judged on
+    # its own merits.
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
+
+    service_calls.clear()
+    hass.states.async_set("light.study_3", "on", {"brightness": 150})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    off = {
+        c.data["entity_id"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert "light.study_3" not in off
+    assert hass.states.get("light.study_3").state == "on"
+
+    # Flip the flag off then on via the real setter: the manual area is
+    # skipped by reactivate_for_demand_response, so no light command may
+    # land and the user's relight survives.
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+    await _toggles(hass).async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual
+    assert [c for c in service_calls if c.domain == "light"] == []
+    assert hass.states.get("light.study_3").state == "on"
+
+
+@pytest.mark.integration
+async def test_circadian_tick_on_kept_light_stays_circadian_under_dr(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A circadian-switch-driven update to a KEPT light is still skipped by
+    manual detection while shedding is active: no false manual latch."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    _toggles(hass)._demand_response_active = True
+
+    await ctrl._activate_scene("circadian", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert "light.study_1" not in ctrl.dr_shed_ids
+
+    hass.states.async_set("light.study_1", "on", {"brightness": 204, "color_temp_kelvin": 3500})
+    await hass.async_block_till_done()
+    ctrl._state.last_scene_change_monotonic = time.monotonic() - 30.0
+
+    # Circadian tick: brightness and color temperature drift on a kept bulb.
+    hass.states.async_set("light.study_1", "on", {"brightness": 90, "color_temp_kelvin": 2700})
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_circadian
+    assert not ctrl._state.is_manual
 
 
 @pytest.mark.integration

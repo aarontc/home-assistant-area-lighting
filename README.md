@@ -896,6 +896,9 @@ load during a utility demand-response event:
   never blocks normal light control: there is no shared lock, and a flip is
   just another activation. Because the flip re-fires the active scene, a
   manual dim level set before the event returns to scene brightness.
+  Manually relighting a shed bulb latches the area `manual` (detected even
+  while the area is dimmed or in circadian mode), so a later flip leaves the
+  user's override alone.
 - While shedding, `light_clusters` entities (Hue Zones) are never driven on
   in any path: they are ignored as direct scene targets, skipped by circadian
   activation (even when a cluster carries a `circadian_switch`), excluded
