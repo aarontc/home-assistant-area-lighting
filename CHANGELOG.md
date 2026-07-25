@@ -61,15 +61,16 @@ readable companion that highlights user-facing changes.
   start waits for an in-flight reconcile to finish before capturing light
   states, snapshotting the area's scene tracking only after that wait so
   a reconcile that beat it to the start is what it later restores, so the
-  two never overlap), and a flip that lands mid
-  scene-activation is converged at the end of that activation, even a
-  double flip that returns the flag to its starting value (every flip
-  bumps a generation counter, so the activation cannot miss it). A
-  reconcile that arrives while a scene or circadian activation is still
-  mid-transition defers to that activation instead of converging against
-  the outgoing scene's state, and the activation runs the converge itself
-  once it finishes, so the incoming scene's tracking is never overwritten
-  with the outgoing scene's.
+  two never overlap). Scene and circadian activations are fully
+  serialized with the reconcile on the same per-area lock: an activation
+  that starts while a reconcile is mid-converge waits for it to finish,
+  and a flip that lands mid-activation queues its reconcile behind the
+  activation and converges right after it, against the settled state.
+  Each reconcile reads the live flag, so even a double flip that returns
+  the flag to its starting value converges to the final state, and an
+  activation that fails partway still releases the lock so a queued flip
+  is never lost. The incoming scene's tracking is never overwritten with
+  the outgoing scene's.
   Raising or lowering a fully-dark area (which restores the remembered
   scene, then brings every light to the minimum step) converges to the
   all-lights shed: the shed tail is explicitly turned off, so a bulb the

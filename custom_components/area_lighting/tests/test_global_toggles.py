@@ -174,26 +174,6 @@ async def test_set_demand_response_fans_out_and_persists():
 
 
 @pytest.mark.asyncio
-async def test_demand_response_generation_bumps_on_each_change():
-    """Every actual flag change bumps the generation, so an off-on-off
-    double flip (same boolean at both ends) is still observable; no-op
-    sets do not bump it."""
-    hass, storage = _FakeHass(), _FakeStorage()
-    t = GlobalToggles(hass, storage)
-    assert t.demand_response_generation == 0
-
-    await t.async_set_demand_response_active(True)
-    assert t.demand_response_generation == 1
-
-    await t.async_set_demand_response_active(True)  # no-op: unchanged
-    assert t.demand_response_generation == 1
-
-    await t.async_set_demand_response_active(False)  # ABA: boolean is back
-    assert t.demand_response_generation == 2
-    await hass.drain()
-
-
-@pytest.mark.asyncio
 async def test_set_demand_response_idempotent():
     hass, storage = _FakeHass(), _FakeStorage()
     c1 = _FakeController()

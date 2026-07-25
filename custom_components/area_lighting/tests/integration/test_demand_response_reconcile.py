@@ -16,16 +16,6 @@ def _toggles(hass: HomeAssistant) -> GlobalToggles:
     return hass.data["area_lighting"]["global"]
 
 
-def _flip_flag(hass: HomeAssistant, value: bool) -> None:
-    """Mutate the DR flag the way the setter would, WITHOUT its reconcile
-    fan-out: flag plus generation bump (the setter bumps the generation on
-    every actual change). Lets tests exercise the end-of-activation check
-    in isolation."""
-    toggles = _toggles(hass)
-    toggles._demand_response_active = value
-    toggles._dr_generation += 1
-
-
 def _config() -> dict:
     entities = {f"light.den_{i}": {"state": "on", "brightness": 200} for i in range(1, 7)}
     dim_entities = {f"light.den_{i}": {"state": "on", "brightness": 100} for i in range(1, 4)}
@@ -265,10 +255,10 @@ async def test_scene_activation_mid_flip_ends_shed(
 ) -> None:
     """DR flipping on mid-activation still ends with the tail shed.
 
-    Branch-level test: the flag is mutated directly inside a patched
-    _apply_scene_data, so no setter-driven reconcile ever runs. The
-    end-of-activation generation comparison alone must notice the flip
-    and converge to the shed state.
+    The flag flips through the real setter inside a patched
+    _apply_scene_data, i.e. while the activation holds _dr_lock. The
+    setter's reconcile task queues on the lock and must converge to the
+    shed state as soon as the activation releases it.
     """
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["den"]
@@ -279,7 +269,7 @@ async def test_scene_activation_mid_flip_ends_shed(
 
     async def flip_after_apply(scene_slug, transition=None):
         await original(scene_slug, transition)
-        _flip_flag(hass, True)
+        await _toggles(hass).async_set_demand_response_active(True)
 
     monkeypatch.setattr(ctrl, "_apply_scene_data", flip_after_apply)
 
@@ -313,11 +303,10 @@ async def test_scene_activation_aba_double_flip_converges(
 
     An off-on-off double flip returns the boolean to its starting value, so
     a boolean dr_at_start comparison misses it, leaving the apply's shed
-    turn_offs standing against all-on tracking. Each flip bumps the setter's
-    generation counter, so the end-of-activation generation comparison
-    catches the ABA sequence and reconciles. As in the single-flip test, the
-    flag is mutated directly (with the generation bump the setter performs)
-    so no setter-driven reconcile ever runs.
+    turn_offs standing against all-on tracking. Both flips go through the
+    real setter while the activation holds _dr_lock; the two queued
+    reconciles converge in turn after the activation releases the lock,
+    each reading the LIVE flag, so the final state reflects the last flip.
     """
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["den"]
@@ -328,17 +317,17 @@ async def test_scene_activation_aba_double_flip_converges(
     original = ctrl._apply_scene_data
 
     async def flip_twice_around_apply(scene_slug, transition=None):
-        _flip_flag(hass, True)  # the apply below sheds the tail
-        await original(scene_slug, transition)
-        _flip_flag(hass, False)  # back off before the activation ends
+        await _toggles(hass).async_set_demand_response_active(True)
+        await original(scene_slug, transition)  # the apply sheds the tail
+        await _toggles(hass).async_set_demand_response_active(False)
 
     monkeypatch.setattr(ctrl, "_apply_scene_data", flip_twice_around_apply)
 
     await ctrl._activate_scene("bright", ActivationSource.USER)
     await hass.async_block_till_done()
 
-    # The end-of-activation reconcile converged to the FINAL flag (DR off):
-    # the bulbs the apply shed are relit and tracking carries no shed state.
+    # The queued reconciles converged to the FINAL flag (DR off): the
+    # bulbs the apply shed are relit and tracking carries no shed state.
     final = {eid: svc for svc, eid in chrono}
     for i in range(1, 7):
         assert final[f"light.den_{i}"] == "turn_on"
@@ -457,22 +446,20 @@ async def test_alert_start_waits_for_inflight_reconcile(
 
 
 @pytest.mark.integration
-async def test_reconcile_queued_mid_activation_cannot_corrupt_tracking(
+async def test_activation_blocks_until_inflight_reconcile_completes(
     hass: HomeAssistant, helper_entities, service_calls, monkeypatch
 ) -> None:
-    """A reconcile entering mid scene-activation must not re-assert the
-    outgoing scene's tracking over the incoming one.
+    """A scene activation must WAIT for a reconcile that is mid-converge.
 
     Scene "dim" is active. Reconcile R1 (DR on) parks mid-converge holding
     _dr_lock; two more flag flips (off, on) queue reconciles R2/R3 on the
-    lock. Scene "bright" activation B then starts: it captures the
-    already-bumped generation, publishes bright's tracking, and parks
-    mid-apply with _state still "dim". Releasing R1 lets R2/R3 acquire the
-    lock MID-activation: without the in-progress guard they read the stale
-    "dim" state and overwrite bright's tracking with dim's (and B's
-    end-of-activation generation compare cannot catch it, because B started
-    after every bump). The final tracking, shed set, and state must all
-    reflect "bright" with demand response applied.
+    lock. Scene "bright" activation B then starts: it must NOT enter its
+    body (publish tracking, issue commands) while R1 still holds the lock;
+    it queues behind R2/R3 instead. Once R1 releases, R2/R3 converge the
+    still-active "dim" state in turn, then B activates "bright" under the
+    lock with the final flag (DR on). The final tracking, shed set, state,
+    and physical commands must all reflect "bright" with demand response
+    applied; no interleaving can corrupt them.
     """
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["den"]
@@ -490,31 +477,27 @@ async def test_reconcile_queued_mid_activation_cannot_corrupt_tracking(
     await _toggles(hass).async_set_demand_response_active(False)  # queues R2
     await _toggles(hass).async_set_demand_response_active(True)  # queues R3
 
-    b_gate = asyncio.Event()
-    b_reached = asyncio.Event()
+    b_entered = asyncio.Event()
     original_apply_scene = ctrl._apply_scene_data
 
-    async def gated_scene_apply(scene_slug, transition=None):
-        b_reached.set()
-        await b_gate.wait()
+    async def recording_scene_apply(scene_slug, transition=None):
+        b_entered.set()
         await original_apply_scene(scene_slug, transition)
 
-    monkeypatch.setattr(ctrl, "_apply_scene_data", gated_scene_apply)
+    monkeypatch.setattr(ctrl, "_apply_scene_data", recording_scene_apply)
 
     task_b = hass.async_create_task(ctrl._activate_scene("bright", ActivationSource.USER))
-    await b_reached.wait()  # B published bright's tracking; _state still "dim"
-
-    gate.set()  # R1 finishes and releases; R2/R3 acquire mid-activation
-    for _ in range(50):
+    for _ in range(10):
         await asyncio.sleep(0)
-        if not ctrl._dr_lock.locked():
-            break
-    assert not ctrl._dr_lock.locked()
+    # Full serialization: B is parked on _dr_lock behind R2/R3; its body
+    # (and its scene apply) has not started while R1 is mid-converge.
+    assert not b_entered.is_set()
 
-    b_gate.set()  # B applies, transitions to "bright", and settles DR
+    gate.set()  # R1 finishes; R2/R3 converge "dim"; then B activates
     await task_b
     await hass.async_block_till_done()
 
+    assert b_entered.is_set()
     assert ctrl._state.is_scene
     assert ctrl._state.scene_slug == "bright"
     assert ctrl.dr_shed_ids == frozenset({f"light.den_{i}" for i in (3, 4, 5, 6)})
@@ -525,5 +508,50 @@ async def test_reconcile_queued_mid_activation_cannot_corrupt_tracking(
     final = {eid: svc for svc, eid in chrono}
     for i in (1, 2):
         assert final[f"light.den_{i}"] == "turn_on"
+    for i in (3, 4, 5, 6):
+        assert final[f"light.den_{i}"] == "turn_off"
+
+
+@pytest.mark.integration
+async def test_activation_exception_releases_queued_reconcile(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    """An activation that raises must not strand a queued DR reconcile.
+
+    Scene "bright" is active with every bulb on. A "dim" activation flips
+    DR on through the real setter mid-body (queueing a reconcile), yields
+    so the reconcile task reaches the lock, then raises before completing.
+    The DR edge must not be lost: once the failed activation releases
+    _dr_lock, the queued reconcile converges the still-active "bright"
+    state and sheds the tail.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    for i in range(1, 7):
+        hass.states.async_set(f"light.den_{i}", "on", {"brightness": 200})
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    chrono = _register_stateful_light_recorder(hass)
+
+    async def failing_apply(scene_slug, transition=None):
+        await _toggles(hass).async_set_demand_response_active(True)
+        for _ in range(3):
+            await asyncio.sleep(0)  # let the reconcile task reach the lock
+        raise RuntimeError("apply blew up")
+
+    monkeypatch.setattr(ctrl, "_apply_scene_data", failing_apply)
+
+    with pytest.raises(RuntimeError, match="apply blew up"):
+        await ctrl._activate_scene("dim", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    # The queued reconcile ran after the lock was released and applied the
+    # edge against the surviving "bright" state: tail shed, tracking off.
+    assert ctrl._state.scene_slug == "bright"
+    assert ctrl.dr_shed_ids == frozenset({f"light.den_{i}" for i in (3, 4, 5, 6)})
+    assert ctrl._active_scene_targets["light.den_1"]["state"] == "on"
+    assert ctrl._active_scene_targets["light.den_4"]["state"] == "off"
+    final = {eid: svc for svc, eid in chrono}
     for i in (3, 4, 5, 6):
         assert final[f"light.den_{i}"] == "turn_off"

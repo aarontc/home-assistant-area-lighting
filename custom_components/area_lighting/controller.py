@@ -149,28 +149,15 @@ class AreaLightingController:
         # router and the DR reconcile; surfaced in diagnostics.
         self._dr_shed_ids: frozenset[str] = frozenset()
 
-        # Serializes demand-response reconciles: rapid flag flips schedule
-        # one reconcile task per flip, and interleaved converges could write
-        # tracking out of order. Each holder reads the current flag, so the
-        # last one through converges to the final state.
+        # Fully serializes scene/circadian activations with demand-response
+        # reconciles (and with an alert's start snapshot). An activation
+        # holds this lock for its whole duration, so a reconcile can never
+        # observe (or overwrite) mid-transition state and tracking; a
+        # reconcile queued behind an activation converges afterwards against
+        # the settled state, reading the LIVE flag, so the last holder
+        # through always converges to the final state. Nested activation
+        # work goes through the *_inner bodies, which never touch the lock.
         self._dr_lock: asyncio.Lock = asyncio.Lock()
-
-        # Count of in-flight scene/circadian activations (an int, not a
-        # bool, because _activate_scene's circadian branch nests into
-        # _activate_circadian). While non-zero, a queued demand-response
-        # reconcile skips instead of converging: mid-activation the state
-        # and tracking describe the OUTGOING scene, so a converge would
-        # overwrite the incoming activation's tracking and re-assert stale
-        # targets. The activation settles the demand-response state itself
-        # once it finishes (see _activate_scene / _activate_circadian).
-        self._activation_depth: int = 0
-
-        # True when a reconcile skipped because _activation_depth was
-        # non-zero. Consumed (read and cleared) by the outermost
-        # activation when it finishes: a set flag means a converge was
-        # suppressed mid-flight, so the activation must run one itself to
-        # apply whatever that reconcile would have.
-        self._dr_reconcile_skipped: bool = False
 
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
@@ -794,36 +781,18 @@ class AreaLightingController:
         Any transition OUT of a circadian state disables the circadian
         switches first so they don't fight the new scene's light settings.
 
-        The body runs with _activation_depth held, so a demand-response
-        reconcile that enters mid-activation skips instead of converging
-        against the outgoing state. The settle below runs AFTER the depth
-        is released (it would skip itself otherwise) and re-establishes
-        consistent tracking for any reconcile skipped or interleaved while
-        this activation was in flight.
+        The body runs holding _dr_lock for its whole duration, so a
+        demand-response reconcile (or an alert's start snapshot) can never
+        interleave with it: a reconcile queued mid-activation waits on the
+        lock and converges afterwards against the settled state, reading
+        the LIVE flag. A flag edge that lands mid-activation always queues
+        its own reconcile task (the global setter schedules one per
+        controller), so no end-of-activation settle is needed here. Must
+        NOT be called with _dr_lock already held; nested activation work
+        uses the *_inner bodies instead.
         """
-        gen_at_start = self._demand_response_generation()
-        self._activation_depth += 1
-        try:
+        async with self._dr_lock:
             await self._activate_scene_inner(scene_slug, source, transition)
-        finally:
-            self._activation_depth -= 1
-        if self._activation_depth:
-            # Nested inside another activation: the outermost one settles
-            # (and consumes the skipped-reconcile flag).
-            return
-        skipped = self._dr_reconcile_skipped
-        self._dr_reconcile_skipped = False
-        # Settle when a reconcile was suppressed mid-activation (it saw
-        # the pre-transition state and deferred to us) or the flag
-        # actually changed while this activation ran. The generation
-        # compare catches even an off-on-off double flip that leaves the
-        # flag itself unchanged (ABA). The converge is idempotent (a
-        # no-op when tracking and light state already agree), and for an
-        # off activation it returns immediately. No recursion: the scene
-        # reconcile path never calls _activate_scene, and the circadian
-        # path's nested _activate_circadian defers back here.
-        if skipped or self._demand_response_generation() != gen_at_start:
-            await self.async_reconcile_demand_response()
 
     async def _activate_scene_inner(
         self,
@@ -831,7 +800,8 @@ class AreaLightingController:
         source: ActivationSource,
         transition: float | None,
     ) -> None:
-        """Body of _activate_scene; runs with _activation_depth held."""
+        """Body of _activate_scene; runs with _dr_lock held by the caller
+        (_activate_scene or nobody else) and never acquires it itself."""
         from .area_state import LeaderReason
 
         if scene_slug == SCENE_OFF_INTERNAL:
@@ -849,7 +819,9 @@ class AreaLightingController:
 
         if scene_slug == SCENE_CIRCADIAN:
             self._active_scene_targets = {}
-            await self._activate_circadian(source)
+            # Nested call: _dr_lock is already held, so go through the
+            # inner body (the outer _activate_circadian would deadlock).
+            await self._activate_circadian_inner(source)
             if source != ActivationSource.LEADER:
                 self._propagate_to_followers(
                     SCENE_CIRCADIAN,
@@ -879,9 +851,9 @@ class AreaLightingController:
                     scene_slug,
                     LeaderReason.SCENE_ACTIVATED,
                 )
-        # The demand-response settle (skipped-reconcile recovery and
-        # mid-activation flip convergence) runs in _activate_scene, after
-        # _activation_depth is released.
+        # A demand-response edge that landed mid-activation queued its own
+        # reconcile task on _dr_lock; it converges right after this body's
+        # caller releases the lock.
 
     def _route_source_colortemp(self) -> float | None:
         """Colortemp the kelvin router routes on, read through the router
@@ -939,46 +911,30 @@ class AreaLightingController:
         self,
         source: ActivationSource = ActivationSource.USER,
     ) -> None:
-        """Activate circadian mode.
+        """Activate circadian mode (direct, top-level entry).
 
-        Runs with _activation_depth held (see _activate_scene): a
-        demand-response reconcile entering mid-activation skips instead of
-        converging against the mid-transition state. The kelvin-router
-        sync at the end of the body applies the LIVE flag regardless
-        (recompute_and_apply_circadian_dr never goes through
-        async_reconcile_demand_response, so it is never skipped); the
-        settle below covers a reconcile that skipped mid-activation or a
-        flag edge that landed during it, which routeless areas would
-        otherwise miss.
+        Holds _dr_lock for the whole activation, exactly like
+        _activate_scene: a demand-response reconcile queued mid-activation
+        waits on the lock and converges afterwards against the settled
+        state, reading the LIVE flag. Must NOT be called with _dr_lock
+        already held; nested callers (_activate_scene_inner's circadian
+        branch, the reconcile's circadian path) use
+        _activate_circadian_inner instead.
         """
-        gen_at_start = self._demand_response_generation()
-        self._activation_depth += 1
-        try:
+        async with self._dr_lock:
             await self._activate_circadian_inner(source)
-        finally:
-            self._activation_depth -= 1
-        if self._activation_depth:
-            # Nested inside _activate_scene: the outermost activation
-            # settles (and consumes the skipped-reconcile flag).
-            return
-        skipped = self._dr_reconcile_skipped
-        self._dr_reconcile_skipped = False
-        if self._dr_lock.locked():
-            # Called from async_reconcile_demand_response itself, which
-            # holds _dr_lock: re-entering the reconcile would deadlock.
-            # Nothing is lost: while the lock is held no reconcile can
-            # skip (they queue on the lock instead), and any mid-flight
-            # flag edge already queued its own reconcile task, which
-            # converges once the holder releases the lock.
-            return
-        if skipped or self._demand_response_generation() != gen_at_start:
-            await self.async_reconcile_demand_response()
 
     async def _activate_circadian_inner(
         self,
         source: ActivationSource,
     ) -> None:
-        """Body of _activate_circadian; runs with _activation_depth held."""
+        """Body of _activate_circadian; runs with _dr_lock held by the
+        caller (_activate_circadian, _activate_scene_inner, or
+        async_reconcile_demand_response) and never acquires it itself.
+        The kelvin-router sync at the end acquires only the router's
+        _reconcile_lock (lock order: _dr_lock then _reconcile_lock,
+        never the reverse), and recompute_and_apply_circadian_dr, which
+        the router calls back, takes no lock at all."""
         self._state.transition_to_circadian(source)
         self._dr_shed_ids = self._compute_circadian_shed_ids()
         self._enforce_occupancy_timer()
@@ -1248,15 +1204,6 @@ class AreaLightingController:
         toggles = self.hass.data.get(DOMAIN, {}).get("global")
         return toggles is not None and toggles.demand_response_active
 
-    def _demand_response_generation(self) -> int:
-        """Monotonic count of global DR flag changes (0 with no global).
-
-        Comparing generations across an await window detects a double flip
-        that leaves the boolean itself unchanged (ABA).
-        """
-        toggles = self.hass.data.get(DOMAIN, {}).get("global")
-        return 0 if toggles is None else toggles.demand_response_generation
-
     def _cluster_entity_ids(self) -> set[str]:
         """Entity ids of the area's Hue-Zone-style light clusters."""
         return {cluster.id for cluster in self.area.light_clusters}
@@ -1324,26 +1271,22 @@ class AreaLightingController:
         an alert's start also waits out a reconcile that is already
         mid-converge: the two can never overlap.
 
-        Also deferred while a scene/circadian activation is in flight
-        (_activation_depth non-zero): mid-activation the state and
-        tracking describe the outgoing scene, so converging here would
-        overwrite the incoming activation's tracking and re-assert stale
-        targets. The activation settles the current demand-response state
-        itself when it finishes (see _activate_scene).
+        Scene/circadian activations hold _dr_lock for their whole duration,
+        so a reconcile can never enter mid-activation: it waits on the lock
+        and converges here against the settled state, reading the LIVE
+        flag. That also covers an activation that raised mid-body: the
+        async-with releases the lock and the queued reconcile still runs.
         """
         async with self._dr_lock:
             if self._alert_active:
-                return
-            if self._activation_depth:
-                self._dr_reconcile_skipped = True
                 return
             if self._state.is_off or self._state.is_manual:
                 return
             if self._state.is_circadian:
                 # Circadian values are computed; re-running recomputes the same
                 # kept values (no visible change) and applies/removes the shed
-                # filter.
-                await self._activate_circadian(self._state.source)
+                # filter. Inner body: _dr_lock is already held here.
+                await self._activate_circadian_inner(self._state.source)
                 return
             if not self._state.is_scene:
                 return
