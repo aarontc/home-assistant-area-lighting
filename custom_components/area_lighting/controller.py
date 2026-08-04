@@ -1832,6 +1832,15 @@ class AreaLightingController:
             await self._activate_scene(self._state.scene_slug, ActivationSource.USER)
         else:
             await self.lighting_on()
+        # Suspend circadian AFTER restoring scene context, mirroring what
+        # _adjust_brightness does before stepping. It cannot be done earlier:
+        # the restore above re-arms the kelvin router whenever the remembered
+        # scene is itself circadian, and without this the area would end up
+        # dimmed with circadian live. The router's next reconcile would then
+        # drive route lights with no user action behind it, and circadian
+        # would re-push brightness over the dim just asked for.
+        if self._state.is_circadian:
+            await self._disable_circadian_switches()
         await self._set_all_lights_to_pct(step)
         self._state.mark_dimmed()
         self._notify_state_change()

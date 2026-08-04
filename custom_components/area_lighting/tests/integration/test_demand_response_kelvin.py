@@ -1045,3 +1045,82 @@ async def test_unavailable_source_controller_agrees_with_router_fallback(
     on = _light_calls(service_calls, "turn_on")
     assert {"light.study_lamp_1", "light.study_lamp_2"} <= on
     assert "light.study_lamp_3" not in on
+
+
+@pytest.mark.integration
+async def test_dim_from_dark_disables_circadian_and_unarms_router(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Dimming a fully-dark circadian area must suspend circadian.
+
+    _adjust_brightness disables the circadian switches before stepping, but
+    it returns early into _bring_dark_area_to_min when nothing is on, and
+    that path never did. The area was left nominally circadian with the
+    router still armed, so the router's next reconcile (~60s) drove route
+    lights with no user action behind it, and circadian re-pushed full
+    brightness over the dim the user had just asked for.
+    """
+    await _setup(hass, colortemp=5000)
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    await ctrl._activate_circadian(ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._kelvin_router._unsub is not None, "precondition: router armed"
+
+    # Fully dark: every light off, so _adjust_brightness takes the
+    # _bring_dark_area_to_min branch.
+    for eid in (
+        "light.kitchen_fluorescent",
+        "light.kitchen_strip_1",
+        "light.kitchen_strip_2",
+        "light.kitchen_strip_3",
+    ):
+        hass.states.async_set(eid, "off", {})
+    await hass.async_block_till_done()
+    _make_switch_off_update_state(hass)
+
+    service_calls.clear()
+    await ctrl._adjust_brightness(-1)
+    await hass.async_block_till_done()
+
+    assert ctrl._state.dimmed is True
+    assert ctrl._kelvin_router._unsub is None
+
+
+@pytest.mark.integration
+async def test_dim_from_dark_does_not_leave_circadian_armed(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Dimming a dark area back into circadian must suspend circadian.
+
+    _adjust_brightness disables the circadian switches before stepping, but
+    returns early into _bring_dark_area_to_min when nothing is on, and that
+    path did not. It restores scene context first, so when the remembered
+    scene IS circadian it re-arms the kelvin router and then dims underneath
+    it: the area ends up dimmed with circadian live. The router's next
+    reconcile (~60s) then drives route lights with no user action behind it,
+    and circadian re-pushes brightness over the dim just asked for.
+
+    Reachable by dimming a circadian area (which records previous_scene =
+    circadian), letting the lights time out, then dimming again.
+    """
+    await _setup(hass, colortemp=5000)
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    await ctrl._activate_circadian(ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    for eid in (
+        "light.kitchen_fluorescent",
+        "light.kitchen_strip_1",
+        "light.kitchen_strip_2",
+        "light.kitchen_strip_3",
+    ):
+        hass.states.async_set(eid, "off", {})
+    await hass.async_block_till_done()
+    _make_switch_off_update_state(hass)
+    ctrl._state.previous_scene = "circadian"
+
+    await ctrl._adjust_brightness(-1)
+    await hass.async_block_till_done()
+
+    assert ctrl._state.dimmed is True
+    assert ctrl._kelvin_router._unsub is None
