@@ -110,6 +110,24 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
+        # Refuse while demand response is shedding. The snapshot captures raw
+        # hass states, so the shed bulbs (physically off) would be baked into
+        # the stored scene permanently: the scene stays wrong after the window
+        # ends, and nothing records what those bulbs should have been, so it
+        # cannot be reconstructed. Excluding them would silently store a
+        # partial scene instead, which is just as wrong and harder to notice.
+        # Recovery is simply to re-run once the window closes.
+        toggles = hass.data[DOMAIN].get("global")
+        if toggles is not None and toggles.demand_response_active:
+            _LOGGER.warning(
+                "Area %s: snapshot_scene refused for scene '%s' because demand "
+                "response is active; the shed lights are off and would be "
+                "captured as off. Re-run after the demand-response window ends.",
+                area_id,
+                scene_slug,
+            )
+            return
+
         # Get all light entity IDs for this area
         entity_ids = [light.id for light in area.all_lights]
         snapshot = await storage.async_snapshot_scene(area_id, scene_slug, entity_ids)
