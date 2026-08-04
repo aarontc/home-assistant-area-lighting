@@ -1258,12 +1258,24 @@ class AreaLightingController:
         leader's re-drive propagating its slug would overwrite a follower
         that is independently in a different scene.
         """
-        if (
-            self._state.is_off
-            or self._state.is_manual
-            or self._state.dimmed
-            or self._alert_active
-        ):
+        # Drop the shed set BEFORE the skip below. `dr_shed_ids` means "what
+        # the current activation shed for demand response", so once the flag
+        # is off it describes nothing. The early return used to leave it
+        # populated on manual/off/dimmed areas, and it is read by the
+        # manual-detection bypasses in event_handlers (an on-report for a shed
+        # bulb is let past the dimmed and circadian skips), so a stale set kept
+        # changing behaviour long after the window closed. Harmless for areas
+        # that do re-drive: both activation paths recompute it.
+        #
+        # NOT while an alert owns the area: execute_alert's finally block uses
+        # a surviving shed set as its "a demand-response edge was deferred to
+        # me" marker (alert.py, right after it clears _alert_active). Clearing
+        # here would erase that marker and strand the shed bulbs off. That path
+        # calls back in with _alert_active already False, so the set is cleared
+        # then instead.
+        if not self._demand_response_active() and not self._alert_active:
+            self._dr_shed_ids = frozenset()
+        if self._state.is_off or self._state.is_manual or self._state.dimmed or self._alert_active:
             return
         if self._state.is_circadian:
             await self._activate_circadian(self._state.source)

@@ -370,3 +370,48 @@ async def test_flip_off_leaves_dimmed_area_untouched(
 
     assert [c for c in service_calls if c.domain == "light"] == []
     assert ctrl._state.dimmed is True
+
+
+@pytest.mark.integration
+async def test_flip_off_clears_shed_set_on_skipped_areas(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """Skipping an area's re-drive must still drop its shed set.
+
+    `dr_shed_ids` means "what the current activation shed for demand
+    response". Once the flag is off it describes nothing, but the early
+    return for manual/off/dimmed areas left it populated. It is read by the
+    manual-detection bypasses in event_handlers (an on-report for a shed bulb
+    is allowed past the dimmed and circadian skips), so a stale set kept
+    changing behaviour long after the window closed.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await _toggles(hass).async_set_demand_response_active(True)
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids, "precondition: the scene should have shed bulbs"
+
+    ctrl._state.transition_to_manual()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+
+    assert ctrl.dr_shed_ids == frozenset()
+
+
+@pytest.mark.integration
+async def test_flip_off_clears_shed_set_on_dimmed_area(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await _toggles(hass).async_set_demand_response_active(True)
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids
+
+    ctrl._state.mark_dimmed()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+
+    assert ctrl.dr_shed_ids == frozenset()
