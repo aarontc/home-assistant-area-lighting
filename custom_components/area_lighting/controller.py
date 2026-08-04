@@ -1026,18 +1026,22 @@ class AreaLightingController:
                 eid: state for eid, state in entities.items() if eid.startswith("light.")
             }
             if self._demand_response_active():
-                light_entities = apply_demand_response(
-                    light_entities, [light.id for light in self.area.lights]
-                )
-                # Never drive a cluster entity under DR: only individual
-                # lights are shed, so a snapshot's zone entry survives as an
-                # `on` target and would relight shed members through the
-                # zone. cluster_specs stays as-is so kept members still
+                # Drop cluster entities BEFORE computing the shed. Never drive
+                # a cluster entity under DR: a snapshot's zone entry would
+                # survive as an `on` target and relight shed members through
+                # the zone. It must also not reach the shed itself, where an
+                # undeclared `on` target now counts toward n; a cluster
+                # addresses the same physical bulbs as its members, so
+                # counting it too would push n across a tier boundary and
+                # over-shed. cluster_specs stays as-is so kept members still
                 # coalesce into a zone command when they cover it entirely.
                 clusters = self._cluster_entity_ids()
                 light_entities = {
                     eid: st for eid, st in light_entities.items() if eid not in clusters
                 }
+                light_entities = apply_demand_response(
+                    light_entities, [light.id for light in self.area.lights]
+                )
             cluster_specs = [
                 (light.id, list(light.members))
                 for light in self.area.light_clusters
@@ -1203,9 +1207,11 @@ class AreaLightingController:
         would relight shed members through the zone."""
         targets = self._resolve_raw_scene_targets(scene_slug)
         if self._demand_response_active():
-            targets = apply_demand_response(targets, [light.id for light in self.area.lights])
+            # Clusters out first: see _apply_scene_data for why they must not
+            # reach the shed computation.
             clusters = self._cluster_entity_ids()
             targets = {eid: st for eid, st in targets.items() if eid not in clusters}
+            targets = apply_demand_response(targets, [light.id for light in self.area.lights])
         return targets
 
     def _compute_scene_shed_ids(self, scene_slug: str) -> frozenset[str]:
@@ -1213,7 +1219,16 @@ class AreaLightingController:
             return frozenset()
         ordered = [light.id for light in self.area.lights]
         raw = self._resolve_raw_scene_targets(scene_slug)
-        on_ids = [eid for eid in ordered if raw.get(eid, {}).get("state") == "on"]
+        # Mirror _effective_scene_targets exactly: clusters excluded, and the
+        # on-set taken from the raw targets rather than the config list, so
+        # undeclared bulbs are tracked as shed too. If this set disagreed with
+        # what was actually shed, self-heal would relight the difference.
+        clusters = self._cluster_entity_ids()
+        on_ids = [
+            eid
+            for eid, state in raw.items()
+            if eid not in clusters and isinstance(state, dict) and state.get("state") == "on"
+        ]
         return frozenset(demand_response_shed_ids(ordered, on_ids))
 
     async def reactivate_for_demand_response(self) -> None:

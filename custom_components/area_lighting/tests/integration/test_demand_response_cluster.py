@@ -222,3 +222,67 @@ async def test_dr_brightness_step_excludes_cluster_entity(
     assert ZONE not in on
     assert on == set(MEMBERS)
     assert off == set()
+
+
+# ── cluster entities must not inflate the shed tier ────────────────────────
+#
+# Undeclared `on` targets now count toward n and are shed first, so a scene's
+# cluster entry must be removed BEFORE the shed is computed. A cluster
+# addresses the same physical bulbs as its members; counting it too pushes n
+# across the 5/6 tier boundary and over-sheds real bulbs.
+#
+# Five members is the case that distinguishes the two: 5 on-bulbs is the 50%
+# tier (keep 3), while 6 (members + zone) is the 80% tier (keep 2). With six
+# members both readings happen to keep 2, which is why this needs its own
+# fixture.
+
+FIVE = [f"light.five_{suffix}" for suffix in "abcde"]
+FIVE_ZONE = "light.five_all"
+
+
+def _five_config() -> dict:
+    entities: dict = {FIVE_ZONE: {"state": "on"}}
+    entities.update({m: {"state": "on", "brightness": 200} for m in FIVE})
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "five_room",
+                    "name": "Five Room",
+                    "event_handlers": True,
+                    "lights": [{"id": m, "roles": ["dimming"]} for m in FIVE],
+                    "light_clusters": [{"id": FIVE_ZONE, "members": list(FIVE)}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "bright", "name": "Bright", "entities": entities},
+                        {"id": "off", "name": "Off"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+@pytest.mark.integration
+async def test_cluster_entity_does_not_inflate_shed_tier(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    for entity_id in [*FIVE, FIVE_ZONE]:
+        hass.states.async_set(entity_id, "off", {})
+    assert await async_setup_component(hass, "area_lighting", _five_config())
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+
+    ctrl = hass.data["area_lighting"]["controllers"]["five_room"]
+    _toggles(hass)._demand_response_active = True
+
+    service_calls.clear()
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    on, _off = _on_off(service_calls)
+    # 5 real bulbs -> 50% tier -> keep 3. If the zone were counted as a
+    # sixth on-bulb it would be the 80% tier and only 2 would survive.
+    assert on == {"light.five_a", "light.five_b", "light.five_c"}
+    assert FIVE_ZONE not in on

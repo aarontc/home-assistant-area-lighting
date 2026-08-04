@@ -137,12 +137,15 @@ class AreaLightingScene(Scene):
         if self._demand_response_active():
             from .demand_response import apply_demand_response
 
-            stored = apply_demand_response(stored, [light.id for light in self._area.lights])
-            # Never drive a cluster entity under DR: only individual lights
-            # are shed, so a snapshot's zone entry survives as an `on`
-            # target and would relight shed members through the zone.
+            # Clusters out BEFORE the shed. Never drive a cluster entity under
+            # DR: a snapshot's zone entry would survive as an `on` target and
+            # relight shed members through the zone. It must also stay out of
+            # the shed computation, where an undeclared `on` target now counts
+            # toward n, since a cluster addresses the same physical bulbs as
+            # its members and would push n across a tier boundary.
             cluster_ids = {cluster.id for cluster in self._area.light_clusters}
             stored = {eid: st for eid, st in stored.items() if eid not in cluster_ids}
+            stored = apply_demand_response(stored, [light.id for light in self._area.lights])
         _LOGGER.debug(
             "Area %s: applying scene data (%d entities)",
             self._area.id,

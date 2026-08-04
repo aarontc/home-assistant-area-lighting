@@ -34,8 +34,38 @@ def test_shed_ids_empty_on_set():
     assert demand_response_shed_ids(["l1", "l2"], []) == []
 
 
-def test_shed_ids_ignores_ids_not_in_order():
-    assert demand_response_shed_ids(["l1", "l2"], ["l1", "l2", "lX"]) == ["l2"]
+def test_shed_ids_sheds_on_ids_missing_from_order_first():
+    """An on-bulb absent from the config list still counts toward n and is
+    shed before any declared bulb.
+
+    Scene `entities:` blocks can name lights that are not declared under an
+    area's `lights:`. Exempting them let them burn through a whole window and
+    also shrank the denominator, weakening the shed on the declared bulbs.
+    Undeclared bulbs sort last, so they are the first to go.
+    """
+    assert demand_response_shed_ids(["l1", "l2"], ["l1", "l2", "lX"]) == ["lX"]
+
+
+def test_shed_ids_strays_keep_on_set_order():
+    ordered = ["l1", "l2"]
+    on = ["l1", "l2", "lX", "lY"]  # n=4 -> keep ceil(4*0.5)=2 -> shed both strays
+    assert demand_response_shed_ids(ordered, on) == ["lX", "lY"]
+
+
+def test_shed_ids_deduplicates_ordered_list():
+    """A light declared twice must not be counted twice.
+
+    Double-counting inflated n past the 5/6 tier boundary and burned a kept
+    slot on the duplicate.
+    """
+    ordered = ["l1", "l1", "l2", "l3", "l4", "l5"]
+    on = ["l1", "l2", "l3", "l4", "l5"]
+    # 5 distinct on-bulbs -> 50% tier -> keep 3
+    assert demand_response_shed_ids(ordered, on) == ["l4", "l5"]
+
+
+def test_shed_ids_deduplicates_on_set():
+    assert demand_response_shed_ids(["l1", "l2"], ["l1", "l1", "l2"]) == ["l2"]
 
 
 def test_apply_forces_tail_off():
@@ -70,3 +100,34 @@ def test_apply_counts_only_on_targets():
 def test_apply_no_shed_when_single_light():
     out = apply_demand_response({"l1": {"state": "on"}}, ["l1"])
     assert out["l1"] == {"state": "on"}  # keep_count(1) == 1
+
+
+def test_apply_sheds_targets_missing_from_order():
+    """An `on` target not declared under `lights:` is shed, not passed through.
+
+    Previously it was returned untouched and the dispatcher issued
+    light.turn_on for it, so it stayed lit for the entire window.
+    """
+    targets = {"l1": {"state": "on"}, "lX": {"state": "on"}}
+    out = apply_demand_response(targets, ["l1"])  # n=2 -> keep 1 -> shed the stray
+    assert out["l1"] == {"state": "on"}
+    assert out["lX"] == {"state": "off"}
+
+
+def test_apply_stray_counts_toward_tier():
+    """The stray must inflate n, not be invisible to it."""
+    ordered = ["l1", "l2", "l3", "l4", "l5"]
+    targets = {eid: {"state": "on"} for eid in [*ordered, "lX"]}
+    # 6 on-bulbs -> 80% tier -> keep 2; without counting the stray it would
+    # have been the 5-bulb tier and kept 3.
+    out = apply_demand_response(targets, ordered)
+    kept = [eid for eid, st in out.items() if st.get("state") == "on"]
+    assert kept == ["l1", "l2"]
+
+
+def test_apply_deduplicates_ordered_list():
+    ordered = ["l1", "l1", "l2", "l3", "l4", "l5"]
+    targets = {eid: {"state": "on"} for eid in ["l1", "l2", "l3", "l4", "l5"]}
+    out = apply_demand_response(targets, ordered)
+    kept = [eid for eid, st in out.items() if st.get("state") == "on"]
+    assert kept == ["l1", "l2", "l3"]  # 5 distinct -> 50% tier
