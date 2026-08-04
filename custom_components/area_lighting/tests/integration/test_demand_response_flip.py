@@ -319,3 +319,54 @@ async def test_activation_never_waits_on_demand_response(
     # Release the parked re-activation; everything drains cleanly.
     gate.set()
     await hass.async_block_till_done()
+
+
+@pytest.mark.integration
+async def test_flip_leaves_dimmed_area_untouched(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A dimmed area keeps user intent, exactly like a manual one.
+
+    Re-driving it would call _activate_scene, whose transition_to_scene
+    clears `dimmed` and `previous_scene`, so a room dimmed at 16:55 would
+    jump back to full scene brightness at 17:00: demand response making a
+    room BRIGHTER at the moment the shed starts, and again at 20:00.
+
+    Dimming is a relative step with no stored level, so the dim cannot be
+    re-applied after a re-drive; the only way to honour it is not to re-drive.
+    A dimmed room is already drawing well under its scene brightness, and any
+    later activation there still sheds normally.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    ctrl._state.mark_dimmed()
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    assert [c for c in service_calls if c.domain == "light"] == []
+    assert ctrl._state.dimmed is True
+    assert ctrl._state.previous_scene == "bright"
+
+
+@pytest.mark.integration
+async def test_flip_off_leaves_dimmed_area_untouched(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """The 20:00 flip must not un-dim either."""
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await _toggles(hass).async_set_demand_response_active(True)
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    ctrl._state.mark_dimmed()
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    await _toggles(hass).async_set_demand_response_active(False)
+    await hass.async_block_till_done()
+
+    assert [c for c in service_calls if c.domain == "light"] == []
+    assert ctrl._state.dimmed is True

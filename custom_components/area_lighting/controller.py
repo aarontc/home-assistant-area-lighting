@@ -1238,16 +1238,32 @@ class AreaLightingController:
         Called for every controller by the global demand-response setter,
         and by execute_alert when an alert overlapped a flip. No lock:
         this is an ordinary activation, so it can never block or be
-        blocked by normal light control. Manual and off areas are skipped
-        (user intent wins); an area an alert currently owns is re-driven
-        by the alert's own finally block instead.
+        blocked by normal light control. Manual, off and dimmed areas are
+        skipped (user intent wins); an area an alert currently owns is
+        re-driven by the alert's own finally block instead.
+
+        Dimmed areas are skipped for the same reason manual ones are, and
+        because a re-drive would silently destroy the dim: _activate_scene
+        calls transition_to_scene, which clears `dimmed` and
+        `previous_scene`. A room dimmed at 16:55 would jump to full scene
+        brightness at 17:00, i.e. demand response making a room BRIGHTER as
+        the shed starts, and again at 20:00. Dimming is a relative step with
+        no stored level, so it cannot be re-applied after a re-drive; not
+        re-driving is the only way to honour it. The lost shed coverage is
+        small: a dimmed room already draws well under its scene brightness,
+        and any later activation there sheds normally.
 
         Follower propagation is suppressed: the setter already re-drives
         every controller (followers included) with its own scene, so a
         leader's re-drive propagating its slug would overwrite a follower
         that is independently in a different scene.
         """
-        if self._state.is_off or self._state.is_manual or self._alert_active:
+        if (
+            self._state.is_off
+            or self._state.is_manual
+            or self._state.dimmed
+            or self._alert_active
+        ):
             return
         if self._state.is_circadian:
             await self._activate_circadian(self._state.source)
