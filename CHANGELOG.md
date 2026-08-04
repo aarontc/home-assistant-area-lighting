@@ -121,6 +121,54 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Demand response: undeclared and duplicate bulbs were not shed** — the shed
+  universe was built by iterating an area's config light list, so an `on`
+  target absent from that list could never be shed AND did not count toward
+  `n`, which also weakened the shed applied to the declared bulbs. A scene's
+  `entities:` block may name a light that is not declared under `lights:`, and
+  nothing validates that it is, so such a bulb burned through an entire window.
+  Undeclared bulbs now count toward `n` and sort last, so they are shed first.
+  A light declared twice is also no longer counted twice, which could push `n`
+  across the 5/6 tier boundary and burn a kept slot on the duplicate.
+  Cluster entities are consequently removed *before* the shed is computed
+  rather than after: they are undeclared by construction, and counting one
+  over-sheds (five members plus a zone read as the 80% tier and kept two bulbs
+  where the 50% tier should have kept three).
+
+- **Demand response un-dimmed a dimmed room** — a flip re-drove dimmed areas,
+  and re-activating a scene clears the `dimmed` modifier, so a room dimmed at
+  16:55 jumped back to full scene brightness when the window opened, and again
+  when it closed. Dimmed areas are now skipped like manual ones. Dimming is a
+  relative step with no stored level, so it cannot be re-applied after a
+  re-drive; not re-driving is the only way to honour it.
+
+- **Stale shed set on areas a flip skipped** — off, manual and dimmed areas
+  kept a populated `dr_shed_ids` after the flag cleared. It is read by the
+  manual-detection bypasses, so it kept changing behaviour after the window
+  closed. It is now cleared before the early return, except while an alert
+  owns the area, where a surviving set is the alert's "a demand-response edge
+  was deferred to me" marker.
+
+- **`snapshot_scene` baked the shed into a stored scene** — taken during a
+  window, it captured the shed bulbs as `off`, permanently, with no record of
+  what they should have been. It now refuses with a warning while demand
+  response is active.
+
+- **Dimming a dark area left circadian armed** — `_adjust_brightness` disables
+  the circadian switches before stepping, but returns early into
+  `_bring_dark_area_to_min` when nothing is on, and that path did not. Because
+  it restores scene context first, a remembered scene of *circadian* re-armed
+  the kelvin router and the dim was applied underneath it, leaving the area
+  dimmed with circadian live: the router's next reconcile drove route lights
+  with no user action, and circadian re-pushed brightness over the dim.
+
+- **A parked demand-response re-drive could clobber a newer activation** — the
+  re-drive writes its targets before applying and its state after, with no
+  lock, so one still applying when a Pico press landed wrote its own scene into
+  the state while the targets described the user's. Activations now carry a
+  monotonic claim and the re-drive yields when it loses it. Only the re-drive
+  yields: activations legitimately cascade, and a cascade is not a supersession.
+
 - **Scene `rgbw_color` / `rgbww_color` silently dropped** — the scene-apply
   allowlist omitted `rgbw_color` and `rgbww_color`, so a scene specifying them
   (e.g. a christmas scene driving WiZ `rgbww` bulbs) turned the lights on but
