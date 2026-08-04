@@ -149,6 +149,11 @@ class AreaLightingController:
         # router; surfaced in diagnostics.
         self._dr_shed_ids: frozenset[str] = frozenset()
 
+        # Monotonic activation claim. _activate_scene has no lock, so a slow
+        # activation can still be applying when a newer one starts; the late
+        # resumer compares this to decide whether it still owns the area.
+        self._activation_seq: int = 0
+
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
         self._heal_attempts: dict[str, list[float]] = {}
@@ -766,6 +771,7 @@ class AreaLightingController:
         transition: float | None = None,
         *,
         propagate_to_followers: bool = True,
+        yield_if_superseded: bool = False,
     ) -> None:
         """Activate a scene by slug, transitioning state with the given source.
 
@@ -786,6 +792,23 @@ class AreaLightingController:
         scene with the leader's slug.
         """
         from .area_state import LeaderReason
+
+        # Claim this activation. There is deliberately no lock (activations
+        # must never wait on demand-response state), so a slow activation can
+        # still be in flight when a newer one starts. The visual-scene path
+        # below writes its targets before awaiting and its state after, so a
+        # late resumer can leave the state describing its own scene while the
+        # targets describe the newer one.
+        #
+        # Every activation claims, but only `yield_if_superseded` callers act
+        # on losing the claim. Activations legitimately cascade (a scene apply
+        # can drive handlers that activate another scene), and a cascade is not
+        # a supersession: making every caller yield made outer activations drop
+        # state their own descendants had triggered, which broke holiday and
+        # ambient transitions. Only the demand-response re-drive, which is a
+        # background replay with no user behind it, yields to a newer claim.
+        self._activation_seq += 1
+        my_activation = self._activation_seq
 
         if scene_slug == SCENE_OFF_INTERNAL:
             await self._disable_circadian_switches()
@@ -817,6 +840,18 @@ class AreaLightingController:
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
         await self._apply_scene_data(scene_slug, transition)
+        if yield_if_superseded and my_activation != self._activation_seq:
+            # A newer activation claimed the area while this one was applying.
+            # It has already written the targets and will write the state, so
+            # committing here would leave the two describing different scenes.
+            # Its light commands were issued after ours, so they win visually
+            # too; there is nothing left for this activation to do.
+            _LOGGER.debug(
+                "Area %s: activation of %s superseded, skipping state commit",
+                self.area.id,
+                scene_slug,
+            )
+            return
         self._schedule_post_settle_selfcheck(transition)
         self._clear_scene_drift_issue()
         self._state.transition_to_scene(scene_slug, source)
@@ -1284,6 +1319,7 @@ class AreaLightingController:
                 self._state.scene_slug,
                 self._state.source,
                 propagate_to_followers=False,
+                yield_if_superseded=True,
             )
 
     def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:

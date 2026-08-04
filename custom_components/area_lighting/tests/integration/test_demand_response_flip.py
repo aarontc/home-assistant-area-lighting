@@ -415,3 +415,57 @@ async def test_flip_off_clears_shed_set_on_dimmed_area(
     await hass.async_block_till_done()
 
     assert ctrl.dr_shed_ids == frozenset()
+
+
+@pytest.mark.integration
+async def test_parked_dr_redrive_does_not_clobber_newer_user_activation(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A parked demand-response re-drive must yield to a newer user activation.
+
+    _activate_scene writes _active_scene_targets and _dr_shed_ids BEFORE
+    awaiting _apply_scene_data, but writes _state.transition_to_scene AFTER.
+    There is deliberately no lock, so the flip's fan-out re-drive can still be
+    applying when a Pico press lands. Resuming late, it wrote its own scene
+    into the state while the targets described the user's, leaving the two
+    disagreeing; realistically the area then latches MANUAL and is skipped at
+    20:00.
+
+    Only the re-drive yields. Activations legitimately cascade, and a cascade
+    is not a supersession.
+
+    Interleave deterministically: hold the re-drive inside _apply_scene_data,
+    let the user activation finish, then release it.
+    """
+    await _setup(hass, _config())
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await ctrl._activate_scene("bright", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    release = asyncio.Event()
+    original = ctrl._apply_scene_data
+    gate_armed = True
+
+    async def _gated(scene_slug: str, transition):
+        nonlocal gate_armed
+        if gate_armed and scene_slug == "bright":
+            gate_armed = False
+            await release.wait()
+        return await original(scene_slug, transition)
+
+    ctrl._apply_scene_data = _gated
+
+    parked = asyncio.create_task(ctrl.reactivate_for_demand_response())
+    await asyncio.sleep(0)  # let the re-drive reach the gate
+
+    await ctrl._activate_scene("dim", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._state.scene_slug == "dim"
+
+    release.set()
+    await parked
+    await hass.async_block_till_done()
+
+    # The user's activation owns the area: state and targets must agree.
+    assert ctrl._state.scene_slug == "dim"
+    assert set(ctrl._active_scene_targets) == set(ctrl._effective_scene_targets("dim"))
