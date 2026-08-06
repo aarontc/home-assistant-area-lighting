@@ -223,8 +223,11 @@ Status: `Implemented`
 **Which lights are affected:** `raise` and `lower` only modify lights that are
 **currently on**, stepping each by the brightness step. The one exception is a
 fully-dark area (no lights on at all): there `raise` and `lower` behave
-identically, turning **every** light in the area on at the minimum dimming
-level (the brightness step) so the room comes up gently.
+identically, restoring the remembered scene and turning **that scene's** lights
+on at the minimum dimming level (the brightness step) so the room comes up
+gently. Lights the scene leaves out stay dark. If the restored scene lights
+nothing in this area, every light comes up instead, so dim up never leaves a
+dark room dark.
 
 Stepping always addresses individual bulbs, never a `light_clusters` zone
 entity. A zone reports itself as on while any one member is lit, and Home
@@ -236,7 +239,7 @@ stepped one by one, and each keeps its own brightness relative to the others.
 Behavior:
 
 1. If any lights are on, increase the brightness of just those lights by 12.5%; lights that are off stay off
-2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring every area light up to 12.5% (the minimum) and mark the area `dimmed`. The remembered scene survives the room going dark, so a room that was showing `evening` when it turned off comes back to `evening` rather than to the default on-scene. Turning off from `manual` records nothing to restore
+2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring that scene's lights up to 12.5% (the minimum) and mark the area `dimmed`. The remembered scene survives the room going dark, so a room that was showing `evening` when it turned off comes back to `evening` rather than to the default on-scene. Turning off from `manual` records nothing to restore
 3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
 5. From `manual`, increase brightness but do not reinterpret the area as a known scene
@@ -369,7 +372,7 @@ flowchart TD
     R --> S{Known scene?}
     S -->|Yes| T[Mark dimmed]
     S -->|No, manual| U[Remain manual]
-    Q -->|No| V["Restore scene, bring ALL area lights to minimum, mark dimmed"]
+    Q -->|No| V["Restore scene, bring that scene's lights to minimum, mark dimmed"]
 
     B -->|Off| X{Ambience active?}
     X -->|No| Y[Turn lights off]
@@ -609,6 +612,18 @@ component classifies each divergence into one of three buckets:
 A one-shot post-settle self-check is scheduled at scene activation to catch
 a glitch that lands *during* a fade (which the event path ignores as still
 settling).
+
+Self-healing stands down entirely in two situations, because in both the
+lights are meant to differ from the scene:
+
+- **While an alert pattern is running.** The alert owns the area's lights and
+  restores them itself when it finishes. This includes a self-check armed by a
+  scene that activated part-way through the pattern.
+- **While the area is `dimmed`.** A dimmed area sits below its scene targets by
+  definition, so healing it would simply undo the dim.
+
+A stood-down heal does not count against the 3-heals-in-5-minutes budget
+below.
 
 If a bulb is healed more than 3 times within 5 minutes, the component gives
 up on it: it stops healing, latches `manual`, and raises a Home Assistant

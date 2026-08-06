@@ -11,7 +11,7 @@ from custom_components.area_lighting.const import BRIGHTNESS_STEP_DEFAULT
 
 # Absolute brightness (0-255) a light is set to when a dark area is brought up
 # to its minimum dimming level (brightness_step_pct). Mirrors the controller's
-# _set_all_lights_to_pct conversion.
+# _set_lights_to_pct conversion.
 MIN_BRIGHTNESS = max(1, min(255, round(255 * BRIGHTNESS_STEP_DEFAULT / 100)))
 
 
@@ -299,11 +299,14 @@ def study_config() -> dict:
 
 
 @pytest.mark.integration
-async def test_raise_from_dark_brings_non_scene_lights_to_min(
+async def test_raise_from_dark_lights_only_the_restored_scene_s_bulbs(
     hass: HomeAssistant, helper_entities, study_config, service_calls
 ) -> None:
-    """A dark area lights up uniformly: lights outside the restored scene
-    are still brought to the minimum dimming level."""
+    """A dark area comes up on the restored scene's lights only.
+
+    The accent takes part in `evening` alone, so restoring `daylight` must
+    leave it dark rather than lighting the whole room indiscriminately.
+    """
     await _setup(hass, study_config)
     ctrl = hass.data["area_lighting"]["controllers"]["study"]
     hass.states.async_set("light.study_main", "off", {})
@@ -314,7 +317,68 @@ async def test_raise_from_dark_brings_non_scene_lights_to_min(
     service_calls.clear()
     await ctrl.lighting_raise()
 
-    # Both the scene member and the excluded accent reach min brightness.
+    assert _ids_set_to_min(service_calls) == {"light.study_main"}
+    assert "light.study_accent" not in _ids_set_to_min(service_calls)
+
+
+@pytest.mark.integration
+async def test_raise_from_dark_still_lights_up_when_the_scene_lights_nothing(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """A scene that turns everything off must not leave dim-up a no-op.
+
+    Scoping the bring-up to the restored scene would otherwise mean a room
+    whose remembered scene lights nothing stays dark when asked for light.
+    """
+    cfg = {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "cellar",
+                    "name": "Cellar",
+                    "event_handlers": False,
+                    "lights": [{"id": "light.cellar_a", "roles": ["dimming"]}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {
+                            "id": "blackout",
+                            "name": "Blackout",
+                            "entities": {"light.cellar_a": {"state": "off"}},
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+    await _setup(hass, cfg)
+    ctrl = hass.data["area_lighting"]["controllers"]["cellar"]
+    hass.states.async_set("light.cellar_a", "off", {})
+    ctrl._state.transition_to_scene("blackout", ActivationSource.USER)
+    service_calls.clear()
+    await ctrl.lighting_raise()
+
+    assert _ids_set_to_min(service_calls) == {"light.cellar_a"}
+    assert ctrl._state.dimmed
+
+
+@pytest.mark.integration
+async def test_raise_from_dark_lights_a_scene_member_that_others_exclude(
+    hass: HomeAssistant, helper_entities, study_config, service_calls
+) -> None:
+    """Restoring `evening` does bring its accent light up.
+
+    Guards the inverse of the test above: scoping to the scene must not
+    become "only ever the unrestricted lights".
+    """
+    await _setup(hass, study_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["study"]
+    hass.states.async_set("light.study_main", "off", {})
+    hass.states.async_set("light.study_accent", "off", {})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    ctrl._state.transition_to_off(ActivationSource.USER)  # remembers `evening`
+    service_calls.clear()
+    await ctrl.lighting_raise()
+
     assert _ids_set_to_min(service_calls) == {
         "light.study_main",
         "light.study_accent",

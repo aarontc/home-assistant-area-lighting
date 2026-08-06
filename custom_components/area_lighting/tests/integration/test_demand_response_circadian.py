@@ -257,7 +257,7 @@ async def test_dark_bring_up_sheds(hass: HomeAssistant, helper_entities, service
     _toggles(hass)._demand_response_active = True
 
     service_calls.clear()
-    await ctrl._set_all_lights_to_pct(12)
+    await ctrl._set_lights_to_pct(12, [light.id for light in ctrl.area.lights])
     await hass.async_block_till_done()
 
     on = {
@@ -313,38 +313,45 @@ async def test_circadian_never_drives_cluster_entity_under_dr(
     assert "light.study_all" not in off
 
 
-def _solo_scene_config() -> dict:
-    """The base 6-light config plus a 'solo' scene lighting only light.study_6.
+def _quad_scene_config() -> dict:
+    """The base 6-light config plus a 'quad' scene lighting study_3..study_6.
 
-    study_6 sits in the config-order shed tail of the all-lights bring-up,
-    so restoring the remembered scene lights a bulb the bring-up must drop.
+    The scene deliberately skips the two first-declared bulbs and lights four
+    of the remaining ones, so the bring-up has a scene-scoped on-set big
+    enough for demand response to shed a tail out of it.
     """
     cfg = _config()
     cfg["area_lighting"]["areas"][0]["scenes"].insert(
         1,
         {
-            "id": "solo",
-            "name": "Solo",
-            "entities": {"light.study_6": {"state": "on", "brightness": 200}},
+            "id": "quad",
+            "name": "Quad",
+            "entities": {
+                f"light.study_{i}": {"state": "on", "brightness": 200} for i in range(3, 7)
+            },
         },
     )
     return cfg
 
 
 @pytest.mark.integration
-async def test_dark_bring_up_converges_after_scene_restore(
+async def test_dark_bring_up_sheds_within_the_restored_scene(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
-    """Raise from dark restores the remembered scene, then converges to the
-    all-lights shed: a bulb the scene lit but the bring-up sheds ends OFF,
-    and tracking describes the bring-up (shed tail off-targets)."""
-    await _setup(hass, _solo_scene_config())
+    """Raise from dark restores the remembered scene and sheds inside it.
+
+    The bring-up is scoped to the scene's own bulbs, so bulbs the scene
+    leaves out are never lit; of the four it does light, demand response
+    keeps the two first-declared and drops the tail, and tracking describes
+    what was actually commanded (shed tail carries off-targets).
+    """
+    await _setup(hass, _quad_scene_config())
     ctrl = hass.data["area_lighting"]["controllers"]["study"]
     _toggles(hass)._demand_response_active = True
-    ctrl._state.transition_to_scene("solo", ActivationSource.USER)
+    ctrl._state.transition_to_scene("quad", ActivationSource.USER)
 
     # Chronological recorder: the grouped service_calls fixture cannot answer
-    # which command landed last on study_6 (scene turn_on vs bring-up turn_off).
+    # which command landed last on a bulb (scene turn_on vs bring-up turn_off).
     chrono: list[tuple[str, str, int | None]] = []
 
     async def _record(call) -> None:
@@ -358,11 +365,19 @@ async def test_dark_bring_up_converges_after_scene_restore(
 
     step_brightness = round(255 * BRIGHTNESS_STEP_DEFAULT / 100)
     final = {eid: (svc, brightness) for svc, eid, brightness in chrono}
-    assert final["light.study_1"] == ("turn_on", step_brightness)
-    assert final["light.study_2"] == ("turn_on", step_brightness)
-    for i in (3, 4, 5, 6):
+    # Kept half of the scene's on-set, at the minimum dimming level.
+    assert final["light.study_3"] == ("turn_on", step_brightness)
+    assert final["light.study_4"] == ("turn_on", step_brightness)
+    # Shed tail of the scene's on-set.
+    for i in (5, 6):
         assert final[f"light.study_{i}"][0] == "turn_off"
-    assert ctrl.dr_shed_ids == frozenset({f"light.study_{i}" for i in (3, 4, 5, 6)})
+    # Nothing outside the restored scene is ever lit: study_1 and study_2 are
+    # not in `quad`, so the bring-up leaves them alone entirely.
+    assert {eid for svc, eid, _ in chrono if svc == "turn_on"} == {
+        "light.study_3",
+        "light.study_4",
+    }
+    assert ctrl.dr_shed_ids == frozenset({"light.study_5", "light.study_6"})
     # Every shed id must carry an off-target so a partial tracking update
     # cannot pass.
     for shed_id in ctrl.dr_shed_ids:
