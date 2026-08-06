@@ -61,7 +61,12 @@ def test_transition_scene_to_circadian():
 # ── Transition: ANY → OFF ────────────────────────────────────────────────
 
 
-def test_transition_to_off_resets_everything():
+def test_transition_to_off_resets_everything_but_remembers_the_scene():
+    """Going off clears the modifiers but keeps the scene as a restore target.
+
+    Raising a dark area restores what the room was last showing, so the slug
+    has to survive going off.
+    """
     s = AreaState()
     s.transition_to_scene("christmas", ActivationSource.USER)
     s.mark_dimmed()
@@ -69,8 +74,26 @@ def test_transition_to_off_resets_everything():
     assert s.state == LightingState.OFF
     assert s.scene_slug == "off"
     assert s.dimmed is False
-    assert s.previous_scene is None
+    assert s.previous_scene == "christmas"
     assert s.source == ActivationSource.MOTION
+
+
+def test_transition_to_off_from_manual_records_no_restore_target():
+    """`manual` is not a scene, so there is nothing to restore to."""
+    s = AreaState()
+    s.transition_to_scene("evening", ActivationSource.USER)
+    s.transition_to_manual()
+    s.transition_to_off(ActivationSource.USER)
+    assert s.previous_scene is None
+
+
+def test_transition_to_off_twice_keeps_the_first_remembered_scene():
+    """A second off must not overwrite the target with the `off` slug."""
+    s = AreaState()
+    s.transition_to_scene("evening", ActivationSource.USER)
+    s.transition_to_off(ActivationSource.USER)
+    s.transition_to_off(ActivationSource.MOTION)
+    assert s.previous_scene == "evening"
 
 
 # ── Manual mode ──────────────────────────────────────────────────────────

@@ -1471,20 +1471,43 @@ class AreaLightingController:
         """Return the per-area brightness step percentage."""
         return self.area.brightness_step_pct or BRIGHTNESS_STEP_DEFAULT
 
-    def _on_light_entity_ids(self) -> list[str]:
-        """Return IDs of lights in this area that are currently 'on'.
+    def _individual_light_ids(self) -> list[str]:
+        """Every physical bulb in the area, in declaration order.
 
-        Under demand response, cluster entities are excluded: stepping a zone
-        aggregate would drive shed members back on through the zone, so only
-        the individual lights are stepped.
+        Cluster members are appended so an area that declares a zone without
+        also listing its members as individual `lights` still resolves to real
+        bulbs. Anything carrying members is treated as a cluster and never
+        included itself, whichever list it was declared under: a declared zone
+        nested inside another zone's `members` is dropped here and contributes
+        its own members through its own entry instead.
         """
-        lights = self.area.all_lights
-        if self._demand_response_active():
-            lights = [light for light in lights if not light.is_cluster]
+        clusters = {light.id for light in self.area.all_lights if light.is_cluster}
+        candidates = [light.id for light in self.area.lights]
+        for light in self.area.all_lights:
+            candidates.extend(light.members)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for entity_id in candidates:
+            if entity_id in clusters or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            ordered.append(entity_id)
+        return ordered
+
+    def _on_light_entity_ids(self) -> list[str]:
+        """Return IDs of the area's physical bulbs that are currently 'on'.
+
+        Cluster entities are deliberately excluded. A zone aggregate reports
+        `on` while any single member is lit, and Home Assistant resolves
+        brightness_step_pct against the zone's averaged brightness before
+        forwarding one absolute brightness to every member. Stepping a zone
+        would therefore relight its dark members and flatten the lit ones to a
+        common level, so raise/lower always addresses the bulbs directly.
+        """
         return [
-            light.id
-            for light in lights
-            if (st := self.hass.states.get(light.id)) and st.state == "on"
+            entity_id
+            for entity_id in self._individual_light_ids()
+            if (st := self.hass.states.get(entity_id)) and st.state == "on"
         ]
 
     async def _step_on_lights_pct(self, delta_pct: int) -> None:

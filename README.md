@@ -226,10 +226,17 @@ fully-dark area (no lights on at all): there `raise` and `lower` behave
 identically, turning **every** light in the area on at the minimum dimming
 level (the brightness step) so the room comes up gently.
 
+Stepping always addresses individual bulbs, never a `light_clusters` zone
+entity. A zone reports itself as on while any one member is lit, and Home
+Assistant turns a brightness step aimed at a zone into a single absolute
+brightness applied to every member — which would switch the dark members on
+and flatten the lit ones to one level. Members of a zone are therefore
+stepped one by one, and each keeps its own brightness relative to the others.
+
 Behavior:
 
 1. If any lights are on, increase the brightness of just those lights by 12.5%; lights that are off stay off
-2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring every area light up to 12.5% (the minimum) and mark the area `dimmed`
+2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring every area light up to 12.5% (the minimum) and mark the area `dimmed`. The remembered scene survives the room going dark, so a room that was showing `evening` when it turned off comes back to `evening` rather than to the default on-scene. Turning off from `manual` records nothing to restore
 3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
 5. From `manual`, increase brightness but do not reinterpret the area as a known scene

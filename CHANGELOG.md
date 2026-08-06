@@ -102,6 +102,14 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **A dark area now dims back up into the scene it was last showing** —
+  turning an area off used to forget its scene, so raising or lowering a dark
+  room restored the area's default on-scene instead of the one that had been
+  on. The remembered scene now survives going off (and a restart, since it is
+  already persisted), so a room showing `evening` when it went dark comes back
+  to `evening`. Turning off from `manual` records nothing to restore, and an
+  area that is already off keeps the scene it remembered first.
+
 - **BREAKING: external `input_boolean.motion_light_enabled` helper removed** —
   the global motion kill switch is now the integration-owned
   `switch.area_lighting_motion_lights_enabled`. Automations or dashboards
@@ -120,6 +128,23 @@ readable companion that highlights user-facing changes.
   up uniformly rather than only restoring the previous scene's member lights.
 
 ### Fixed
+
+- **Dimming a partly-lit area switched its dark bulbs on** — in an area that
+  declares `light_clusters`, pressing dim up or dim down relit every light
+  that was off. The zone entity reports itself as on while any single member
+  is lit, so it was picked up as a step target, and Home Assistant resolves
+  `brightness_step_pct` against the zone's averaged brightness and then
+  forwards one absolute brightness to every member. Raise and lower now step
+  individual bulbs only, so lights that are off stay off. This also ends two
+  side effects of the same cause: a member that was already on no longer gets
+  stepped twice (once directly, once through the zone) and no longer has its
+  brightness flattened to the zone average, and a step can no longer relight a
+  bulb the scene had turned off, which manual detection read as a genuine
+  override and used to latch the whole area to `manual`. Areas that declare a
+  zone without listing its members under `lights:` now step those members, and
+  a declared zone nested inside another zone's `members:` is never commanded.
+  What makes an entry a zone is having `members:`, not which list it appears
+  under, so a zone misfiled under `lights:` is also left alone.
 
 - **Demand response: undeclared and duplicate bulbs were not shed** — the shed
   universe was built by iterating an area's config light list, so an `on`
