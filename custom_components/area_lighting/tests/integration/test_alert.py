@@ -39,6 +39,62 @@ async def test_alert_active_in_diagnostic_snapshot(
 
 
 @pytest.mark.integration
+async def test_selfcheck_armed_by_the_scene_does_not_fight_an_alert(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Walking into a room and firing an alert must not be healed away.
+
+    Motion activates a scene, which arms a post-settle self-check a few
+    seconds out. An automation then raises an alert inside that window. The
+    check has to stand down instead of re-asserting scene brightness over
+    the alert pattern.
+
+    The scene carries a concrete brightness on purpose: a role-skeleton scene
+    resolves to a bare `{"state": "on"}` target with nothing to compare, so it
+    could never detect drift and would pass this test for the wrong reason.
+    """
+    cfg = {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "den",
+                    "name": "Den",
+                    "event_handlers": True,
+                    "lights": [{"id": "light.den_a", "roles": ["dimming"]}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {
+                            "id": "daylight",
+                            "name": "Daylight",
+                            "entities": {"light.den_a": {"state": "on", "brightness": 200}},
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+    hass.states.async_set("light.den_a", "off", {})
+    await _setup(hass, cfg)
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    await ctrl._activate_scene("daylight", ActivationSource.MOTION)
+    await hass.async_block_till_done()
+    assert ctrl._heal_selfcheck_handle is not None, "the scene should arm a check"
+
+    # The alert takes the light somewhere the scene never asked for.
+    ctrl._alert_active = True
+    hass.states.async_set("light.den_a", "on", {"brightness": 255})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    ctrl._run_post_settle_selfcheck()
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in service_calls if c.domain == "light" and c.service == "turn_on"]
+    assert not turn_ons, f"self-check fought the alert: {turn_ons}"
+    ctrl._alert_active = False
+
+
+@pytest.mark.integration
 async def test_manual_detection_suppressed_when_alert_active(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:

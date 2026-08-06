@@ -1471,20 +1471,43 @@ class AreaLightingController:
         """Return the per-area brightness step percentage."""
         return self.area.brightness_step_pct or BRIGHTNESS_STEP_DEFAULT
 
-    def _on_light_entity_ids(self) -> list[str]:
-        """Return IDs of lights in this area that are currently 'on'.
+    def _individual_light_ids(self) -> list[str]:
+        """Every physical bulb in the area, in declaration order.
 
-        Under demand response, cluster entities are excluded: stepping a zone
-        aggregate would drive shed members back on through the zone, so only
-        the individual lights are stepped.
+        Cluster members are appended so an area that declares a zone without
+        also listing its members as individual `lights` still resolves to real
+        bulbs. Anything carrying members is treated as a cluster and never
+        included itself, whichever list it was declared under: a declared zone
+        nested inside another zone's `members` is dropped here and contributes
+        its own members through its own entry instead.
         """
-        lights = self.area.all_lights
-        if self._demand_response_active():
-            lights = [light for light in lights if not light.is_cluster]
+        clusters = {light.id for light in self.area.all_lights if light.is_cluster}
+        candidates = [light.id for light in self.area.lights]
+        for light in self.area.all_lights:
+            candidates.extend(light.members)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for entity_id in candidates:
+            if entity_id in clusters or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            ordered.append(entity_id)
+        return ordered
+
+    def _on_light_entity_ids(self) -> list[str]:
+        """Return IDs of the area's physical bulbs that are currently 'on'.
+
+        Cluster entities are deliberately excluded. A zone aggregate reports
+        `on` while any single member is lit, and Home Assistant resolves
+        brightness_step_pct against the zone's averaged brightness before
+        forwarding one absolute brightness to every member. Stepping a zone
+        would therefore relight its dark members and flatten the lit ones to a
+        common level, so raise/lower always addresses the bulbs directly.
+        """
         return [
-            light.id
-            for light in lights
-            if (st := self.hass.states.get(light.id)) and st.state == "on"
+            entity_id
+            for entity_id in self._individual_light_ids()
+            if (st := self.hass.states.get(entity_id)) and st.state == "on"
         ]
 
     async def _step_on_lights_pct(self, delta_pct: int) -> None:
@@ -1502,28 +1525,44 @@ class AreaLightingController:
                 ]
             )
 
-    async def _set_all_lights_to_pct(self, pct: int) -> None:
-        """Turn on EVERY light in the area at an absolute brightness percentage.
+    def _scene_bulb_ids(self, scene_slug: str) -> list[str]:
+        """The physical bulbs a scene turns on, in a deterministic order.
+
+        Membership is resolved the same way the apply path resolves it, so a
+        stored snapshot or an inline `entities:` block decides it where one
+        exists and `scenes:`/`group_exclude` decide it otherwise. Zones are
+        expanded to their members and dropped, so the result only ever names
+        real bulbs. A snapshot may name a bulb the area never declared; those
+        are kept, sorted after the declared ones.
+        """
+        targets = self._resolve_raw_scene_targets(scene_slug)
+        on_ids = self._expand_cluster_ids(
+            eid for eid, state in targets.items() if state.get("state", "off") == "on"
+        )
+        on_ids -= {light.id for light in self.area.all_lights if light.is_cluster}
+        declared = [eid for eid in self._individual_light_ids() if eid in on_ids]
+        return declared + sorted(on_ids.difference(declared))
+
+    async def _set_lights_to_pct(self, pct: int, entity_ids: list[str]) -> None:
+        """Turn on the given lights at an absolute brightness percentage.
 
         Unlike a step adjustment (which only touches lights already on), this
-        targets all area lights, including ones currently off and ones outside
-        the active scene, so a dark area lights up uniformly at its minimum
-        dimming level.
+        also lights bulbs that are currently off, so a dark area comes up at
+        its minimum dimming level. Callers pass the restored scene's bulbs, so
+        lights that scene leaves out stay dark.
 
-        Under demand response, only the kept individual lights come up (cluster
-        entities are skipped so shed members are not lit through a zone). The
-        shed tail is explicitly turned OFF so a bulb a preceding scene
-        activation lit does not survive the all-lights shed, and tracking is
-        updated to match: _dr_shed_ids becomes the all-lights shed set and the
-        shed ids carry off-targets so manual detection and self-heal treat
-        them as intended-off.
+        Under demand response, only the kept lights come up. The shed tail is
+        explicitly turned OFF so a bulb a preceding scene activation lit does
+        not survive the shed, and tracking is updated to match: _dr_shed_ids
+        becomes this shed set and the shed ids carry off-targets so manual
+        detection and self-heal treat them as intended-off.
         """
         brightness = max(1, min(255, round(255 * pct / 100)))
         if self._demand_response_active():
             ordered = [light.id for light in self.area.lights]
-            shed = demand_response_shed_ids(ordered, ordered)
+            shed = demand_response_shed_ids(ordered, entity_ids)
             shed_set = set(shed)
-            kept = [eid for eid in ordered if eid not in shed_set]
+            kept = [eid for eid in entity_ids if eid not in shed_set]
             self._dr_shed_ids = frozenset(shed_set)
             now = time.monotonic()
             for eid in shed:
@@ -1540,7 +1579,6 @@ class AreaLightingController:
             if tasks:
                 await asyncio.gather(*tasks)
             return
-        entity_ids = [light.id for light in self.area.all_lights]
         if entity_ids:
             await asyncio.gather(
                 *[
@@ -1834,9 +1872,9 @@ class AreaLightingController:
         - If any lights in the area are currently on, only those are stepped
           by the per-area brightness step (sign = +1 raise, -1 lower); lights
           that are off stay off.
-        - If no lights are on, every light in the area is turned on at the
-          minimum (step) brightness, restoring the remembered scene for
-          color/state context. Raise and lower behave identically here.
+        - If no lights are on, the remembered scene's lights are turned on at
+          the minimum (step) brightness, restoring that scene for color/state
+          context. Raise and lower behave identically here.
         """
         step = self._brightness_step_pct()
 
@@ -1847,18 +1885,26 @@ class AreaLightingController:
         if self._state.is_circadian:
             await self._disable_circadian_switches()
 
-        await self._step_on_lights_pct(sign * step)
-
+        # Mark dimmed BEFORE stepping. The step's own state echoes can be
+        # classified while this coroutine is still awaiting the service calls,
+        # and manual detection reads an unflagged divergence from the scene
+        # target as drift and heals it straight back, so the dim would not
+        # stick. Setting the flag first means the echoes arrive to a guard
+        # that is already in place.
         if not self._state.is_manual:
             self._state.mark_dimmed()
             self._notify_state_change()
+
+        await self._step_on_lights_pct(sign * step)
 
     async def _bring_dark_area_to_min(self, step: int) -> None:
         """Light a fully-dark area to its minimum dimming level (D2).
 
         Restores scene context for color and next-`on`-press behavior, then
-        brings EVERY area light up to the step brightness and marks the area
-        dimmed. Used by both raise and lower when no lights are on.
+        brings that scene's bulbs up to the step brightness and marks the area
+        dimmed. Used by both raise and lower when no lights are on. Lights the
+        restored scene leaves out stay dark, which is why the remembered scene
+        is worth carrying across the room going off.
         """
         target_scene = self._state.previous_scene
         if target_scene and target_scene in self.area.scene_slugs:
@@ -1877,8 +1923,18 @@ class AreaLightingController:
         # would re-push brightness over the dim just asked for.
         if self._state.is_circadian:
             await self._disable_circadian_switches()
-        await self._set_all_lights_to_pct(step)
+        # Read the slug AFTER restoring: lighting_on picks the scene itself.
+        # An empty set means the restored scene lights nothing here (an `off`
+        # scene, or one whose bulbs are all excluded), and dim-up must still
+        # light the room rather than leave it dark.
+        entity_ids = self._scene_bulb_ids(self._state.scene_slug)
+        if not entity_ids:
+            entity_ids = self._individual_light_ids()
+        # Mark dimmed BEFORE commanding: the bulbs' state echoes must find the
+        # dimmed flag already set, or manual detection and self-heal read the
+        # dim as scene drift and undo it.
         self._state.mark_dimmed()
+        await self._set_lights_to_pct(step, entity_ids)
         self._notify_state_change()
 
     # ── Event handlers ────────────────────────────────────────────────
@@ -1985,11 +2041,39 @@ class AreaLightingController:
             delay, self._run_post_settle_selfcheck
         )
 
+    def _heal_suppressed(self) -> str | None:
+        """Why scene self-heal must stand down right now, or None.
+
+        Mirrors two of the manual-detection suppressions in event_handlers,
+        which the heal paths must honour for the same reasons:
+
+        - An alert owns the area's lights for the length of its pattern, and
+          restores them itself afterwards. Healing mid-pattern re-asserts scene
+          brightness over the flashes and swallows the alert.
+        - A dimmed area sits below its scene targets by definition, so every
+          bulb reads as diverged. Healing that is precisely the dim not
+          sticking.
+
+        Returned as a reason string so the caller can log which one applied.
+        """
+        if self._alert_active:
+            return "alert active"
+        if self._state.dimmed:
+            return "area dimmed"
+        return None
+
     def _run_post_settle_selfcheck(self) -> None:
         """Fire the scheduled check: re-assert any on-target bulb that
         diverged from its scene target during the fade."""
         self._heal_selfcheck_handle = None
         if self._state.is_off or self._state.is_manual:
+            return
+        if (reason := self._heal_suppressed()) is not None:
+            _LOGGER.debug(
+                "Area %s: post-settle self-check skipped (%s)",
+                self.area.id,
+                reason,
+            )
             return
         for entity_id, target in list(self._active_scene_targets.items()):
             if target.get("state") != "on":
@@ -2008,9 +2092,22 @@ class AreaLightingController:
         Subject to the loop cap: after SCENE_HEAL_MAX_ATTEMPTS heals within
         SCENE_HEAL_ATTEMPT_WINDOW_SECONDS, give up — latch manual and raise a
         Repairs issue instead of re-asserting again.
+
+        Re-checks the suppressions here rather than trusting the caller: heals
+        are dispatched as tasks, so an alert or a dim can begin between the
+        decision to heal and this coroutine actually running.
         """
         target = self._active_scene_targets.get(entity_id)
         if target is None or target.get("state") != "on":
+            return
+
+        if (suppressed := self._heal_suppressed()) is not None:
+            _LOGGER.debug(
+                "Area %s: scene-heal of %s skipped (%s)",
+                self.area.id,
+                entity_id,
+                suppressed,
+            )
             return
 
         now = time.monotonic()

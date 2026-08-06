@@ -102,6 +102,19 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **A dark area now dims back up into the scene it was last showing, on that
+  scene's lights only** — turning an area off used to forget its scene, so
+  raising or lowering a dark room restored the area's default on-scene instead
+  of the one that had been on. The remembered scene now survives going off
+  (and a restart, since it is already persisted), so a room showing `evening`
+  when it went dark comes back to `evening`. Turning off from `manual` records
+  nothing to restore, and an area that is already off keeps the scene it
+  remembered first. Now that the scene is known, the bring-up is scoped to it:
+  only the bulbs that scene lights come up at the minimum dimming level, and
+  lights it leaves out stay dark instead of the whole room coming on. A scene
+  that lights nothing here still brings the area up, so dim up never leaves a
+  dark room dark.
+
 - **BREAKING: external `input_boolean.motion_light_enabled` helper removed** —
   the global motion kill switch is now the integration-owned
   `switch.area_lighting_motion_lights_enabled`. Automations or dashboards
@@ -113,13 +126,53 @@ readable companion that highlights user-facing changes.
 - **`raise` / `lower` brightness behavior clarified** — dim up and dim down
   (Lutron `raise` / `lower`) now only adjust lights that are currently on,
   stepping each by `brightness_step_pct`; lights that are off stay off. When
-  **no** lights in the area are on, both buttons instead bring **every** area
-  light up to the minimum dimming level (the brightness step), restoring the
-  remembered scene for color and next-`on`-press context. This makes `lower`
-  from a dark area light the room (previously a no-op) and brings a dark area
-  up uniformly rather than only restoring the previous scene's member lights.
+  **no** lights in the area are on, both buttons instead restore the
+  remembered scene for color and next-`on`-press context and bring that
+  scene's lights up to the minimum dimming level (the brightness step). This
+  makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **Dims did not stick** — scene self-healing treated a dim as drift and drove
+  the lights back to full scene brightness a few seconds later, while the area
+  still reported itself dimmed. A dimmed area sits below its scene targets by
+  definition, but neither the post-settle self-check nor the re-assert it
+  dispatches checked for that, and the check is armed by the very scene
+  restore that a dim-up in a dark room performs. Both now stand down while the
+  area is dimmed. The dimmed flag is also set before the brightness commands
+  go out rather than after, so a bulb's state echo can no longer be classified
+  as drift in the gap. Areas whose scenes carry no explicit brightness were
+  never affected, which is why this looked intermittent.
+
+- **A lighting alert was swallowed by scene self-healing** — an alert
+  triggered within a few seconds of a scene activation (walking into a room on
+  motion, then an automation raising an alert) was reverted almost
+  immediately: the self-check armed by that scene activation fired mid-pattern
+  and re-asserted the scene's brightness and color over the alert. The alert
+  pauses the area's motion and occupancy timers but never touched the pending
+  self-check, and the check did not consult the alert flag the way manual
+  detection already did. Self-heal now stands down for the length of a
+  pattern, including a check armed by a scene activated mid-alert, and the
+  re-assert re-checks the flag when it runs rather than only when it is
+  scheduled. A suppressed heal no longer spends the per-bulb heal budget, so
+  it cannot latch the area to `manual` or raise a spurious Repairs issue.
+
+- **Dimming a partly-lit area switched its dark bulbs on** — in an area that
+  declares `light_clusters`, pressing dim up or dim down relit every light
+  that was off. The zone entity reports itself as on while any single member
+  is lit, so it was picked up as a step target, and Home Assistant resolves
+  `brightness_step_pct` against the zone's averaged brightness and then
+  forwards one absolute brightness to every member. Raise and lower now step
+  individual bulbs only, so lights that are off stay off. This also ends two
+  side effects of the same cause: a member that was already on no longer gets
+  stepped twice (once directly, once through the zone) and no longer has its
+  brightness flattened to the zone average, and a step can no longer relight a
+  bulb the scene had turned off, which manual detection read as a genuine
+  override and used to latch the whole area to `manual`. Areas that declare a
+  zone without listing its members under `lights:` now step those members, and
+  a declared zone nested inside another zone's `members:` is never commanded.
+  What makes an entry a zone is having `members:`, not which list it appears
+  under, so a zone misfiled under `lights:` is also left alone.
 
 - **Demand response: undeclared and duplicate bulbs were not shed** — the shed
   universe was built by iterating an area's config light list, so an `on`

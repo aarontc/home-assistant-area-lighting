@@ -71,7 +71,9 @@ class AreaState:
     scene_slug: str = "off"
     source: ActivationSource = ActivationSource.USER
     dimmed: bool = False
-    # Scene to restore to when dimmed=True is cleared via lighting_on
+    # Scene to restore to: when dimmed=True is cleared via lighting_on, and
+    # when raise/lower brings a dark area back up. Survives transition_to_off
+    # so an area that went dark returns to what it was showing.
     previous_scene: str | None = None
     # Monotonic timestamp of the most recent scene transition. Used by
     # manual-detection grace period (D5/D15). Intentionally excluded from
@@ -117,11 +119,20 @@ class AreaState:
     # ── Transitions ────────────────────────────────────────────────────
 
     def transition_to_off(self, source: ActivationSource = ActivationSource.USER) -> None:
+        """Turn the area off, remembering what it was showing.
+
+        Unlike the on-transitions, this keeps `previous_scene`: raising or
+        lowering a dark area restores the scene the room was last in, so the
+        slug has to outlive going off. `off` and `manual` are not scenes and
+        leave any earlier target untouched, which also makes a second off
+        (or an off from an already-off area) a no-op for the target.
+        """
+        if self.scene_slug not in ("off", "manual"):
+            self.previous_scene = self.scene_slug
         self.state = LightingState.OFF
         self.scene_slug = "off"
         self.source = source
         self.dimmed = False
-        self.previous_scene = None
         self.last_scene_change_monotonic = time.monotonic()
 
     def transition_to_scene(

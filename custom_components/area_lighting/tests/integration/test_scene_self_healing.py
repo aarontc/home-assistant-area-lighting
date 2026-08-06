@@ -238,6 +238,199 @@ async def test_post_settle_selfcheck_heals_during_fade_glitch(
     assert _light_turn_on_calls(service_calls, eid), "self-check should heal the drift"
 
 
+# ── Self-heal stands down for alerts and dimming ────────────────────────
+#
+# The event-driven manual-detection path already suppresses itself while an
+# alert owns the lights and while the area is dimmed. The heal paths have to
+# honour the same two conditions, or they undo exactly the thing the user
+# just asked for.
+
+
+@pytest.mark.integration
+async def test_post_settle_selfcheck_stands_down_during_an_alert(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """An alert must not be reverted by a self-check the scene armed.
+
+    Motion activates a scene, which schedules a check a few seconds out; an
+    automation then fires an alert. The pending check must leave the alert's
+    lights alone rather than re-asserting scene brightness over the pattern.
+    """
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    ctrl._active_scene_targets = {eid: _on_target(commanded_offset=0.0)}
+    # Mid-alert the bulb is wherever the pattern put it, i.e. off-target.
+    hass.states.async_set(eid, "on", {"brightness": 228, "color_temp_kelvin": 3086})
+    await hass.async_block_till_done()
+    ctrl._alert_active = True
+
+    service_calls.clear()
+    ctrl._run_post_settle_selfcheck()
+    await hass.async_block_till_done()
+
+    assert not _light_turn_on_calls(service_calls, eid)
+
+
+@pytest.mark.integration
+async def test_reassert_stands_down_during_an_alert(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A heal task dispatched before the alert began must also stand down."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
+    ctrl._active_scene_targets = {eid: _on_target(commanded_offset=200.0)}
+    ctrl._alert_active = True
+
+    service_calls.clear()
+    await ctrl.handle_scene_drift_reassert(eid, "glitch_window")
+    await hass.async_block_till_done()
+
+    assert not _light_turn_on_calls(service_calls, eid)
+
+
+@pytest.mark.integration
+async def test_post_settle_selfcheck_stands_down_while_dimmed(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Dimming soon after a scene activation must survive the armed check.
+
+    A dimmed area sits below its scene targets by definition, so healing it
+    back to them is exactly the "dim doesn't stick" symptom.
+    """
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    # Scene wants 200; the dim just took the bulb well below it, far outside
+    # the brightness tolerance that state_matches_scene_target allows.
+    ctrl._active_scene_targets = {
+        eid: {
+            "state": "on",
+            "brightness": 200,
+            "color_temp_kelvin": 2700,
+            "commanded_at": time.monotonic(),
+            "transition": 0.0,
+        }
+    }
+    hass.states.async_set(eid, "on", {"brightness": 100, "color_temp_kelvin": 2700})
+    await hass.async_block_till_done()
+    ctrl._state.mark_dimmed()
+
+    service_calls.clear()
+    ctrl._run_post_settle_selfcheck()
+    await hass.async_block_till_done()
+
+    assert not _light_turn_on_calls(service_calls, eid)
+
+
+@pytest.mark.integration
+async def test_reassert_stands_down_while_dimmed(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A heal task racing the dim flag must not re-drive scene brightness."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    eid = "light.network_room_overhead_1"
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    ctrl._active_scene_targets = {eid: _on_target(commanded_offset=200.0)}
+    ctrl._state.mark_dimmed()
+
+    service_calls.clear()
+    await ctrl.handle_scene_drift_reassert(eid, "glitch_window")
+    await hass.async_block_till_done()
+
+    assert not _light_turn_on_calls(service_calls, eid)
+    # A suppressed heal must not spend the per-bulb attempt budget either,
+    # or three dims would exhaust it and latch the area manual.
+    assert not ctrl._heal_attempts.get(eid)
+
+
+@pytest.mark.integration
+async def test_dim_up_from_dark_survives_the_armed_selfcheck(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    """End to end: dim up in a dark room, and it is still dim afterwards.
+
+    Bringing a dark area up restores its scene, which arms a self-check a few
+    seconds out; that check used to fire and drive the bulbs back to full
+    scene brightness while the area still reported itself dimmed.
+    """
+    cfg = {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "den",
+                    "name": "Den",
+                    "event_handlers": False,
+                    "lights": [{"id": "light.den_a", "roles": ["dimming"]}],
+                    "scenes": [
+                        {"id": "circadian", "name": "Circadian"},
+                        {
+                            "id": "evening",
+                            "name": "Evening",
+                            "entities": {"light.den_a": {"state": "on", "brightness": 255}},
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+    await _setup(hass, cfg)
+    ctrl = hass.data["area_lighting"]["controllers"]["den"]
+    hass.states.async_set("light.den_a", "off", {})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    ctrl._state.transition_to_off(ActivationSource.USER)  # remembers `evening`
+
+    await ctrl.lighting_raise()
+    await hass.async_block_till_done()
+    assert ctrl._state.dimmed
+    assert ctrl._heal_selfcheck_handle is not None, "the restore should arm a check"
+
+    # The bulb now reports the dim level, far below the scene's 255.
+    hass.states.async_set("light.den_a", "on", {"brightness": 31})
+    await hass.async_block_till_done()
+
+    service_calls.clear()
+    ctrl._run_post_settle_selfcheck()
+    await hass.async_block_till_done()
+
+    assert not _light_turn_on_calls(service_calls, "light.den_a")
+    assert ctrl._state.dimmed
+
+
+@pytest.mark.integration
+async def test_dim_marks_the_area_dimmed_before_commanding_the_step(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    """The dimmed flag is set before the step's service calls go out.
+
+    A bulb's state echo can be classified while the step is still awaiting,
+    so the guard has to be in place first or the echo reads as scene drift.
+    """
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    dimmed_when_commanded: list[bool] = []
+    original = ctrl._call_service
+
+    async def _spy(service: str, **kwargs):
+        if service == "light.turn_on":
+            dimmed_when_commanded.append(ctrl._state.dimmed)
+        return await original(service, **kwargs)
+
+    ctrl._call_service = _spy
+    await ctrl.lighting_raise()
+
+    assert dimmed_when_commanded, "expected the step to issue a light.turn_on"
+    assert all(dimmed_when_commanded)
+
+
 @pytest.mark.integration
 async def test_activating_scene_schedules_selfcheck(
     hass: HomeAssistant, helper_entities, network_room_config
