@@ -1,7 +1,15 @@
 stages:
   - check
   - tag
+  - release
   - nightly
+
+variables:
+  # The GitHub push-mirror target. GitHub is only in this project's release
+  # chain because HACS installs from there; GitLab remains the source of
+  # truth. Kept here rather than as a CI/CD variable so the only thing that
+  # needs configuring in the UI is the token.
+  GITHUB_MIRROR_REPO: "aarontc/home-assistant-area-lighting"
 
 # Suppress pipeline creation entirely for events that would otherwise show
 # up as "skipped" pipelines — those break the status badge because it
@@ -74,7 +82,81 @@ tag:auto:
         --token=env:PROJECT_ACCESS_TOKEN \
         --branch=$CI_COMMIT_BRANCH
   rules:
+    # A scheduled pipeline is a branch pipeline, so `CI_COMMIT_BRANCH` is set
+    # to the default branch and the rule below would otherwise match. Tagging
+    # on a schedule is wrong twice over: there is nothing new to release, and
+    # `create-tag` errors with "no commits since <tag>" whenever HEAD is
+    # already the last release's version-bump commit. A failure here skips
+    # every later stage, which would take `release:audit` and `nightly` down
+    # with it on exactly the quiet nights they are meant to cover.
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Publish the GitHub release for the tag `tag:auto` just created. GitHub is
+# only in this chain because HACS installs from it; the release used to be
+# published by a GitHub Actions workflow triggered by the push mirror
+# carrying the tag over, but that trigger proved unreliable (it fired for
+# v1.1.1 and silently did not for v1.2.0). Publishing from here means the
+# same pipeline that creates a tag also releases it, and a failure shows up
+# in this pipeline instead of nowhere at all.
+#
+# The job waits for the mirror to carry the tag to GitHub and verifies the
+# SHA before publishing, so it can never create a release against the wrong
+# commit. It scans every tag, so it also back-fills any that were missed.
+# Requires the `GITHUB_RELEASE_TOKEN` CI/CD variable (masked + protected):
+# a fine-grained token scoped to the mirror repository with `contents:
+# write`.
+release:github:
+  stage: release
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DAGGER_NO_NAG: "1"
+    # Needs the full history and every tag to resolve each tag's commit
+    # range for the notes; the default shallow fetch is not enough.
+    GIT_DEPTH: "0"
+  before_script:
+    - *dagger-setup
+  script:
+    - |
+      dagger call publish-github-releases \
+        --source=. \
+        --repo="$GITHUB_MIRROR_REPO" \
+        --token=env:GITHUB_RELEASE_TOKEN \
+        --gitlab-project-url="$CI_PROJECT_URL"
+  rules:
+    # Scheduled pipelines are branch pipelines and would otherwise match the
+    # rule below. On a schedule the auditor runs instead: a publisher and an
+    # auditor in the same stage would race, one fixing the gaps the other is
+    # trying to report.
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Safety net for the case where `release:github` itself never ran (pipeline
+# cancelled, runner outage, someone tagged by hand). Reports and fails on any
+# tag without a release rather than quietly fixing it, so the gap is visible.
+release:audit:
+  stage: release
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DAGGER_NO_NAG: "1"
+    GIT_DEPTH: "0"
+  before_script:
+    - *dagger-setup
+  script:
+    - |
+      dagger call publish-github-releases \
+        --source=. \
+        --repo="$GITHUB_MIRROR_REPO" \
+        --token=env:GITHUB_RELEASE_TOKEN \
+        --check-only=true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
 
 nightly:
   stage: nightly

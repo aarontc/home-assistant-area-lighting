@@ -113,9 +113,9 @@ func (m *AreaLighting) CommitsSinceTag(
 // keeping those events out of the pipeline history so the project
 // status badge stays accurate.
 //
-// Publishing the GitHub release is handled separately by the GitHub
-// Actions workflow at `.github/workflows/release.yaml`, which scans for
-// tags missing a release every 5 minutes.
+// Publishing the GitHub release is handled by PublishGithubReleases in
+// the `release` stage of the same pipeline, which waits for the push
+// mirror to carry this tag to GitHub and then publishes it.
 func (m *AreaLighting) CreateTag(
 	ctx context.Context,
 	// +defaultPath="."
