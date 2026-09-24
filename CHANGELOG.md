@@ -102,6 +102,19 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **BREAKING: Area ids `global` and `area_lighting` are now reserved.**
+  They collide with global master switch unique ids and entity ids,
+  respectively. Rename affected areas before restarting.
+
+- **BREAKING: Area and scene ids must form valid entity ids.** Both become
+  part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),
+  which Home Assistant 2026.9 warns about when invalid and will reject from
+  2027.2. Use lowercase letters and digits separated by single underscores,
+  with no leading, trailing or doubled underscore. Unquoted `off`, `on`,
+  `yes` and `no` are YAML booleans, so area ids, scene ids and scene names
+  now reject them instead of silently becoming `False`. Quote them, as in
+  `id: "off"` and `name: "Off"`. The error names a valid id to use.
+
 - **BREAKING: Home Assistant 2026.3 or later is required.** `hacs.json` now
   declares 2026.3.0 as the minimum, and the component uses Python 3.14
   syntax, which older Home Assistant releases (Python 3.13) cannot load.
@@ -141,6 +154,11 @@ readable companion that highlights user-facing changes.
   makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **Occupied sensors could silently fail to load.** `manifest.json` did not
+  list `binary_sensor` as a dependency, so when no other integration loaded
+  it, every `binary_sensor.<area>_occupied` was skipped with only a log
+  warning. It is now a declared dependency.
 
 - **Occupied sensors could silently fail to load.** `manifest.json` did not
   list `binary_sensor` as a dependency, so when no other integration loaded

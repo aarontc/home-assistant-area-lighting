@@ -74,7 +74,7 @@ entry in that list.
 
 | Key                         | Type                  | Required | Default | Notes |
 |-----------------------------|-----------------------|----------|---------|-------|
-| `id`                        | string                | **yes**  | —       | Unique area slug. Used to form entity IDs (`scene.{id}_{slug}`, `switch.{id}_motion_light_enabled`, etc.) — keep it snake_case. Ids beginning with `__` are reserved for internal storage keys and are rejected. |
+| `id`                        | string                | **yes**  | —       | Unique area slug used to form entity ids, such as `scene.{id}_{slug}`. Use lowercase letters and digits separated by single underscores (no leading, trailing or doubled `_`), because Home Assistant rejects such entity ids. The `__` prefix is reserved for internal storage. `global` and `area_lighting` are reserved because they collide with global master switch unique ids and entity ids, respectively. Quote boolean-looking values, for example `id: "off"`. |
 | `name`                      | string                | **yes**  | —       | Human-readable label shown in the UI. |
 | `enabled`                   | boolean               | no       | `true`  | `false` parses the area but creates no controller, entities, or handlers. |
 | `event_handlers`            | boolean               | no       | `true`  | Wires motion/occupancy/remote/external-change listeners. Set to `false` only for areas you want to load quietly (test fixtures, transition states during migration) — disabling it turns the area into a no-op for most of what `area_lighting` does. |
@@ -257,14 +257,14 @@ scenes:
       light.bedroom_main:
         brightness: 255
         color_temp_kelvin: 4000
-  - id: off
-    name: Off
+  - id: "off"
+    name: "Off"
 ```
 
 | Key             | Type                      | Required | Default | Notes |
 |-----------------|---------------------------|----------|---------|-------|
-| `id`            | string (slug)             | **yes**  | —       | Scene slug — unique within the area. Builds the entity id. |
-| `name`          | string                    | **yes**  | —       | Display label. |
+| `id`            | string (slug)             | **yes**  | —       | Scene slug, unique within the area, that ends the scene entity id. Use lowercase letters and digits separated by single underscores (no leading, trailing or doubled `_`). Quote boolean-looking values, for example `id: "off"`. |
+| `name`          | string                    | **yes**  | —       | Display label. Quote boolean-looking names, for example `name: "Off"`. |
 | `icon`          | MDI icon                  | no       | —       | Validated by `cv.icon`. |
 | `group_exclude` | list of entity_id         | no       | `[]`    | Lights that should **not** be affected when this scene activates. |
 | `cycle`         | list of scene slugs       | no       | —       | Defines a favorite-button cycle sequence. Parsed but not yet wired to the on-button cycler (tracked in `TODO.md`). |
@@ -448,11 +448,11 @@ alert_patterns:
     restore: true
     steps:
       - target: all
-        state: on
+        state: "on"
         brightness: 255
         rgb_color: [255, 0, 0]
       - target: all
-        state: off
+        state: "off"
         delay: 0.5
 ```
 
@@ -532,8 +532,8 @@ area_lighting:
             light.bedroom_nightstand:
               brightness: 40
               rgb_color: [255, 80, 0]
-        - id: off
-          name: Off
+        - id: "off"
+          name: "Off"
 
       lutron_remotes:
         - id: bedroom_bedside
@@ -568,8 +568,8 @@ area_lighting:
           name: Circadian
         - id: night
           name: Night
-        - id: off
-          name: Off
+        - id: "off"
+          name: "Off"
 
       # When the bedroom senses motion and goes to `night`, follow it.
       linked_motion:
@@ -586,11 +586,11 @@ area_lighting:
       restore: true
       steps:
         - target: all
-          state: on
+          state: "on"
           brightness: 255
           rgb_color: [0, 128, 255]
         - target: all
-          state: off
+          state: "off"
           delay: 0.4
 ```
 
