@@ -142,6 +142,11 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Occupied sensors could silently fail to load.** `manifest.json` did not
+  list `binary_sensor` as a dependency, so when no other integration loaded
+  it, every `binary_sensor.<area>_occupied` was skipped with only a log
+  warning. It is now a declared dependency.
+
 - **Scenes with color failed to activate.** A snapshot from
   `area_lighting.snapshot_scene` stores every color value the light reports
   (a bulb in color-temperature mode also reports hs, rgb and xy), and replaying
