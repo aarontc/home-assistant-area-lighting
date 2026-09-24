@@ -187,7 +187,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Defer entity registration until HA is fully started to avoid
     # blocking startup.
     async def _on_started(event: Event) -> None:
-        from .event_handlers import async_validate_external_entities
+        from .event_handlers import (
+            async_validate_external_entities,
+            async_validate_lutron_remotes,
+        )
 
         try:
             await _register_scene_entities(hass, area_config, scene_storage)
@@ -206,6 +209,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             await async_validate_external_entities(hass, area_config)
         except Exception:
             _LOGGER.exception("Failed to validate external entities")
+        try:
+            await async_validate_lutron_remotes(hass, area_config)
+        except Exception:
+            _LOGGER.exception("Failed to validate Lutron remotes")
         # Restore persisted timer deadlines (D4)
         try:
             for ctrl in hass.data[DOMAIN]["controllers"].values():

@@ -5,6 +5,10 @@
       "title": "{count} required entities are missing",
       "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting, circadian sensor readings).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
     },
+    "lutron_remotes_missing": {
+      "title": "{count} Lutron remotes have missing devices",
+      "description": "The following Lutron remotes have device ids that no longer exist in Home Assistant. Their button presses are being ignored:\n\n{remote_list}\n\nA device id can change when a device is re-added or when Home Assistant 2026.8 split devices shared by multiple integrations.\n\nOpen Settings → Devices & services → Devices → the remote. The current device id is in the page URL. Update each remote's `id` under `lutron_remotes` in your configuration and restart Home Assistant."
+    },
     "scene_drift_unhealable": {
       "title": "{area}: a light keeps drifting from its scene",
       "description": "Home Assistant repeatedly tried to restore `{entity}` in {area} to its active scene, but it keeps changing back on its own. This usually means a Philips Hue power-on default, a Zigbee/RF dropout, or a Hue-app automation is driving the bulb independently of Home Assistant. Check the bulb's power-on behavior (set it to 'last state') and disable any competing Hue motion/automation for this room. The area has been left in `manual` until the next motion or remote event."

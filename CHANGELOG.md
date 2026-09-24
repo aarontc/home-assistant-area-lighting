@@ -160,10 +160,13 @@ readable companion that highlights user-facing changes.
   it, every `binary_sensor.<area>_occupied` was skipped with only a log
   warning. It is now a declared dependency.
 
-- **Occupied sensors could silently fail to load.** `manifest.json` did not
-  list `binary_sensor` as a dependency, so when no other integration loaded
-  it, every `binary_sensor.<area>_occupied` was skipped with only a log
-  warning. It is now a declared dependency.
+- **Lutron remotes with a stale device id failed silently.** A remote whose
+  `id` no longer matches a device in Home Assistant had its button presses
+  ignored with no sign of why. Startup now logs a warning and raises a
+  Repairs issue listing each such remote, with how to find its current
+  device id. Device ids change when a device is re-added, and Home
+  Assistant 2026.8 gave new ids to devices shared by several integrations.
+  The issue clears once every configured remote exists.
 
 - **Scenes with color failed to activate.** A snapshot from
   `area_lighting.snapshot_scene` stores every color value the light reports

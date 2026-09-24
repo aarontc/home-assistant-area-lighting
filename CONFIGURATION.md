@@ -292,7 +292,7 @@ Pico remotes associated with this area.
 
 ```yaml
 lutron_remotes:
-  - id: bedroom_bedside
+  - id: 9f2b1c0e4d5a6b7c8d9e0f1a2b3c4d5e
     name: Bedside Pico
     buttons:
       favorite:
@@ -302,7 +302,7 @@ lutron_remotes:
 
 | Key                  | Type                                         | Required | Default | Notes |
 |----------------------|----------------------------------------------|----------|---------|-------|
-| `id`                 | string                                       | **yes**  | —       | Matches the remote identifier used by `lutron_caseta` events. |
+| `id`                 | string                                       | **yes**  | —       | The remote's Home Assistant device id (32 hex characters), the `device_id` in `lutron_caseta_button_event`. Find it in the URL of the remote's page under Settings → Devices & services → Devices. A missing device raises a startup warning. |
 | `name`               | string                                       | **yes**  | —       | Human label for logs/UI. |
 | `additional_actions` | dict                                         | no       | `{}`    | Free-form map of extra button→action hooks consumed by `event_handlers.py`. Not validated by this schema. |
 | `buttons`            | dict                                         | no       | `{}`    | Per-button overrides (currently only `favorite`). |
@@ -536,7 +536,7 @@ area_lighting:
           name: "Off"
 
       lutron_remotes:
-        - id: bedroom_bedside
+        - id: 9f2b1c0e4d5a6b7c8d9e0f1a2b3c4d5e
           name: Bedside Pico
           buttons:
             favorite: [reading, night]
