@@ -107,6 +107,15 @@ readable companion that highlights user-facing changes.
   ids, respectively, and `area_lighting.alert` reads `all` as every area.
   Rename affected areas before restarting.
 
+- **BREAKING: Scene references must name a scene that exists.** A light's
+  `scenes` list and `linked_motion`'s `local_scene`, `remote_scene` and
+  `when_remote_scene` keys used to accept any string, and a name that matched
+  no scene was ignored at runtime, silently leaving the light out of a scene
+  or falling back to a default. They now fail validation, as does an
+  unquoted `off` in any scene reference, including `cycle` and Lutron
+  `favorite` lists. A `linked_motion` whose `remote_area` does not exist
+  still only disables that link.
+
 - **BREAKING: Area and scene ids must form valid entity ids.** Both become
   part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),
   which Home Assistant 2026.9 warns about when invalid and will reject from

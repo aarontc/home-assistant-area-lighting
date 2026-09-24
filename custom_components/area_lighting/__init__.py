@@ -18,6 +18,7 @@ from .config_schema import (
     parse_config,
     validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
+    validate_scene_references,
 )
 from .const import DOMAIN
 from .controller import AreaLightingController
@@ -82,6 +83,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         validate_circadian_kelvin_routes(area_config)
     except vol.Invalid as err:
         _LOGGER.error("Area Lighting: invalid circadian_kelvin_routes config: %s", err)
+        return False
+    try:
+        validate_scene_references(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid scene reference: %s", err)
         return False
 
     for area in area_config.areas:
@@ -174,6 +180,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             validate_circadian_kelvin_routes(new_config)
         except vol.Invalid as err:
             _LOGGER.error("area_lighting reload: invalid circadian_kelvin_routes config: %s", err)
+            return
+        try:
+            validate_scene_references(new_config)
+        except vol.Invalid as err:
+            _LOGGER.error("area_lighting reload: invalid scene reference: %s", err)
             return
         hass.data[DOMAIN]["config"] = new_config
         _LOGGER.info(

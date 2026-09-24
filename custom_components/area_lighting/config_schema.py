@@ -14,7 +14,9 @@ from .const import (
     CIRCADIAN_CT,
     CIRCADIAN_RGB,
     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+    SCENE_CIRCADIAN,
     SCENE_LIGHT_ON_ATTRIBUTES,
+    SCENE_OFF,
 )
 from .models import (
     AlertPattern,
@@ -41,13 +43,23 @@ CIRCADIAN_SWITCH_SCHEMA = vol.Schema(
     }
 )
 
+
+def _validate_quoted_string(value: object) -> str:
+    """Reject YAML booleans before converting values to strings."""
+    if isinstance(value, bool):
+        raise vol.Invalid(
+            'YAML boolean values must be quoted, for example id: "off" or name: "Off"'
+        )
+    return cv.string(value)
+
+
 LIGHT_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.entity_id,
         vol.Optional("circadian_switch"): cv.string,
         vol.Optional("circadian_type"): vol.In([CIRCADIAN_CT, CIRCADIAN_BRIGHTNESS, CIRCADIAN_RGB]),
         vol.Optional("roles", default=[]): vol.All(cv.ensure_list, [vol.In(ALL_ROLES)]),
-        vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [_validate_quoted_string]),
         # Cluster members — if set, this LightConfig represents a Hue Zone
         # or similar batch target. Scene dispatch will coalesce per-light
         # commands into a single cluster command when all members share
@@ -75,15 +87,6 @@ SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
 )
 
 
-def _validate_quoted_string(value: object) -> str:
-    """Reject YAML booleans before converting values to strings."""
-    if isinstance(value, bool):
-        raise vol.Invalid(
-            'YAML boolean values must be quoted, for example id: "off" or name: "Off"'
-        )
-    return cv.string(value)
-
-
 # Area and scene ids become part of entity ids (switch.<area>_night_mode,
 # scene.<area>_<scene>), and Home Assistant rejects an entity id with a
 # leading, trailing or doubled underscore anywhere in it.
@@ -104,7 +107,7 @@ SCENE_SCHEMA = vol.Schema(
         vol.Required("id"): vol.All(_validate_quoted_string, _validate_scene_id),
         vol.Required("name"): _validate_quoted_string,
         vol.Optional("group_exclude", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Optional("cycle"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("cycle"): vol.All(cv.ensure_list, [_validate_quoted_string]),
         # Per-light state data for the scene, keyed by entity_id.
         vol.Optional("entities"): {cv.entity_id: SCENE_ENTITY_STATE_SCHEMA},
         vol.Optional("icon"): cv.icon,
@@ -181,7 +184,9 @@ MOTION_LIGHT_CONDITION_SCHEMA = vol.All(
 
 LUTRON_BUTTON_OVERRIDES_SCHEMA = vol.Schema(
     {
-        vol.Optional("favorite"): vol.Any(cv.string, vol.All(cv.ensure_list, [cv.string])),
+        vol.Optional("favorite"): vol.Any(
+            _validate_quoted_string, vol.All(cv.ensure_list, [_validate_quoted_string])
+        ),
     }
 )
 
@@ -203,8 +208,8 @@ TIMER_DURATION_SCHEMA = vol.Schema(
 
 LINKED_MOTION_MAPPING_SCHEMA = vol.Schema(
     {
-        vol.Required("local_scene"): cv.string,
-        vol.Optional("remote_scene"): vol.Any(cv.string, None),
+        vol.Required("local_scene"): _validate_quoted_string,
+        vol.Optional("remote_scene"): vol.Any(None, _validate_quoted_string),
     }
 )
 
@@ -212,7 +217,9 @@ LINKED_MOTION_ENTRY_SCHEMA = vol.Schema(
     {
         vol.Required("remote_area"): cv.string,
         vol.Required("default"): LINKED_MOTION_MAPPING_SCHEMA,
-        vol.Optional("when_remote_scene", default={}): {cv.string: LINKED_MOTION_MAPPING_SCHEMA},
+        vol.Optional("when_remote_scene", default={}): {
+            _validate_quoted_string: LINKED_MOTION_MAPPING_SCHEMA
+        },
     }
 )
 
@@ -569,6 +576,48 @@ def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
                 f"already follows '{leader.leader_area_id}' — leader/follower "
                 f"relationships cannot be chained"
             )
+
+
+def validate_scene_references(config: AreaLightingConfig) -> None:
+    """Reject scene references that name no scene.
+
+    A light's `scenes` entry or a `linked_motion` mapping that names an
+    undeclared scene is otherwise ignored at runtime, silently leaving the
+    light out of a scene or falling back to a default. Every area also has
+    the behavioral `off` and `circadian` scenes, declared or not.
+    """
+    slugs = {area.id: area.scene_slugs | {SCENE_OFF, SCENE_CIRCADIAN} for area in config.areas}
+
+    for area in config.areas:
+        for light in area.all_lights:
+            for slug in light.scenes:
+                if slug not in slugs[area.id]:
+                    raise vol.Invalid(
+                        f"area '{area.id}': light '{light.id}' lists scene '{slug}', "
+                        f"which the area does not declare"
+                    )
+        for link in area.linked_motion:
+            # An unknown remote_area only disables the link; the local area
+            # keeps working (tests/integration/test_linked_motion.py).
+            remote = slugs.get(link.remote_area)
+            for remote_slug, mapping in [(None, link.default), *link.when_remote_scene.items()]:
+                if mapping.local_scene not in slugs[area.id]:
+                    raise vol.Invalid(
+                        f"area '{area.id}': linked_motion local_scene "
+                        f"'{mapping.local_scene}' is not a scene of this area"
+                    )
+                if remote is None:
+                    continue
+                if remote_slug is not None and remote_slug not in remote:
+                    raise vol.Invalid(
+                        f"area '{area.id}': linked_motion when_remote_scene key "
+                        f"'{remote_slug}' is not a scene of area '{link.remote_area}'"
+                    )
+                if mapping.remote_scene is not None and mapping.remote_scene not in remote:
+                    raise vol.Invalid(
+                        f"area '{area.id}': linked_motion remote_scene "
+                        f"'{mapping.remote_scene}' is not a scene of area '{link.remote_area}'"
+                    )
 
 
 def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:

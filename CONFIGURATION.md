@@ -134,7 +134,7 @@ light_clusters:
 |--------------------|-----------------------------------------|----------|---------|-------|
 | `id`               | entity_id                               | **yes**  | —       | HA entity id of the light (or zone/group for clusters). |
 | `roles`            | list of string                          | no       | `[]`    | Subset of `color`, `dimming`, `white`, `night`, `movie`, `christmas`, `plant`. Used for selective scene targeting. Unknown values rejected. |
-| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. |
+| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. Each slug must be a scene this area declares (or `off` / `circadian`); an unknown slug fails validation. |
 | `circadian_switch` | string                                  | no       | —       | Name of a circadian switch defined on this area. |
 | `circadian_type`   | `ct` \| `brightness` \| `rgb`           | no       | —       | How circadian control is applied. Only meaningful together with `circadian_switch`. |
 | `members`          | list of entity_id                       | no       | `[]`    | Populated only on `light_clusters` entries. Lists the physical lights inside the cluster. |
@@ -410,14 +410,14 @@ linked_motion:
 |---------------------|---------------------------------------------|----------|---------|-------|
 | `remote_area`       | string                                      | **yes**  | —       | `id` of the area whose motion drives this link. |
 | `default`           | [linked mapping](#linked-motion-mapping)    | **yes**  | —       | Applied when the remote area's scene doesn't match any `when_remote_scene` entry. |
-| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings. |
+| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings. Each key must be a scene of `remote_area`. |
 
 #### Linked motion mapping
 
 | Key            | Type                | Required | Default | Notes |
 |----------------|---------------------|----------|---------|-------|
-| `local_scene`  | string              | **yes**  | —       | Scene slug to activate in this area. |
-| `remote_scene` | string \| `null`    | no       | `null`  | Scene slug to force on the remote area. `null` leaves the remote alone. |
+| `local_scene`  | string              | **yes**  | —       | Scene slug to activate in this area. Must be a scene this area declares (or `off` / `circadian`). |
+| `remote_scene` | string \| `null`    | no       | `null`  | Scene slug to force on the remote area. `null` leaves the remote alone. Must be a scene of `remote_area` when that area exists. |
 
 ### Leader/follower rules
 
