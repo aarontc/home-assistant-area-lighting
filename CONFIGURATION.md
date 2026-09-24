@@ -272,12 +272,12 @@ scenes:
 
 #### Reserved scene slugs
 
-A handful of scene slugs have special semantics in the integration. They are **not implicit** — if you want the behavior, you must declare a scene with that slug (the integration only recognizes scenes you actually list here). Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
+A handful of scene slugs have special semantics in the integration. Every area gets `scene.{area}_off` and `scene.{area}_circadian` entities whether or not it declares those scenes, and declaring one sets its display name. The behavior in the table below applies only to scenes you declare, because scene selection considers only declared scenes. Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
 
 | Slug                   | Must declare? | Effect if declared |
 |------------------------|---------------|--------------------|
 | `circadian`            | Strongly recommended. Required if you want circadian behavior. Also the default scene that `linked_motion` falls back to (`controller.py:1448`) — areas with `linked_motion` configured but no `circadian` scene declared will error at activation time. | Picked as the "normal on" scene by the default-scene resolver and most state transitions. Gets default icon `mdi:theme-light-dark`. |
-| `off`                  | Strongly recommended. | Gives users a real scene entity to target for "turn area off". Without it, off transitions still work internally but there's no `scene.{area}_off` entity to call. |
+| `off`                  | Optional. | `scene.{area}_off` exists either way and off transitions work either way; declaring `off` only sets the entity's display name. |
 | `night`                | Only if using night mode. | Selected automatically when night mode is active; targeted by lights with the `night` role. |
 | `ambient`              | Only if using ambient zones. | Activated by `ambient_lighting_zone` gating. |
 | `daylight` + `evening` | Only as an alternative to `circadian`. Must declare **both together**. | The scene-machine uses them as a sun-position-driven fallback when `circadian` is not declared (`scene_machine.py:71-72`). |
