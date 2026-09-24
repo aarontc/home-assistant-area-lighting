@@ -113,8 +113,10 @@ readable companion that highlights user-facing changes.
   no scene was ignored at runtime, silently leaving the light out of a scene
   or falling back to a default. They now fail validation, as does an
   unquoted `off` in any scene reference, including `cycle` and Lutron
-  `favorite` lists. A `linked_motion` whose `remote_area` does not exist
-  still only disables that link.
+  `favorite` lists. Scenes an area reaches without declaring them still
+  count: `off`, `circadian`, and any holiday scene once the area declares one.
+  `manual` stays valid as a `when_remote_scene` key. A `linked_motion` whose
+  `remote_area` does not exist still only disables that link.
 
 - **BREAKING: Area and scene ids must form valid entity ids.** Both become
   part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),

@@ -14,6 +14,7 @@ from .const import (
     CIRCADIAN_CT,
     CIRCADIAN_RGB,
     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+    HOLIDAY_SCENES,
     SCENE_CIRCADIAN,
     SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF,
@@ -581,12 +582,20 @@ def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
 def validate_scene_references(config: AreaLightingConfig) -> None:
     """Reject scene references that name no scene.
 
-    A light's `scenes` entry or a `linked_motion` mapping that names an
-    undeclared scene is otherwise ignored at runtime, silently leaving the
-    light out of a scene or falling back to a default. Every area also has
-    the behavioral `off` and `circadian` scenes, declared or not.
+    A light's `scenes` entry or a `linked_motion` mapping that names a
+    scene the area can never be in is otherwise ignored at runtime,
+    silently leaving the light out of a scene or falling back to a default.
+    An area can be in any scene it declares, the behavioral `off` and
+    `circadian` scenes, and, once it declares one holiday scene, whichever
+    holiday is active. A remote area also reports `manual`, which
+    `when_remote_scene` can match but nothing can activate.
     """
-    slugs = {area.id: area.scene_slugs | {SCENE_OFF, SCENE_CIRCADIAN} for area in config.areas}
+    slugs = {
+        area.id: area.scene_slugs
+        | {SCENE_OFF, SCENE_CIRCADIAN}
+        | (HOLIDAY_SCENES if area.has_holiday_scenes else set())
+        for area in config.areas
+    }
 
     for area in config.areas:
         for light in area.all_lights:
@@ -608,7 +617,7 @@ def validate_scene_references(config: AreaLightingConfig) -> None:
                     )
                 if remote is None:
                     continue
-                if remote_slug is not None and remote_slug not in remote:
+                if remote_slug not in (None, "manual") and remote_slug not in remote:
                     raise vol.Invalid(
                         f"area '{area.id}': linked_motion when_remote_scene key "
                         f"'{remote_slug}' is not a scene of area '{link.remote_area}'"

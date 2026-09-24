@@ -23,9 +23,9 @@ from custom_components.area_lighting.config_schema import (
 )
 
 
-def _area(area_id: str, **extra) -> dict:
-    scenes = [{"id": "circadian", "name": "Circadian"}, {"id": "night", "name": "Night"}]
-    return AREA_SCHEMA({"id": area_id, "name": area_id.title(), "scenes": scenes, **extra})
+def _area(area_id: str, *, scenes: tuple[str, ...] = ("circadian", "night"), **extra) -> dict:
+    declared = [{"id": slug, "name": slug.title()} for slug in scenes]
+    return AREA_SCHEMA({"id": area_id, "name": area_id.title(), "scenes": declared, **extra})
 
 
 def _link(**overrides) -> dict:
@@ -83,6 +83,26 @@ def test_light_cluster_listing_an_undeclared_scene_rejected():
 def test_linked_motion_referencing_an_undeclared_scene_rejected(link, message):
     with pytest.raises(vol.Invalid, match=message):
         _validate(_area("den", linked_motion=[link]), _area("hall"))
+
+
+def test_manual_is_a_remote_condition_but_not_a_target():
+    """A remote area in manual reports `manual` as its scene."""
+    manual_key = _link(when_remote_scene={"manual": {"local_scene": "night"}})
+    _validate(_area("den", linked_motion=[manual_key]), _area("hall"))
+
+    manual_target = _link(default={"local_scene": "manual"})
+    with pytest.raises(vol.Invalid, match="local_scene 'manual'"):
+        _validate(_area("den", linked_motion=[manual_target]), _area("hall"))
+
+
+def test_every_holiday_is_reachable_once_one_is_declared():
+    """Holiday handling activates the active holiday in any area that
+    declares a holiday scene, even one it does not declare."""
+    light = {"id": "light.den_a", "scenes": ["halloween"]}
+    _validate(_area("den", scenes=("circadian", "christmas"), lights=[light]))
+
+    with pytest.raises(vol.Invalid, match="lists scene 'halloween'"):
+        _validate(_area("den", lights=[light]))
 
 
 def test_unknown_remote_area_still_checks_local_scenes():
