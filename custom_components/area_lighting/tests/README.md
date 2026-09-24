@@ -51,6 +51,10 @@ uv python install 3.14
 - Integration tests: use the `hass`, `helper_entities`,
   `network_room_config`, and `service_calls` fixtures from
   `tests/integration/conftest.py`.
+- `service_calls` mocks `light.turn_on` without Home Assistant's argument
+  schema, so it accepts calls the real service rejects. To check the
+  arguments themselves, mock with `LIGHT_TURN_ON_SCHEMA` as
+  `integration/test_scene_color_attributes.py` does.
 - The harness fails any test that leaves an event-loop timer running. The
   autouse `shutdown_controllers` fixture cancels the controllers' timers;
   a test that fires a scheduled callback by hand must cancel its handle

@@ -139,6 +139,23 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Scenes with color failed to activate.** A snapshot from
+  `area_lighting.snapshot_scene` stores every color value the light reports
+  (a bulb in color-temperature mode also reports hs, rgb and xy), and replaying
+  it sent all of them to `light.turn_on`, which accepts only one. Home
+  Assistant rejected the call, so the scene never applied. Scene colors are
+  now chosen the way Home Assistant's own scenes choose them: the color the
+  target's `color_mode` names, `white` for white mode, no color for on/off
+  and brightness-only modes, and otherwise the first color present. One
+  deliberate difference: where Home Assistant skips a light whose snapshot
+  lacks the color its mode names, Area Lighting sends the first color it has.
+  Snapshots now also record `rgbw_color` and `rgbww_color`, so RGBW and RGBWW
+  bulbs restore their native color. Separately, Home Assistant 2026.3
+  removed the mired `color_temp` argument. Scene config and older snapshots
+  that still use `color_temp` are now sent as `color_temp_kelvin`, and new
+  snapshots no longer record it. A scene `color_temp` that is not a positive
+  whole number of mireds now fails config validation at startup.
+
 - **Diagnostics refresh timer outlived shutdown.** The once-a-second refresh
   of `sensor.area_lighting_diagnostics` kept running after Home Assistant
   began stopping. It now cancels on shutdown.

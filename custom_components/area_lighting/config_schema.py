@@ -63,7 +63,11 @@ LIGHT_SCHEMA = vol.Schema(
 SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
     {
         vol.Optional("state"): vol.In(["on", "off"]),
-        **{vol.Optional(attr): object for attr in SCENE_LIGHT_ON_ATTRIBUTES},
+        **{
+            vol.Optional(attr): object for attr in SCENE_LIGHT_ON_ATTRIBUTES if attr != "color_temp"
+        },
+        # Mireds, converted to color_temp_kelvin when the scene is applied.
+        vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1)),
     }
 )
 
