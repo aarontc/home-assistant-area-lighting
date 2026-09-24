@@ -102,11 +102,13 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **BREAKING: Home Assistant 2026.3 or later is required.** `hacs.json` now
+  declares 2026.3.0 as the minimum, and the component uses Python 3.14
+  syntax, which older Home Assistant releases (Python 3.13) cannot load.
+
 - **Development and CI moved to Python 3.14 and Home Assistant 2026.9.3.**
   Tests, lint and type checks now run against `pytest-homeassistant-custom-component`
   0.13.366, ruff 0.16 and mypy 2.3, and `uv.lock` resolves from PyPI only.
-  The component itself still targets Python 3.13, so the supported Home
-  Assistant range in `hacs.json` is unchanged.
 
 - **A dark area now dims back up into the scene it was last showing, on that
   scene's lights only** — turning an area off used to forget its scene, so

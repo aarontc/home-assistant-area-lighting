@@ -27,10 +27,8 @@ markers = [
 ]
 
 [tool.ruff]
-# The component must still load on the oldest Home Assistant in hacs.json
-# (2025.5, Python 3.13) even though development runs on 3.14. Raising this
-# lets ruff emit 3.14-only syntax such as unparenthesized `except A, B:`.
-target-version = "py313"
+# Matches the oldest Home Assistant in hacs.json (2026.3, Python 3.14).
+target-version = "py314"
 line-length = 100
 # Design notes quote code fragments that are not meant to be runnable, and
 # ruff 0.16 formats Python blocks inside Markdown.
