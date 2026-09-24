@@ -3,11 +3,11 @@
 Scene references (a light's `scenes`, `cycle`, Lutron `favorite` lists and
 `linked_motion` mappings) name scenes by id. An unquoted `off` is a YAML
 boolean, which cv.string used to turn into the scene id "False", so every
-reference now rejects booleans. Whether a reference names a declared scene
-is not checked: the runtime can reach undeclared scenes (holiday and
-ambient handling, favorites, cycling, externally defined scenes, and
-skeleton activation from light membership), so an undeclared name is not
-necessarily a mistake.
+reference now rejects booleans. Apart from Lutron `favorite` overrides,
+whether a reference names a declared scene is not checked: the runtime can
+reach undeclared scenes (holiday and ambient handling, favorites, cycling,
+externally defined scenes, and skeleton activation from light membership),
+so an undeclared name is not necessarily a mistake.
 """
 
 from __future__ import annotations

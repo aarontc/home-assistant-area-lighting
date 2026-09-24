@@ -110,7 +110,8 @@ readable companion that highlights user-facing changes.
 - **BREAKING: Scene references reject unquoted YAML booleans.** An unquoted
   `off` in a light's `scenes`, a `cycle` or Lutron `favorite` list, or a
   `linked_motion` mapping used to become the scene id `False`. It now fails
-  validation; quote it as `"off"`. References are not checked against the
+  validation; quote it as `"off"`. Apart from Lutron `favorite` overrides,
+  which must name declared scenes, references are not checked against the
   area's declared scenes, because the integration can activate undeclared
   ones, so when you rename an area or scene id, update what refers to it:
   `lights[].scenes`, `linked_motion`, `leader_area_id`, `cycle` and Lutron
