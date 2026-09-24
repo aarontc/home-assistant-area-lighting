@@ -73,6 +73,8 @@ async def async_setup_platform(
 class AreaLightingSwitch(SwitchEntity):
     """A switch that reads/writes a boolean property on the controller."""
 
+    _attr_entity_registry_visible_default = False
+
     def __init__(
         self,
         controller: AreaLightingController,

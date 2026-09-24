@@ -102,6 +102,20 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **Per-area entities and the diagnostics sensor are hidden by default.**
+  Each area's scenes, switches, numbers, `last_scene` select and `occupied`
+  binary sensor register hidden, as does `sensor.area_lighting_diagnostics`,
+  so the dashboards Home Assistant generates by itself (the default Overview,
+  the legacy Overview and the Areas dashboard) no longer list a dozen or more
+  of them per area. The global master switches stay visible. Hidden entities
+  work as before in automations, scripts and hand-built dashboards. Un-hide
+  one from its entity settings (**Visible**). Hidden entities also drop out of
+  area, device and label targets, so an action aimed at an area no longer
+  flips that area's `area_lighting` switches, and they are not exposed to
+  voice assistants by default. On upgrade, the first start hides the entities
+  an earlier release registered, once, so an entity you un-hide afterwards
+  stays visible. See README § "Entity visibility".
+
 - **A dark area now dims back up into the scene it was last showing, on that
   scene's lights only** — turning an area off used to forget its scene, so
   raising or lowering a dark room restored the area's default on-scene instead
