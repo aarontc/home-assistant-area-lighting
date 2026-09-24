@@ -103,3 +103,28 @@ func TestIncrementVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestVersionFilesApply(t *testing.T) {
+	inputs := map[string]string{
+		"custom_components/area_lighting/manifest.json": "{\n  \"domain\": \"area_lighting\",\n  \"version\": \"1.2.0\"\n}\n",
+		"pyproject.toml": "[project]\nname = \"area-lighting\"\nversion = \"1.2.0\"\nrequires-python = \">=3.14.2\"\n",
+		// Another package on the same version must keep it.
+		"uv.lock": "[[package]]\nname = \"anyio\"\nversion = \"1.2.0\"\n\n[[package]]\nname = \"area-lighting\"\nversion = \"1.2.0\"\nsource = { virtual = \".\" }\n",
+	}
+	want := map[string]string{
+		"custom_components/area_lighting/manifest.json": "{\n  \"domain\": \"area_lighting\",\n  \"version\": \"2.0.0\"\n}\n",
+		"pyproject.toml": "[project]\nname = \"area-lighting\"\nversion = \"2.0.0\"\nrequires-python = \">=3.14.2\"\n",
+		"uv.lock":        "[[package]]\nname = \"anyio\"\nversion = \"1.2.0\"\n\n[[package]]\nname = \"area-lighting\"\nversion = \"2.0.0\"\nsource = { virtual = \".\" }\n",
+	}
+	if len(VersionFiles) != len(inputs) {
+		t.Fatalf("VersionFiles has %d entries, test covers %d", len(VersionFiles), len(inputs))
+	}
+	for _, f := range VersionFiles {
+		t.Run(f.Path, func(t *testing.T) {
+			got := f.Apply(inputs[f.Path], "2.0.0")
+			if got != want[f.Path] {
+				t.Errorf("Apply(%s) =\n%s\nwant\n%s", f.Path, got, want[f.Path])
+			}
+		})
+	}
+}
