@@ -101,8 +101,9 @@ func (m *AreaLighting) CommitsSinceTag(
 }
 
 // CreateTag calculates the next version, commits updated version strings
-// to manifest.json and pyproject.toml, then creates a Git tag on that
-// commit via the GitLab API. `token` needs `write_repository` scope.
+// to every file in versioning.VersionFiles (manifest.json, pyproject.toml
+// and uv.lock), then creates a Git tag on that commit via the GitLab API.
+// `token` needs `write_repository` scope.
 //
 // The version-bump commit and the tag ref both need to exist on the
 // default branch without triggering another `tag:auto` run (which would
@@ -243,7 +244,10 @@ func createVersionBumpCommit(
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", vf.Path, err)
 		}
-		updated := vf.Apply(content, bareVersion)
+		updated, err := vf.Apply(content, bareVersion)
+		if err != nil {
+			return "", err
+		}
 		if updated == content {
 			continue // no change needed
 		}

@@ -121,9 +121,33 @@ func TestVersionFilesApply(t *testing.T) {
 	}
 	for _, f := range VersionFiles {
 		t.Run(f.Path, func(t *testing.T) {
-			got := f.Apply(inputs[f.Path], "2.0.0")
+			got, err := f.Apply(inputs[f.Path], "2.0.0")
+			if err != nil {
+				t.Fatalf("Apply(%s): %v", f.Path, err)
+			}
 			if got != want[f.Path] {
 				t.Errorf("Apply(%s) =\n%s\nwant\n%s", f.Path, got, want[f.Path])
+			}
+		})
+	}
+}
+
+func TestVersionFilesApplyUvLockSpacing(t *testing.T) {
+	lock := VersionFiles[len(VersionFiles)-1]
+	got, err := lock.Apply("[[package]]\nname=\"area-lighting\"\nversion=\"1.2.0\"\n", "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[[package]]\nname = \"area-lighting\"\nversion = \"2.0.0\"\n"; got != want {
+		t.Errorf("Apply = %q, want %q", got, want)
+	}
+}
+
+func TestVersionFilesApplyFailsWithoutAVersion(t *testing.T) {
+	for _, f := range VersionFiles {
+		t.Run(f.Path, func(t *testing.T) {
+			if _, err := f.Apply("no version here\n", "2.0.0"); err == nil {
+				t.Errorf("Apply(%s) on content without a version: want error", f.Path)
 			}
 		})
 	}

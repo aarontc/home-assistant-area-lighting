@@ -91,9 +91,14 @@ type VersionFile struct {
 	format  string // fmt format string; receives the bare version
 }
 
-// Apply returns content with this file's version set to version.
-func (f VersionFile) Apply(content, version string) string {
-	return f.pattern.ReplaceAllString(content, fmt.Sprintf(f.format, version))
+// Apply returns content with this file's version set to version. It
+// fails when the file has no version to rewrite, so a release never
+// ships with one file left on the old version.
+func (f VersionFile) Apply(content, version string) (string, error) {
+	if !f.pattern.MatchString(content) {
+		return "", fmt.Errorf("no version found in %s", f.Path)
+	}
+	return f.pattern.ReplaceAllString(content, fmt.Sprintf(f.format, version)), nil
 }
 
 // VersionFiles lists every file the release bump rewrites.
@@ -112,7 +117,7 @@ var VersionFiles = []VersionFile{
 		// uv.lock records the project's own version in its package entry;
 		// leaving it behind makes the lock disagree with pyproject.toml.
 		Path:    "uv.lock",
-		pattern: regexp.MustCompile(`(?m)^name = "area-lighting"\nversion = "[^"]*"`),
+		pattern: regexp.MustCompile(`(?m)^name\s*=\s*"area-lighting"[ \t]*\nversion\s*=\s*"[^"]*"`),
 		format:  "name = \"area-lighting\"\nversion = \"%s\"",
 	},
 }
