@@ -3,7 +3,6 @@ module dagger/area-lighting
 go 1.26.2
 
 require (
-	dagger.io/dagger v0.20.5-0.20260409204156-6e4822e59cbb
 	github.com/Khan/genqlient v0.8.1
 	github.com/dagger/otel-go v1.41.0
 	github.com/vektah/gqlparser/v2 v2.5.32
@@ -15,6 +14,7 @@ require (
 	github.com/99designs/gqlgen v0.17.89 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dagger/querybuilder v0.0.0-20260402040506-574a5e81cb59
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect

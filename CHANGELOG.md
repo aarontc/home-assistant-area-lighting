@@ -109,6 +109,7 @@ readable companion that highlights user-facing changes.
 - **Development and CI moved to Python 3.14 and Home Assistant 2026.9.3.**
   Tests, lint and type checks now run against `pytest-homeassistant-custom-component`
   0.13.366, ruff 0.16 and mypy 2.3, and `uv.lock` resolves from PyPI only.
+  The CI pipeline runs on Dagger 0.21.9.
 
 - **A dark area now dims back up into the scene it was last showing, on that
   scene's lights only** — turning an area off used to forget its scene, so

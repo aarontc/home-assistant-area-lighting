@@ -10,7 +10,7 @@ You only need **Dagger** on your `PATH`. Dagger spins up a Python 3.14
 container, installs `uv`, and runs everything inside it — so you don't need
 Python, `uv`, `ruff`, `mypy`, or `pytest` installed on your host.
 
-- Dagger: `v0.20.5` (see `.tool-versions`)
+- Dagger: `v0.21.9` (see `.tool-versions`)
   - Install: <https://docs.dagger.io/install> or `mise install`, which reads `.tool-versions`
 - Docker (or another OCI runtime) must be running for Dagger to spin up containers
 
