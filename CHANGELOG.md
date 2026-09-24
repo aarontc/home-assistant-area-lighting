@@ -102,9 +102,10 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
-- **BREAKING: Area ids `global` and `area_lighting` are now reserved.**
-  They collide with global master switch unique ids and entity ids,
-  respectively. Rename affected areas before restarting.
+- **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
+  The first two collide with global master switch unique ids and entity
+  ids, respectively, and `area_lighting.alert` reads `all` as every area.
+  Rename affected areas before restarting.
 
 - **BREAKING: Area and scene ids must form valid entity ids.** Both become
   part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),

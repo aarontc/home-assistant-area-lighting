@@ -30,7 +30,7 @@ def test_invalid_scene_id_suggests_valid_id(scene_id, suggestion):
     SCENE_SCHEMA({"id": suggestion, "name": "Test scene"})
 
 
-@pytest.mark.parametrize("scene_id", ["off", "night", "1", "night_2"])
+@pytest.mark.parametrize("scene_id", ["off", "night", "1", "night_2", "night_\u0661"])
 def test_valid_scene_ids_produce_valid_entity_ids(scene_id):
     assert SCENE_SCHEMA({"id": scene_id, "name": "Test scene"})["id"] == scene_id
     assert valid_entity_id(f"scene.den_{scene_id}")

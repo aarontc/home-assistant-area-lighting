@@ -87,7 +87,8 @@ def _validate_quoted_string(value: object) -> str:
 # Area and scene ids become part of entity ids (switch.<area>_night_mode,
 # scene.<area>_<scene>), and Home Assistant rejects an entity id with a
 # leading, trailing or doubled underscore anywhere in it.
-_ID_PATTERN = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*")
+# Home Assistant's object id pattern allows any Unicode digit (`\d`).
+_ID_PATTERN = re.compile(r"[\da-z]+(?:_[\da-z]+)*")
 _ID_RULE = "must be lowercase letters and digits separated by single underscores"
 
 
@@ -246,33 +247,35 @@ ALERT_PATTERN_SCHEMA = vol.Schema(
 )
 
 
+RESERVED_AREA_IDS = {
+    "global": "per-area switch unique ids collide with global master switch unique ids",
+    "area_lighting": "per-area switch entity ids collide with global master switch entity ids",
+    "all": "area_lighting.alert treats area_id 'all' as every area",
+}
+
+
 def _validate_area_id(value: str) -> str:
     """Validate an area id's syntax and reject reserved ids.
 
     Persisted state keys share a flat namespace with area ids; keys
     beginning with a double underscore (such as GLOBAL_STATE_KEY,
     "__global__") are reserved for internal storage, so an area id
-    there would cross-write area and internal state. `global` and
-    `area_lighting` would collide with the global master switches.
+    there would cross-write area and internal state. The ids in
+    RESERVED_AREA_IDS would collide with the global master switches or the
+    alert service's broadcast target.
     """
     if value.startswith("__"):
         raise vol.Invalid(
             f"area id '{value}' is reserved: ids beginning with '__' collide "
             f"with internal storage keys such as '{GLOBAL_STATE_KEY}'"
         )
-    if value == "global":
+    if value in RESERVED_AREA_IDS:
         raise vol.Invalid(
-            "area id 'global' is reserved: per-area switch unique ids collide with "
-            "global master switch unique ids; use 'global_area'"
-        )
-    if value == "area_lighting":
-        raise vol.Invalid(
-            "area id 'area_lighting' is reserved: per-area switch entity ids collide with "
-            "global master switch entity ids; use 'area_lighting_area'"
+            f"area id '{value}' is reserved: {RESERVED_AREA_IDS[value]}; use '{value}_area'"
         )
     if not _ID_PATTERN.fullmatch(value):
         suggestion = slugify(value) or "room"
-        if suggestion in ("global", "area_lighting"):
+        if suggestion in RESERVED_AREA_IDS:
             suggestion += "_area"
         raise vol.Invalid(f"area id '{value}' {_ID_RULE}; use '{suggestion}'")
     return value

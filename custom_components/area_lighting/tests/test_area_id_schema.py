@@ -37,11 +37,16 @@ def test_double_underscore_prefix_rejected():
 
 @pytest.mark.parametrize(
     ("area_id", "collision"),
-    [("global", "unique ids"), ("area_lighting", "entity ids")],
+    [
+        ("global", "unique ids collide with global master switch"),
+        ("area_lighting", "entity ids collide with global master switch"),
+        ("all", "area_lighting.alert treats area_id 'all' as every area"),
+    ],
 )
-def test_global_switch_collision_rejected(area_id, collision):
-    with pytest.raises(vol.Invalid, match=f"{collision} collide with global master switch"):
+def test_reserved_area_ids_rejected(area_id, collision):
+    with pytest.raises(vol.Invalid, match=f"{collision}.*use '{area_id}_area'"):
         AREA_SCHEMA(_minimal_area(area_id))
+    AREA_SCHEMA(_minimal_area(f"{area_id}_area"))
 
 
 @pytest.mark.parametrize(
@@ -52,6 +57,7 @@ def test_global_switch_collision_rejected(area_id, collision):
         ("_den", "den"),
         ("_global", "global_area"),
         ("_area_lighting", "area_lighting_area"),
+        ("All", "all_area"),
         ("éclairage", "eclairage"),
         ("den.room", "den_room"),
         ("den\n", "den"),
@@ -66,7 +72,8 @@ def test_invalid_area_id_suggests_valid_id(area_id, suggestion):
     AREA_SCHEMA(_minimal_area(suggestion))
 
 
-@pytest.mark.parametrize("area_id", ["den", "1", "1st_room", "media_room_2"])
+# Home Assistant's object id pattern accepts any Unicode digit, so these do too.
+@pytest.mark.parametrize("area_id", ["den", "1", "1st_room", "media_room_2", "room_\u0662"])
 def test_valid_area_ids_produce_valid_entity_ids(area_id):
     assert AREA_SCHEMA(_minimal_area(area_id))["id"] == area_id
     assert valid_entity_id(f"switch.{area_id}_night_mode")
