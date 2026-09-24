@@ -107,16 +107,14 @@ readable companion that highlights user-facing changes.
   ids, respectively, and `area_lighting.alert` reads `all` as every area.
   Rename affected areas before restarting.
 
-- **BREAKING: Scene references must name a scene that exists.** A light's
-  `scenes` list and `linked_motion`'s `local_scene`, `remote_scene` and
-  `when_remote_scene` keys used to accept any string, and a name that matched
-  no scene was ignored at runtime, silently leaving the light out of a scene
-  or falling back to a default. They now fail validation, as does an
-  unquoted `off` in any scene reference, including `cycle` and Lutron
-  `favorite` lists. Scenes an area reaches without declaring them still
-  count: `off`, `circadian`, and any holiday scene once the area declares one.
-  `manual` stays valid as a `when_remote_scene` key. A `linked_motion` whose
-  `remote_area` does not exist still only disables that link.
+- **BREAKING: Scene references reject unquoted YAML booleans.** An unquoted
+  `off` in a light's `scenes`, a `cycle` or Lutron `favorite` list, or a
+  `linked_motion` mapping used to become the scene id `False`. It now fails
+  validation; quote it as `"off"`. References are not checked against the
+  area's declared scenes, because the integration can activate undeclared
+  ones, so when you rename an area or scene id, update what refers to it:
+  `lights[].scenes`, `linked_motion`, `leader_area_id`, `cycle` and Lutron
+  `favorite` lists.
 
 - **BREAKING: Area and scene ids must form valid entity ids.** Both become
   part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),

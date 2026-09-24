@@ -14,10 +14,7 @@ from .const import (
     CIRCADIAN_CT,
     CIRCADIAN_RGB,
     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
-    HOLIDAY_SCENES,
-    SCENE_CIRCADIAN,
     SCENE_LIGHT_ON_ATTRIBUTES,
-    SCENE_OFF,
 )
 from .models import (
     AlertPattern,
@@ -577,56 +574,6 @@ def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
                 f"already follows '{leader.leader_area_id}' — leader/follower "
                 f"relationships cannot be chained"
             )
-
-
-def validate_scene_references(config: AreaLightingConfig) -> None:
-    """Reject scene references that name no scene.
-
-    A light's `scenes` entry or a `linked_motion` mapping that names a
-    scene the area can never be in is otherwise ignored at runtime,
-    silently leaving the light out of a scene or falling back to a default.
-    An area can be in any scene it declares, the behavioral `off` and
-    `circadian` scenes, and, once it declares one holiday scene, whichever
-    holiday is active. A remote area also reports `manual`, which
-    `when_remote_scene` can match but nothing can activate.
-    """
-    slugs = {
-        area.id: area.scene_slugs
-        | {SCENE_OFF, SCENE_CIRCADIAN}
-        | (HOLIDAY_SCENES if area.has_holiday_scenes else set())
-        for area in config.areas
-    }
-
-    for area in config.areas:
-        for light in area.all_lights:
-            for slug in light.scenes:
-                if slug not in slugs[area.id]:
-                    raise vol.Invalid(
-                        f"area '{area.id}': light '{light.id}' lists scene '{slug}', "
-                        f"which the area does not declare"
-                    )
-        for link in area.linked_motion:
-            # An unknown remote_area only disables the link; the local area
-            # keeps working (tests/integration/test_linked_motion.py).
-            remote = slugs.get(link.remote_area)
-            for remote_slug, mapping in [(None, link.default), *link.when_remote_scene.items()]:
-                if mapping.local_scene not in slugs[area.id]:
-                    raise vol.Invalid(
-                        f"area '{area.id}': linked_motion local_scene "
-                        f"'{mapping.local_scene}' is not a scene of this area"
-                    )
-                if remote is None:
-                    continue
-                if remote_slug not in (None, "manual") and remote_slug not in remote:
-                    raise vol.Invalid(
-                        f"area '{area.id}': linked_motion when_remote_scene key "
-                        f"'{remote_slug}' is not a scene of area '{link.remote_area}'"
-                    )
-                if mapping.remote_scene is not None and mapping.remote_scene not in remote:
-                    raise vol.Invalid(
-                        f"area '{area.id}': linked_motion remote_scene "
-                        f"'{mapping.remote_scene}' is not a scene of area '{link.remote_area}'"
-                    )
 
 
 def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:

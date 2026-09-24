@@ -134,7 +134,7 @@ light_clusters:
 |--------------------|-----------------------------------------|----------|---------|-------|
 | `id`               | entity_id                               | **yes**  | —       | HA entity id of the light (or zone/group for clusters). |
 | `roles`            | list of string                          | no       | `[]`    | Subset of `color`, `dimming`, `white`, `night`, `movie`, `christmas`, `plant`. Used for selective scene targeting. Unknown values rejected. |
-| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. Each slug must be a scene this area can reach: one it declares, `off`, `circadian`, or, once the area declares a holiday scene, any holiday scene. An unknown slug fails validation. |
+| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. Slugs are not checked against the area's declared scenes, so update them when you rename a scene. |
 | `circadian_switch` | string                                  | no       | —       | Name of a circadian switch defined on this area. |
 | `circadian_type`   | `ct` \| `brightness` \| `rgb`           | no       | —       | How circadian control is applied. Only meaningful together with `circadian_switch`. |
 | `members`          | list of entity_id                       | no       | `[]`    | Populated only on `light_clusters` entries. Lists the physical lights inside the cluster. |
@@ -272,7 +272,7 @@ scenes:
 
 #### Reserved scene slugs
 
-A handful of scene slugs have special semantics in the integration. Every enabled area (other than one marked `special: global`) gets `scene.{area}_off` and `scene.{area}_circadian` entities whether or not it declares those scenes, and declaring one sets its display name. The behavior in the table below applies only to scenes you declare, because scene selection considers only declared scenes. Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
+A handful of scene slugs have special semantics in the integration. Every enabled area (other than one marked `special: global`) gets `scene.{area}_off` and `scene.{area}_circadian` entities whether or not it declares those scenes, and declaring one sets its display name. Declaring the other slugs below enables the behavior in the table. A few paths (the favorite button, ambient zones, holiday handling, circadian cycling) can also activate some of them undeclared, lighting the lights whose `scenes` list names the slug. Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
 
 | Slug                   | Must declare? | Effect if declared |
 |------------------------|---------------|--------------------|
@@ -410,14 +410,14 @@ linked_motion:
 |---------------------|---------------------------------------------|----------|---------|-------|
 | `remote_area`       | string                                      | **yes**  | —       | `id` of the area whose motion drives this link. |
 | `default`           | [linked mapping](#linked-motion-mapping)    | **yes**  | —       | Applied when the remote area's scene doesn't match any `when_remote_scene` entry. |
-| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings. Each key must be a scene `remote_area` can reach, or `manual`, which the remote area reports while in manual mode. |
+| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings, keyed by the remote area's current scene. That is `manual` while the remote area is in manual mode. |
 
 #### Linked motion mapping
 
 | Key            | Type                | Required | Default | Notes |
 |----------------|---------------------|----------|---------|-------|
-| `local_scene`  | string              | **yes**  | —       | Scene slug to activate in this area. Must be a scene this area can reach (see `lights[].scenes`). |
-| `remote_scene` | string \| `null`    | no       | `null`  | Scene slug to force on the remote area. `null` leaves the remote alone. Must be a scene `remote_area` can reach when that area exists. |
+| `local_scene`  | string              | **yes**  | —       | Scene slug to activate in this area. |
+| `remote_scene` | string \| `null`    | no       | `null`  | Scene slug to force on the remote area. `null` leaves the remote alone. |
 
 ### Leader/follower rules
 
