@@ -166,7 +166,10 @@ readable companion that highlights user-facing changes.
   Repairs issue listing each such remote, with how to find its current
   device id. Device ids change when a device is re-added, and Home
   Assistant 2026.8 gave new ids to devices shared by several integrations.
-  The issue clears once every configured remote exists.
+  A remote still configured with its pre-split id is reported too, although
+  Home Assistant 2026.9 resolves that id to a composite device, because
+  button events carry the new id. The issue clears once every configured
+  remote exists.
 
 - **Scenes with color failed to activate.** A snapshot from
   `area_lighting.snapshot_scene` stores every color value the light reports

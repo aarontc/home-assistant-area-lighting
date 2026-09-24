@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, mock_device_registry
 
 from custom_components.area_lighting.const import DOMAIN
 from custom_components.area_lighting.event_handlers import async_validate_lutron_remotes
@@ -98,6 +98,35 @@ async def test_correcting_remote_id_clears_issue(hass: HomeAssistant) -> None:
     remote.id = _register_remote(hass)
     assert await async_validate_lutron_remotes(hass, config) == []
     assert registry.async_get_issue(DOMAIN, "lutron_remotes_missing") is None
+
+
+@pytest.mark.integration
+async def test_remote_on_a_pre_split_device_id_is_missing(hass: HomeAssistant) -> None:
+    """Home Assistant 2026.8 split devices shared by several integrations.
+    2026.9 still resolves the old id to a synthesized composite device, but
+    button events carry the split device's id, so the old id is stale."""
+    entry = MockConfigEntry(domain="lutron_caseta")
+    entry.add_to_hass(hass)
+    split = dr.DeviceEntry(
+        id="split_device",
+        config_entry_id=entry.entry_id,
+        identifiers={("lutron_caseta", "x")},
+        composite_device_id="pre_split_device",
+    )
+    mock_device_registry(hass, {split.id: split})
+    # A plain lookup still finds the old id; the check must not trust it.
+    assert dr.async_get(hass).async_get("pre_split_device") is not None
+
+    area = AreaConfig(
+        id="network_room",
+        name="Network Room",
+        lutron_remotes=[LutronRemoteConfig(id="pre_split_device", name="Entry Remote")],
+    )
+    config = AreaLightingConfig(areas=[area])
+    assert await async_validate_lutron_remotes(hass, config) == ["pre_split_device"]
+
+    area.lutron_remotes[0].id = "split_device"
+    assert await async_validate_lutron_remotes(hass, config) == []
 
 
 @pytest.mark.integration
