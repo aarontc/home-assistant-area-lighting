@@ -395,6 +395,8 @@ async def test_dim_up_from_dark_survives_the_armed_selfcheck(
     await hass.async_block_till_done()
 
     service_calls.clear()
+    # Fire the armed check now rather than waiting for its timer.
+    ctrl._heal_selfcheck_handle.cancel()
     ctrl._run_post_settle_selfcheck()
     await hass.async_block_till_done()
 

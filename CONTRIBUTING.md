@@ -6,12 +6,12 @@ ones GitLab CI runs.
 
 ## Prerequisites
 
-You only need **Dagger** on your `PATH`. Dagger spins up a Python 3.13
+You only need **Dagger** on your `PATH`. Dagger spins up a Python 3.14
 container, installs `uv`, and runs everything inside it — so you don't need
 Python, `uv`, `ruff`, `mypy`, or `pytest` installed on your host.
 
 - Dagger: `v0.20.5` (see `.tool-versions`)
-  - Install: <https://docs.dagger.io/install> or `asdf install` if you use asdf
+  - Install: <https://docs.dagger.io/install> or `mise install`, which reads `.tool-versions`
 - Docker (or another OCI runtime) must be running for Dagger to spin up containers
 
 ## Running the full check suite
@@ -38,6 +38,22 @@ commit.
 
 The first run of each pulls the Python image; subsequent runs reuse the cached
 `uv` volume and are much faster.
+
+## Updating dependencies
+
+`uv.lock` must resolve from PyPI alone, the only index CI has. If your shell
+sets `UV_INDEX_URL` or `UV_EXTRA_INDEX_URL`, unset them for the lock. From the
+repository root:
+
+```sh
+env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL uv lock --upgrade
+```
+
+When moving to a new Home Assistant release, raise the
+`pytest-homeassistant-custom-component` and `homeassistant-stubs` floors in
+`pyproject.toml`. Keep `.python-version`, the `python` line in
+`.tool-versions` and the `uv:python3.x` image in `dagger/main.go` on the
+Python version that release requires.
 
 ## Git hooks
 

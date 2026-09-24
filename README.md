@@ -1072,9 +1072,11 @@ uv sync --extra dev
 uv run pytest -n auto
 ```
 
-`-n auto` runs tests in parallel via `pytest-xdist`. The component
-pins `python 3.13` via `.python-version` because newer Python versions
-may not have compatible `pytest-homeassistant-custom-component` releases.
+`-n auto` runs tests in parallel via `pytest-xdist`. `.python-version`
+pins Python 3.14, which Home Assistant 2026.3 and later require. Ruff
+still targets Python 3.13 (`target-version` in `pyproject.toml`) so the
+component keeps loading on the older Home Assistant releases that
+`hacs.json` allows.
 
 If tests fail with import errors from `homeassistant.*`, bump
 `pytest-homeassistant-custom-component` in `pyproject.toml` to match

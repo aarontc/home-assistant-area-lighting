@@ -2,7 +2,7 @@
 name = "area-lighting"
 version = "1.2.0"
 description = "Area Lighting – Home Assistant custom component for multi-scene, motion-aware room lighting"
-requires-python = ">=3.13.2"
+requires-python = ">=3.14.2"
 dependencies = []
 
 [project.optional-dependencies]
@@ -11,10 +11,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-xdist>=3",
     "pytest-cov>=6",
-    "pytest-homeassistant-custom-component>=0.13",
+    "pytest-homeassistant-custom-component>=0.13.366",
     "ruff>=0.11",
     "mypy>=1.15",
-    "homeassistant-stubs>=2025.5",
+    "homeassistant-stubs>=2026.9.3",
 ]
 
 [tool.pytest.ini_options]
@@ -27,8 +27,14 @@ markers = [
 ]
 
 [tool.ruff]
+# The component must still load on the oldest Home Assistant in hacs.json
+# (2025.5, Python 3.13) even though development runs on 3.14. Raising this
+# lets ruff emit 3.14-only syntax such as unparenthesized `except A, B:`.
 target-version = "py313"
 line-length = 100
+# Design notes quote code fragments that are not meant to be runnable, and
+# ruff 0.16 formats Python blocks inside Markdown.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = [
@@ -55,7 +61,7 @@ ignore = [
 "custom_components/area_lighting/conftest.py" = ["S101", "T20"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 check_untyped_defs = true

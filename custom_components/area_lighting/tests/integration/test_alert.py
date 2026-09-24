@@ -86,6 +86,8 @@ async def test_selfcheck_armed_by_the_scene_does_not_fight_an_alert(
     await hass.async_block_till_done()
 
     service_calls.clear()
+    # Fire the armed check now rather than waiting for its timer.
+    ctrl._heal_selfcheck_handle.cancel()
     ctrl._run_post_settle_selfcheck()
     await hass.async_block_till_done()
 

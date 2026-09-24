@@ -2026,10 +2026,8 @@ class AreaLightingController:
         glitch that landed *during* the fade (which the event path ignores as
         'still settling'). Superseded by the next scene command.
 
-        Uses loop.call_later (like TimerHandle) rather than the HA
-        async_call_later helper, so this one-shot check is not flagged by the
-        test harness's lingering-timer guard and matches this component's
-        existing timer pattern.
+        Uses loop.call_later, like TimerHandle, to match this component's
+        existing timer pattern. `shutdown()` cancels it.
         """
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()

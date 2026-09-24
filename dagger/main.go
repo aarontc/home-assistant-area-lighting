@@ -23,10 +23,10 @@ type AreaLighting struct {
 	Source *dagger.Directory
 }
 
-// base returns a Python 3.13 container with uv and dev dependencies installed.
+// base returns a Python 3.14 container with uv and dev dependencies installed.
 func (m *AreaLighting) base() *dagger.Container {
 	return dag.Container().
-		From("ghcr.io/astral-sh/uv:python3.13-bookworm").
+		From("ghcr.io/astral-sh/uv:python3.14-trixie").
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("uv-cache")).
 		WithDirectory("/src", m.Source).
 		WithWorkdir("/src").
@@ -62,7 +62,7 @@ func (m *AreaLighting) Test(ctx context.Context) (string, error) {
 // (and therefore the latest HA core). Used for nightly CI.
 func (m *AreaLighting) TestLatest(ctx context.Context) (string, error) {
 	return dag.Container().
-		From("ghcr.io/astral-sh/uv:python3.13-bookworm").
+		From("ghcr.io/astral-sh/uv:python3.14-trixie").
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("uv-cache")).
 		WithDirectory("/src", m.Source).
 		WithWorkdir("/src").
