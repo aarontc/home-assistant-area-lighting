@@ -55,6 +55,12 @@ When moving to a new Home Assistant release, raise the
 `.tool-versions` and the `uv:python3.x` image in `dagger/main.go` on the
 Python version that release requires.
 
+To move to a new Dagger release, change the `dagger` line in `.tool-versions`,
+run `dagger develop`, and update `DAGGER_PINNED_VERSION` and the two
+`DAGGER_SHA256_LINUX_*` hashes in `.gitlab-ci.yml` from that release's
+`checksums.txt`. CI refuses to install a Dagger version whose hash is not
+pinned.
+
 ## Git hooks
 
 Two hooks live in `hooks/`:

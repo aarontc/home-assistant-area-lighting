@@ -28,11 +28,35 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "schedule"
 
-# Install Dagger CLI (version from .tool-versions)
+variables:
+  # The Dagger release in .tool-versions and the SHA-256 of its Linux
+  # tarballs, copied from that release's checksums.txt. Dagger publishes no
+  # signatures, so the pinned hash is the integrity check. Bump all three
+  # together with .tool-versions.
+  DAGGER_PINNED_VERSION: "0.21.9"
+  DAGGER_SHA256_LINUX_AMD64: "33eea0b08d6be444bada18e64b2216459100d6070abcb4b5345cee40c9fff982"
+  DAGGER_SHA256_LINUX_ARM64: "3bc8334ccde404f66f0a8e29807e4327c7893990c3211691680c5f07f8273f3a"
+
+# Install the Dagger CLI named in .tool-versions, verifying the download
+# against the pinned hash before anything runs it.
 .dagger-setup: &dagger-setup
   - apk add --no-cache curl
-  - DAGGER_VERSION=$(grep '^dagger ' .tool-versions | awk '{print $2}')
-  - curl -fsSL https://dl.dagger.io/dagger/install.sh | BIN_DIR=/usr/local/bin DAGGER_VERSION=$DAGGER_VERSION sh
+  - |
+    set -eu
+    DAGGER_VERSION=$(grep '^dagger ' .tool-versions | awk '{print $2}')
+    if [ "$DAGGER_VERSION" != "$DAGGER_PINNED_VERSION" ]; then
+      echo "Dagger $DAGGER_VERSION in .tool-versions has no pinned hash (pinned: $DAGGER_PINNED_VERSION)" >&2
+      exit 1
+    fi
+    case "$(uname -m)" in
+      x86_64) arch=amd64; sha=$DAGGER_SHA256_LINUX_AMD64 ;;
+      aarch64) arch=arm64; sha=$DAGGER_SHA256_LINUX_ARM64 ;;
+      *) echo "No pinned Dagger hash for $(uname -m)" >&2; exit 1 ;;
+    esac
+    tarball="dagger_v${DAGGER_VERSION}_linux_${arch}.tar.gz"
+    curl -fsSLo "/tmp/$tarball" "https://dl.dagger.io/dagger/releases/${DAGGER_VERSION}/${tarball}"
+    echo "$sha  /tmp/$tarball" | sha256sum -c -
+    tar -xzf "/tmp/$tarball" -C /usr/local/bin dagger
 
 check:
   stage: check
