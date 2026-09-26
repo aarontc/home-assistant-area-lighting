@@ -875,6 +875,32 @@ An area configuration generally needs to define:
 This README intentionally describes behavior first. The exact YAML or storage format can evolve as long
 as these behavioral guarantees remain true.
 
+## Entity visibility
+
+Each area gets its scenes, five switches, six timeout and fadeout numbers, a
+`last_scene` select and an `occupied` binary sensor. All of them register
+hidden, as does `sensor.area_lighting_diagnostics`, so the dashboards Home
+Assistant generates by itself (the default Overview, the legacy Overview and
+the Areas dashboard) leave them out. The three global master switches below
+stay visible. Hidden entities still work in automations, scripts, remotes and
+any card you add by hand, and they still appear on the area's page under
+Settings → Areas.
+
+To show one, open it from Settings → Devices & services → Entities, click the
+gear icon, turn on **Visible** and click **Update**. To show several at once,
+select them in that table and choose **Unhide selected**.
+
+Home Assistant treats hidden entities differently in two other places. An
+action aimed at an area, device or label skips them, so `switch.turn_off`
+targeting the Kitchen area leaves `switch.kitchen_motion_light_enabled` alone.
+Home Assistant does not expose a newly registered hidden entity to voice
+assistants. An entity it already exposed keeps its current setting.
+
+Home Assistant applies the hidden default only when it first registers an
+entity. So that existing installs match, the first start after upgrading
+hides every entity an earlier release registered, except the global master
+switches. It runs once, so an entity you un-hide later stays visible.
+
 ## Global master switches
 
 The integration creates three global master switches of its own — no helpers
@@ -1048,9 +1074,11 @@ work:
 7. **ConfigEntry-based integration.** Convert from YAML-only setup to
    a ConfigFlow-based integration. This would let the component register
    a proper HA "device" per area, so Settings → Devices → <Area> →
-   Create dashboard produces a complete Lovelace card automatically.
+   Create dashboard produces a Lovelace card automatically.
    Today entities are grouped via HA *areas* (Settings → Areas), which
    also supports dashboard auto-generation but is a different UX path.
+   Either way, generated cards leave out hidden entities, and per-area
+   entities register hidden (see [Entity visibility](#entity-visibility)).
 
 ## Testing
 

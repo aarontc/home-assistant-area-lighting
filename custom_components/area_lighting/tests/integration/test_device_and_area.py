@@ -1,8 +1,9 @@
-"""HA area assignment for auto-generated dashboards.
+"""HA area assignment for the component's entities.
 
 Every entity the component creates for an area must be assigned to the
-matching HA area in the area registry so the auto-generated area
-dashboard (Settings → Areas → <Area> → Create dashboard) includes them.
+matching HA area in the area registry. The entities register hidden
+(see test_entity_visibility.py), so an auto-generated area dashboard
+shows only the ones a user makes visible.
 
 Note: device registration (Settings → Devices) would also be nice, but
 requires the component to be a ConfigEntry-based integration — today
@@ -50,7 +51,7 @@ async def test_all_area_entities_assigned_to_ha_area(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
     """Every entity the component created must be assigned to the HA area
-    matching the area's name so HA's area dashboard includes them."""
+    matching the area's name."""
     area_reg = ar.async_get(hass)
     # Pre-create the HA area so the component's registration can find it
     ha_area = area_reg.async_get_or_create("Network Room")

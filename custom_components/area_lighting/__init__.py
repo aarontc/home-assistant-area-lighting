@@ -46,6 +46,9 @@ from .switch import GLOBAL_SWITCH_DEFS, SWITCH_DEFS, AreaLightingGlobalSwitch, A
 
 _LOGGER = logging.getLogger(__name__)
 
+# Registry option marking an entry the hidden default has been applied to.
+HIDDEN_DEFAULT_APPLIED = "hidden_default_applied"
+ENTITY_DOMAINS = ("binary_sensor", "number", "scene", "select", "sensor", "switch")
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -204,6 +207,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             await _register_helper_entities(hass)
         except Exception:
             _LOGGER.exception("Failed to register helper entities")
+        try:
+            _apply_hidden_default(hass)
+        except Exception:
+            _LOGGER.exception("Failed to hide entities registered by an earlier release")
         # Validate external entities (D10) — non-fatal, logs on failure
         try:
             await async_validate_external_entities(hass, area_config)
@@ -376,8 +383,9 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
             len(binary_sensors),
         )
 
-    # Assign every helper entity + its device to the matching HA area so
-    # HA's auto-generated area dashboard picks them up.
+    # Assign every helper entity to the matching HA area. They register
+    # hidden, so auto-generated dashboards show only the ones a user
+    # makes visible.
     await _assign_entities_to_ha_areas(
         hass, controllers, switches, selects, numbers, binary_sensors
     )
@@ -397,9 +405,8 @@ async def _assign_entities_to_ha_areas(
 
     Note: we don't also register an HA "device" per area because
     area_lighting is YAML-based — device_registry.async_get_or_create
-    requires a real ConfigEntry ID we don't have. Grouping via HA
-    areas is sufficient for the user's dashboard goal (Settings →
-    Areas → <Area> → Create dashboard).
+    requires a real ConfigEntry ID we don't have, so HA areas do the
+    grouping instead.
     """
     from homeassistant.helpers import area_registry as ar
     from homeassistant.helpers import entity_registry as er
@@ -426,6 +433,44 @@ async def _assign_entities_to_ha_areas(
                     entity.entity_id,
                     area_id=ha_area.id,
                 )
+
+
+def _apply_hidden_default(hass: HomeAssistant) -> None:
+    """Hide the entities an earlier release registered visible.
+
+    Every entity except the global switches sets
+    entity_registry_visible_default = False, but Home Assistant applies
+    that only when it first creates a registry entry. Each entry is
+    handled once and marked in its registry options, which are saved in
+    the same registry write as hidden_by, so an entity the user un-hides
+    afterwards stays visible.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    entity_reg = er.async_get(hass)
+    global_switch_ids = {uid for _flag, _name, _icon, uid, _eid in GLOBAL_SWITCH_DEFS}
+    hidden = 0
+    for entry in list(entity_reg.entities.values()):
+        if (
+            entry.domain not in ENTITY_DOMAINS
+            # Entities added straight to a domain's EntityComponent get a
+            # platform named after the domain.
+            or entry.platform != entry.domain
+            or not entry.unique_id.startswith("area_lighting_")
+            or (entry.domain == "switch" and entry.unique_id in global_switch_ids)
+            or HIDDEN_DEFAULT_APPLIED in entry.options.get(DOMAIN, {})
+        ):
+            continue
+        if entry.hidden_by is None:
+            entity_reg.async_update_entity(
+                entry.entity_id, hidden_by=er.RegistryEntryHider.INTEGRATION
+            )
+            hidden += 1
+        entity_reg.async_update_entity_options(
+            entry.entity_id, DOMAIN, {HIDDEN_DEFAULT_APPLIED: True}
+        )
+    if hidden:
+        _LOGGER.info("Hid %d entities registered by an earlier release", hidden)
 
 
 async def _register_diagnostic_sensor(hass: HomeAssistant) -> None:

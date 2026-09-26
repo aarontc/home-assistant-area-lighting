@@ -69,6 +69,8 @@ async def async_setup_platform(
 class AreaLightingScene(Scene):
     """A scene entity backed by stored snapshot data or skeleton defaults."""
 
+    _attr_entity_registry_visible_default = False
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -265,6 +267,8 @@ class BehavioralScene(Scene):
     Used for off and circadian scenes so they can be triggered via scene.turn_on
     by external integrations.
     """
+
+    _attr_entity_registry_visible_default = False
 
     def __init__(
         self,

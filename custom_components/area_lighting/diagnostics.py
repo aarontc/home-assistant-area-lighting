@@ -33,6 +33,7 @@ class AreaLightingDiagnosticSensor(SensorEntity):
 
     _attr_should_poll = False
     _attr_icon = "mdi:bug-outline"
+    _attr_entity_registry_visible_default = False
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass

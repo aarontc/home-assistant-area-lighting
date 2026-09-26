@@ -45,6 +45,8 @@ class _BaseAreaNumber(NumberEntity):
     the underlying controller property.
     """
 
+    _attr_entity_registry_visible_default = False
+
     def __init__(self, controller: AreaLightingController) -> None:
         self._controller = controller
 

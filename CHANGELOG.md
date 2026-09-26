@@ -130,6 +130,20 @@ readable companion that highlights user-facing changes.
   declares 2026.3.0 as the minimum, and the component uses Python 3.14
   syntax, which older Home Assistant releases (Python 3.13) cannot load.
 
+- **Per-area entities and the diagnostics sensor are hidden by default.**
+  Each area's scenes, switches, numbers, `last_scene` select and `occupied`
+  binary sensor register hidden, as does `sensor.area_lighting_diagnostics`,
+  so the dashboards Home Assistant generates by itself (the default Overview,
+  the legacy Overview and the Areas dashboard) no longer list a dozen or more
+  of them per area. The global master switches stay visible. Hidden entities
+  work as before in automations, scripts and hand-built dashboards. Un-hide
+  one from its entity settings (**Visible**). Hidden entities also drop out of
+  area, device and label targets, so an action aimed at an area no longer
+  flips that area's `area_lighting` switches, and they are not exposed to
+  voice assistants by default. On upgrade, the first start hides the entities
+  an earlier release registered, once, so an entity you un-hide afterwards
+  stays visible. See README § "Entity visibility".
+
 - **Development and CI moved to Python 3.14 and Home Assistant 2026.9.3.**
   Tests, lint and type checks now run against `pytest-homeassistant-custom-component`
   0.13.366, ruff 0.16 and mypy 2.3, and `uv.lock` resolves from PyPI only.
