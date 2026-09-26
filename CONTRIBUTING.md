@@ -10,7 +10,7 @@ You only need **Dagger** on your `PATH`. Dagger spins up a Python 3.14
 container, installs `uv`, and runs everything inside it — so you don't need
 Python, `uv`, `ruff`, `mypy`, or `pytest` installed on your host.
 
-- Dagger: `v0.21.9` (see `.tool-versions`)
+- Dagger: `v0.21.8` (see `.tool-versions`)
   - Install: <https://docs.dagger.io/install> or `mise install`, which reads `.tool-versions`
 - Docker (or another OCI runtime) must be running for Dagger to spin up containers
 
@@ -60,6 +60,14 @@ run `dagger develop`, and update `DAGGER_PINNED_VERSION` and the two
 `DAGGER_SHA256_LINUX_*` hashes in `.gitlab-ci.yml` from that release's
 `checksums.txt`. CI refuses to install a Dagger version whose hash is not
 pinned.
+
+The GitLab runner connects jobs to its own shared Dagger engine (v0.21.8 as
+of September 2026) rather than starting one per job. `dagger.json`'s
+`engineVersion` must not be newer than that engine, or every job fails with
+`module requires dagger vX, but you have vY`. A CLI from an older minor
+release fails too (`unknown command "all"`), which is what broke `main` from
+August 2026. Check the engine version in any job log (`server-version=`)
+before bumping, and upgrade the runner's engine first if needed.
 
 ## Git hooks
 

@@ -14,9 +14,9 @@ variables:
   # tarballs, copied from that release's checksums.txt. Dagger publishes no
   # signatures, so the pinned hash is the integrity check. Bump all three
   # together with .tool-versions.
-  DAGGER_PINNED_VERSION: "0.21.9"
-  DAGGER_SHA256_LINUX_AMD64: "33eea0b08d6be444bada18e64b2216459100d6070abcb4b5345cee40c9fff982"
-  DAGGER_SHA256_LINUX_ARM64: "3bc8334ccde404f66f0a8e29807e4327c7893990c3211691680c5f07f8273f3a"
+  DAGGER_PINNED_VERSION: "0.21.8"
+  DAGGER_SHA256_LINUX_AMD64: "53e226c7da8fb75171e58c35759d736d961ce8b3a12db0baa7b7107954fccc5a"
+  DAGGER_SHA256_LINUX_ARM64: "cd0df4885f2050082932b4abc5a6aad9a733f6aa4e7d8474740558517ffec4af"
 
 # Suppress pipeline creation entirely for events that would otherwise show
 # up as "skipped" pipelines — those break the status badge because it
