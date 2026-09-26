@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
+
 import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import slugify
 
 from .const import (
     ALL_ROLES,
@@ -38,13 +41,23 @@ CIRCADIAN_SWITCH_SCHEMA = vol.Schema(
     }
 )
 
+
+def _validate_quoted_string(value: object) -> str:
+    """Reject YAML booleans before converting values to strings."""
+    if isinstance(value, bool):
+        raise vol.Invalid(
+            'YAML boolean values must be quoted, for example id: "off" or name: "Off"'
+        )
+    return cv.string(value)
+
+
 LIGHT_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.entity_id,
         vol.Optional("circadian_switch"): cv.string,
         vol.Optional("circadian_type"): vol.In([CIRCADIAN_CT, CIRCADIAN_BRIGHTNESS, CIRCADIAN_RGB]),
         vol.Optional("roles", default=[]): vol.All(cv.ensure_list, [vol.In(ALL_ROLES)]),
-        vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [_validate_quoted_string]),
         # Cluster members — if set, this LightConfig represents a Hue Zone
         # or similar batch target. Scene dispatch will coalesce per-light
         # commands into a single cluster command when all members share
@@ -71,12 +84,28 @@ SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
     }
 )
 
+
+# Area and scene ids become part of entity ids (switch.<area>_night_mode,
+# scene.<area>_<scene>), and Home Assistant rejects an entity id with a
+# leading, trailing or doubled underscore anywhere in it.
+# Home Assistant's object id pattern allows any Unicode digit (`\d`).
+_ID_PATTERN = re.compile(r"[\da-z]+(?:_[\da-z]+)*")
+_ID_RULE = "must be lowercase letters and digits separated by single underscores"
+
+
+def _validate_scene_id(value: str) -> str:
+    """Validate a scene id, which ends the scene's entity id."""
+    if not _ID_PATTERN.fullmatch(value):
+        raise vol.Invalid(f"scene id '{value}' {_ID_RULE}; use '{slugify(value) or 'scene'}'")
+    return value
+
+
 SCENE_SCHEMA = vol.Schema(
     {
-        vol.Required("id"): cv.string,
-        vol.Required("name"): cv.string,
+        vol.Required("id"): vol.All(_validate_quoted_string, _validate_scene_id),
+        vol.Required("name"): _validate_quoted_string,
         vol.Optional("group_exclude", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Optional("cycle"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("cycle"): vol.All(cv.ensure_list, [_validate_quoted_string]),
         # Per-light state data for the scene, keyed by entity_id.
         vol.Optional("entities"): {cv.entity_id: SCENE_ENTITY_STATE_SCHEMA},
         vol.Optional("icon"): cv.icon,
@@ -153,7 +182,9 @@ MOTION_LIGHT_CONDITION_SCHEMA = vol.All(
 
 LUTRON_BUTTON_OVERRIDES_SCHEMA = vol.Schema(
     {
-        vol.Optional("favorite"): vol.Any(cv.string, vol.All(cv.ensure_list, [cv.string])),
+        vol.Optional("favorite"): vol.Any(
+            _validate_quoted_string, vol.All(cv.ensure_list, [_validate_quoted_string])
+        ),
     }
 )
 
@@ -175,8 +206,8 @@ TIMER_DURATION_SCHEMA = vol.Schema(
 
 LINKED_MOTION_MAPPING_SCHEMA = vol.Schema(
     {
-        vol.Required("local_scene"): cv.string,
-        vol.Optional("remote_scene"): vol.Any(cv.string, None),
+        vol.Required("local_scene"): _validate_quoted_string,
+        vol.Optional("remote_scene"): vol.Any(None, _validate_quoted_string),
     }
 )
 
@@ -184,7 +215,9 @@ LINKED_MOTION_ENTRY_SCHEMA = vol.Schema(
     {
         vol.Required("remote_area"): cv.string,
         vol.Required("default"): LINKED_MOTION_MAPPING_SCHEMA,
-        vol.Optional("when_remote_scene", default={}): {cv.string: LINKED_MOTION_MAPPING_SCHEMA},
+        vol.Optional("when_remote_scene", default={}): {
+            _validate_quoted_string: LINKED_MOTION_MAPPING_SCHEMA
+        },
     }
 )
 
@@ -219,25 +252,43 @@ ALERT_PATTERN_SCHEMA = vol.Schema(
 )
 
 
+RESERVED_AREA_IDS = {
+    "global": "per-area switch unique ids collide with global master switch unique ids",
+    "area_lighting": "per-area switch entity ids collide with global master switch entity ids",
+    "all": "area_lighting.alert treats area_id 'all' as every area",
+}
+
+
 def _validate_area_id(value: str) -> str:
-    """Reject area ids in the reserved double-underscore namespace.
+    """Validate an area id's syntax and reject reserved ids.
 
     Persisted state keys share a flat namespace with area ids; keys
     beginning with a double underscore (such as GLOBAL_STATE_KEY,
     "__global__") are reserved for internal storage, so an area id
-    there would cross-write area and internal state.
+    there would cross-write area and internal state. The ids in
+    RESERVED_AREA_IDS would collide with the global master switches or the
+    alert service's broadcast target.
     """
     if value.startswith("__"):
         raise vol.Invalid(
             f"area id '{value}' is reserved: ids beginning with '__' collide "
             f"with internal storage keys such as '{GLOBAL_STATE_KEY}'"
         )
+    if value in RESERVED_AREA_IDS:
+        raise vol.Invalid(
+            f"area id '{value}' is reserved: {RESERVED_AREA_IDS[value]}; use '{value}_area'"
+        )
+    if not _ID_PATTERN.fullmatch(value):
+        suggestion = slugify(value) or "room"
+        if suggestion in RESERVED_AREA_IDS:
+            suggestion += "_area"
+        raise vol.Invalid(f"area id '{value}' {_ID_RULE}; use '{suggestion}'")
     return value
 
 
 AREA_SCHEMA = vol.Schema(
     {
-        vol.Required("id"): vol.All(cv.string, _validate_area_id),
+        vol.Required("id"): vol.All(_validate_quoted_string, _validate_area_id),
         vol.Required("name"): cv.string,
         vol.Optional("enabled", default=True): cv.boolean,
         vol.Optional("event_handlers", default=True): cv.boolean,

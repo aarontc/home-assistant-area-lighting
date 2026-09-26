@@ -9,7 +9,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import (
+    MAJOR_VERSION,
+    MINOR_VERSION,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -60,6 +67,7 @@ def _config(hass: HomeAssistant) -> AreaLightingConfig:
 
 
 _REPAIRS_ISSUE_ID = "missing_external_entities"
+_LUTRON_REPAIRS_ISSUE_ID = "lutron_remotes_missing"
 
 
 def _build_circadian_switches_block(config: AreaLightingConfig) -> str:
@@ -266,6 +274,61 @@ async def async_validate_external_entities(
     else:
         # All entities present → clear any previous issue
         ir.async_delete_issue(hass, DOMAIN, _REPAIRS_ISSUE_ID)
+
+    return missing
+
+
+async def async_validate_lutron_remotes(
+    hass: HomeAssistant,
+    config: AreaLightingConfig,
+) -> list[str]:
+    """Warn about configured Lutron remotes missing from the device registry."""
+    from homeassistant.helpers import device_registry as dr
+    from homeassistant.helpers import issue_registry as ir
+
+    registry = dr.async_get(hass)
+    # From 2026.9, looking up the id of a device that 2026.8 split returns
+    # a synthesized composite device, but button events carry the id of the
+    # device it was split into, so a composite match is still stale.
+    skip_composites = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 9)
+    missing: list[str] = []
+    missing_lines: list[str] = []
+    for area in config.enabled_areas:
+        if not area.event_handlers:
+            continue
+        for remote in area.lutron_remotes:
+            device = (
+                registry.async_get(remote.id, include_composite_devices=False)
+                if skip_composites
+                else registry.async_get(remote.id)
+            )
+            if device is None:
+                missing.append(remote.id)
+                missing_lines.append(f"  - {area.name}: {remote.name} ({remote.id})")
+
+    if missing:
+        remote_list = "\n".join(missing_lines)
+        _LOGGER.warning(
+            "area_lighting: %d Lutron remotes are missing from the device registry. "
+            "Their button presses are being ignored:\n%s",
+            len(missing),
+            remote_list,
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            _LUTRON_REPAIRS_ISSUE_ID,
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=_LUTRON_REPAIRS_ISSUE_ID,
+            translation_placeholders={
+                "count": str(len(missing)),
+                "remote_list": remote_list,
+            },
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, _LUTRON_REPAIRS_ISSUE_ID)
 
     return missing
 

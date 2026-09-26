@@ -3,6 +3,7 @@
   "name": "Area Lighting",
   "codeowners": ["@aarontc"],
   "dependencies": [
+    "binary_sensor",
     "input_boolean",
     "input_select",
     "scene",

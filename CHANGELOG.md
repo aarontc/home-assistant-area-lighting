@@ -102,6 +102,30 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
+  The first two collide with global master switch unique ids and entity
+  ids, respectively, and `area_lighting.alert` reads `all` as every area.
+  Rename affected areas before restarting.
+
+- **BREAKING: Scene references reject unquoted YAML booleans.** An unquoted
+  `off` in a light's `scenes`, a `cycle` or Lutron `favorite` list, or a
+  `linked_motion` mapping used to become the scene id `False`. It now fails
+  validation; quote it as `"off"`. Apart from Lutron `favorite` overrides,
+  which must name declared scenes, references are not checked against the
+  area's declared scenes, because the integration can activate undeclared
+  ones, so when you rename an area or scene id, update what refers to it:
+  `lights[].scenes`, `linked_motion`, `leader_area_id`, `cycle` and Lutron
+  `favorite` lists.
+
+- **BREAKING: Area and scene ids must form valid entity ids.** Both become
+  part of entity ids (`switch.<area>_night_mode`, `scene.<area>_<scene>`),
+  which Home Assistant 2026.9 warns about when invalid and will reject from
+  2027.2. Use lowercase letters and digits separated by single underscores,
+  with no leading, trailing or doubled underscore. Unquoted `off`, `on`,
+  `yes` and `no` are YAML booleans, so area ids, scene ids and scene names
+  now reject them instead of silently becoming `False`. Quote them, as in
+  `id: "off"` and `name: "Off"`. The error names a valid id to use.
+
 - **BREAKING: Home Assistant 2026.3 or later is required.** `hacs.json` now
   declares 2026.3.0 as the minimum, and the component uses Python 3.14
   syntax, which older Home Assistant releases (Python 3.13) cannot load.
@@ -156,6 +180,22 @@ readable companion that highlights user-facing changes.
   makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **Occupied sensors could silently fail to load.** `manifest.json` did not
+  list `binary_sensor` as a dependency, so when no other integration loaded
+  it, every `binary_sensor.<area>_occupied` was skipped with only a log
+  warning. It is now a declared dependency.
+
+- **Lutron remotes with a stale device id failed silently.** A remote whose
+  `id` no longer matches a device in Home Assistant had its button presses
+  ignored with no sign of why. Startup now logs a warning and raises a
+  Repairs issue listing each such remote, with how to find its current
+  device id. Device ids change when a device is re-added, and Home
+  Assistant 2026.8 gave new ids to devices shared by several integrations.
+  A remote still configured with its pre-split id is reported too, although
+  Home Assistant 2026.9 resolves that id to a composite device, because
+  button events carry the new id. The issue clears once every configured
+  remote exists.
 
 - **Scenes with color failed to activate.** A snapshot from
   `area_lighting.snapshot_scene` stores every color value the light reports

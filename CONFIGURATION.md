@@ -74,7 +74,7 @@ entry in that list.
 
 | Key                         | Type                  | Required | Default | Notes |
 |-----------------------------|-----------------------|----------|---------|-------|
-| `id`                        | string                | **yes**  | —       | Unique area slug. Used to form entity IDs (`scene.{id}_{slug}`, `switch.{id}_motion_light_enabled`, etc.) — keep it snake_case. Ids beginning with `__` are reserved for internal storage keys and are rejected. |
+| `id`                        | string                | **yes**  | —       | Unique area slug used to form entity ids, such as `scene.{id}_{slug}`. Use lowercase letters and digits separated by single underscores (no leading, trailing or doubled `_`), because Home Assistant rejects such entity ids. The `__` prefix is reserved for internal storage. `global` and `area_lighting` are reserved because they collide with global master switch unique ids and entity ids, respectively, and `all` because `area_lighting.alert` reads it as every area. Quote boolean-looking values, for example `id: "off"`. |
 | `name`                      | string                | **yes**  | —       | Human-readable label shown in the UI. |
 | `enabled`                   | boolean               | no       | `true`  | `false` parses the area but creates no controller, entities, or handlers. |
 | `event_handlers`            | boolean               | no       | `true`  | Wires motion/occupancy/remote/external-change listeners. Set to `false` only for areas you want to load quietly (test fixtures, transition states during migration) — disabling it turns the area into a no-op for most of what `area_lighting` does. |
@@ -134,7 +134,7 @@ light_clusters:
 |--------------------|-----------------------------------------|----------|---------|-------|
 | `id`               | entity_id                               | **yes**  | —       | HA entity id of the light (or zone/group for clusters). |
 | `roles`            | list of string                          | no       | `[]`    | Subset of `color`, `dimming`, `white`, `night`, `movie`, `christmas`, `plant`. Used for selective scene targeting. Unknown values rejected. |
-| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. |
+| `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. Slugs are not checked against the area's declared scenes, so update them when you rename a scene. |
 | `circadian_switch` | string                                  | no       | —       | Name of a circadian switch defined on this area. |
 | `circadian_type`   | `ct` \| `brightness` \| `rgb`           | no       | —       | How circadian control is applied. Only meaningful together with `circadian_switch`. |
 | `members`          | list of entity_id                       | no       | `[]`    | Populated only on `light_clusters` entries. Lists the physical lights inside the cluster. |
@@ -257,14 +257,14 @@ scenes:
       light.bedroom_main:
         brightness: 255
         color_temp_kelvin: 4000
-  - id: off
-    name: Off
+  - id: "off"
+    name: "Off"
 ```
 
 | Key             | Type                      | Required | Default | Notes |
 |-----------------|---------------------------|----------|---------|-------|
-| `id`            | string (slug)             | **yes**  | —       | Scene slug — unique within the area. Builds the entity id. |
-| `name`          | string                    | **yes**  | —       | Display label. |
+| `id`            | string (slug)             | **yes**  | —       | Scene slug, unique within the area, that ends the scene entity id. Use lowercase letters and digits separated by single underscores (no leading, trailing or doubled `_`). Quote boolean-looking values, for example `id: "off"`. |
+| `name`          | string                    | **yes**  | —       | Display label. Quote boolean-looking names, for example `name: "Off"`. |
 | `icon`          | MDI icon                  | no       | —       | Validated by `cv.icon`. |
 | `group_exclude` | list of entity_id         | no       | `[]`    | Lights that should **not** be affected when this scene activates. |
 | `cycle`         | list of scene slugs       | no       | —       | Defines a favorite-button cycle sequence. Parsed but not yet wired to the on-button cycler (tracked in `TODO.md`). |
@@ -272,12 +272,12 @@ scenes:
 
 #### Reserved scene slugs
 
-A handful of scene slugs have special semantics in the integration. They are **not implicit** — if you want the behavior, you must declare a scene with that slug (the integration only recognizes scenes you actually list here). Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
+A handful of scene slugs have special semantics in the integration. Every enabled area (other than one marked `special: global`) gets `scene.{area}_off` and `scene.{area}_circadian` entities whether or not it declares those scenes, and declaring one sets its display name. Declaring the other slugs below enables the behavior in the table. A few paths (the favorite button, ambient zones, holiday handling, circadian cycling) can also activate some of them undeclared, lighting the lights whose `scenes` list names the slug. Declaring `circadian` in every area is strongly recommended; the others are feature-gated.
 
 | Slug                   | Must declare? | Effect if declared |
 |------------------------|---------------|--------------------|
-| `circadian`            | Strongly recommended. Required if you want circadian behavior. Also the default scene that `linked_motion` falls back to (`controller.py:1448`) — areas with `linked_motion` configured but no `circadian` scene declared will error at activation time. | Picked as the "normal on" scene by the default-scene resolver and most state transitions. Gets default icon `mdi:theme-light-dark`. |
-| `off`                  | Strongly recommended. | Gives users a real scene entity to target for "turn area off". Without it, off transitions still work internally but there's no `scene.{area}_off` entity to call. |
+| `circadian`            | Strongly recommended. Required if you want the default-scene resolver to pick circadian. `linked_motion` can activate it either way. | Picked as the "normal on" scene by the default-scene resolver and most state transitions. Gets default icon `mdi:theme-light-dark`. |
+| `off`                  | Optional. | `scene.{area}_off` exists either way and off transitions work either way; declaring `off` only sets the entity's display name. |
 | `night`                | Only if using night mode. | Selected automatically when night mode is active; targeted by lights with the `night` role. |
 | `ambient`              | Only if using ambient zones. | Activated by `ambient_lighting_zone` gating. |
 | `daylight` + `evening` | Only as an alternative to `circadian`. Must declare **both together**. | The scene-machine uses them as a sun-position-driven fallback when `circadian` is not declared (`scene_machine.py:71-72`). |
@@ -292,7 +292,7 @@ Pico remotes associated with this area.
 
 ```yaml
 lutron_remotes:
-  - id: bedroom_bedside
+  - id: 9f2b1c0e4d5a6b7c8d9e0f1a2b3c4d5e
     name: Bedside Pico
     buttons:
       favorite:
@@ -302,7 +302,7 @@ lutron_remotes:
 
 | Key                  | Type                                         | Required | Default | Notes |
 |----------------------|----------------------------------------------|----------|---------|-------|
-| `id`                 | string                                       | **yes**  | —       | Matches the remote identifier used by `lutron_caseta` events. |
+| `id`                 | string                                       | **yes**  | —       | The remote's Home Assistant device id (32 hex characters), the `device_id` in `lutron_caseta_button_event`. Find it in the URL of the remote's page under Settings → Devices & services → Devices. A missing device raises a startup warning. |
 | `name`               | string                                       | **yes**  | —       | Human label for logs/UI. |
 | `additional_actions` | dict                                         | no       | `{}`    | Free-form map of extra button→action hooks consumed by `event_handlers.py`. Not validated by this schema. |
 | `buttons`            | dict                                         | no       | `{}`    | Per-button overrides (currently only `favorite`). |
@@ -410,7 +410,7 @@ linked_motion:
 |---------------------|---------------------------------------------|----------|---------|-------|
 | `remote_area`       | string                                      | **yes**  | —       | `id` of the area whose motion drives this link. |
 | `default`           | [linked mapping](#linked-motion-mapping)    | **yes**  | —       | Applied when the remote area's scene doesn't match any `when_remote_scene` entry. |
-| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings. |
+| `when_remote_scene` | `{scene_slug: mapping}`                     | no       | `{}`    | Scene-specific override mappings, keyed by the remote area's current scene. That is `manual` while the remote area is in manual mode. |
 
 #### Linked motion mapping
 
@@ -448,11 +448,11 @@ alert_patterns:
     restore: true
     steps:
       - target: all
-        state: on
+        state: "on"
         brightness: 255
         rgb_color: [255, 0, 0]
       - target: all
-        state: off
+        state: "off"
         delay: 0.5
 ```
 
@@ -532,11 +532,11 @@ area_lighting:
             light.bedroom_nightstand:
               brightness: 40
               rgb_color: [255, 80, 0]
-        - id: off
-          name: Off
+        - id: "off"
+          name: "Off"
 
       lutron_remotes:
-        - id: bedroom_bedside
+        - id: 9f2b1c0e4d5a6b7c8d9e0f1a2b3c4d5e
           name: Bedside Pico
           buttons:
             favorite: [reading, night]
@@ -568,8 +568,8 @@ area_lighting:
           name: Circadian
         - id: night
           name: Night
-        - id: off
-          name: Off
+        - id: "off"
+          name: "Off"
 
       # When the bedroom senses motion and goes to `night`, follow it.
       linked_motion:
@@ -586,11 +586,11 @@ area_lighting:
       restore: true
       steps:
         - target: all
-          state: on
+          state: "on"
           brightness: 255
           rgb_color: [0, 128, 255]
         - target: all
-          state: off
+          state: "off"
           delay: 0.4
 ```
 
