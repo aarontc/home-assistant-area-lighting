@@ -102,6 +102,21 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **GitHub releases are now published by GitLab CI, not GitHub Actions** —
+  packaging only; no effect on the integration itself. GitHub is in the
+  release chain purely because HACS installs from there, and the old path
+  depended on the push mirror's tag landing triggering a GitHub Actions
+  workflow. That trigger proved intermittent: it fired for v1.1.1 and
+  silently did not for v1.2.0, leaving a tag with no release, no failed job
+  and no notification, so HACS users simply never saw the version. The
+  `release:github` job now publishes from the same pipeline that creates the
+  tag, waiting for the mirror and verifying the tag resolves to the expected
+  commit first (GitHub's API will otherwise invent a missing tag from the
+  default branch tip and release the wrong commit). A scheduled
+  `release:audit` job fails loudly on any tag still missing a release.
+  Release notes now also exclude merge commits. Requires a new
+  `GITHUB_RELEASE_TOKEN` CI/CD variable; see CONTRIBUTING.md.
+
 - **A dark area now dims back up into the scene it was last showing, on that
   scene's lights only** — turning an area off used to forget its scene, so
   raising or lowering a dark room restored the area's default on-scene instead

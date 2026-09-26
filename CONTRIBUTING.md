@@ -127,26 +127,83 @@ dagger call create-tag \
 
 ### Publishing GitHub releases
 
-GitHub is a push mirror of this GitLab project. The
-`.github/workflows/release.yaml` workflow ("Publish GitHub releases")
-turns each `vX.Y.Z` tag into a GitHub Release, building the notes from the
-`(Major)/(Minor)/(Patch)` commit subjects in that tag's range. It runs on
-three triggers:
+GitHub is a push mirror of this GitLab project, and is in the release chain
+only because HACS installs from there. GitLab stays the source of truth and
+now drives the release too: the `release:github` job runs in the `release`
+stage of the same `main` pipeline that tagged the version, and publishes a
+GitHub Release for every `vX.Y.Z` tag that does not already have one. Notes
+are built from the `(Major)/(Minor)/(Patch)` commit subjects in that tag's
+range, with merge commits and the automated version-bump commit excluded.
 
-- **`push` of a `v*` tag** (normal path) - the mirror pushes new tags to
-  GitHub, and that push fires the workflow, so the release lands within the
-  mirror's sync window (~1-5 min).
-- **`schedule`** (twice a day; GitHub throttles scheduled runs on
-  low-activity repos to ~once per 75 min anyway) - a safety net that
-  publishes any tag still missing a release.
-- **`workflow_dispatch`** - manual run; pass a `tag` (and `replace: true`)
-  to (re)publish a specific release.
+For this to work, a **project CI/CD variable `GITHUB_RELEASE_TOKEN`** must
+be set to a GitHub token with **`contents: write`** on the mirror
+repository. A fine-grained personal access token scoped to that single
+repository is the least-privilege option. Mark the variable **Masked** and
+**Protected**. The mirror repository itself is set in `.gitlab-ci.yml` as
+`GITHUB_MIRROR_REPO`, so it needs no UI configuration.
 
-The publish step is idempotent (existing releases are skipped) and the job
-is serialized via a `concurrency` group, so the overlapping triggers never
-double-publish.
+The job waits for the push mirror to carry the new tag to GitHub (up to 10
+minutes) and checks that the tag resolves to the same commit GitLab has,
+before publishing. That check is not ceremony: GitHub's create-release API
+will invent a missing tag from the default branch tip, so publishing
+without it could point a release at the wrong commit whenever the mirror
+lagged. If the tag never arrives, the job fails — which is the signal that
+the mirror is broken.
+
+Because it scans every tag rather than just the newest, the job also
+back-fills anything previously missed, and is idempotent: tags that already
+have a release are skipped.
+
+`release:audit` is the safety net. It performs the same scan with
+`--check-only`, reporting and **failing** on any tag without a release
+instead of publishing it. That covers the case where `release:github` never
+ran at all (pipeline cancelled, runner outage, a hand-made tag), and makes
+the gap visible rather than letting it sit unnoticed.
+
+> **A pipeline schedule must exist for the audit — and for `nightly` — to
+> run at all.** Neither runs on pushes. Create one under **Build → Pipeline
+> schedules** targeting `main`; daily is plenty. Without a schedule both
+> jobs are simply inert, with nothing to indicate it.
+
+Scheduled pipelines are branch pipelines, so `CI_COMMIT_BRANCH` is set to
+`main` on them. `tag:auto` and `release:github` therefore carry an explicit
+`when: never` for `$CI_PIPELINE_SOURCE == "schedule"`. Without it `tag:auto`
+would run on every scheduled pipeline and fail with "no commits since
+&lt;tag&gt;" whenever `main` is already sitting on the last release's bump
+commit — and because a failed job skips all later stages, that failure would
+take `release:audit` and `nightly` down with it on precisely the quiet nights
+they exist for. A scheduled pipeline runs `check`, then `release:audit`, then
+`nightly`.
+
+You can run either locally:
+
+```sh
+export GITHUB_TOKEN=github_pat_…
+dagger call publish-github-releases \
+    --source=. \
+    --repo=aarontc/home-assistant-area-lighting \
+    --token=env:GITHUB_TOKEN \
+    --gitlab-project-url=https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting
+
+# audit only; needs no token against a public repository
+dagger call publish-github-releases \
+    --source=. \
+    --repo=aarontc/home-assistant-area-lighting \
+    --check-only=true
+```
+
+Note that `--source=.` needs a real `.git` directory, so this does not work
+from inside a `git worktree` (where `.git` is a file pointing elsewhere) —
+run it from a normal clone.
 
 The mirror must authenticate over **SSH** (deploy key). An HTTPS personal
 access token would need the `workflow` scope just to push changes under
-`.github/workflows/`, and tag pushes made with such a token may not
-reliably trigger Actions; SSH avoids both problems.
+`.github/workflows/`; SSH avoids that.
+
+**Why this does not use GitHub Actions.** Publishing used to be a GitHub
+Actions workflow triggered by the mirror's tag push. Deploy-key pushes are
+exempt from GitHub's recursion guard, so that trigger should be reliable —
+but in practice it fired for v1.1.1 and silently did not for v1.2.0,
+leaving a tag on GitHub with no release, no failed job, and no notification.
+An intermittent trigger with no failure signal is worse than no trigger at
+all, so the release moved to the pipeline that already owns tagging.
