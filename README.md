@@ -18,6 +18,8 @@ device-specific logic with one consistent behavioral model.
 
 ## Getting Started
 
+Area Lighting requires Home Assistant 2026.3 or later.
+
 ### Installation via HACS
 
 1. Open HACS in your Home Assistant instance.
@@ -1072,9 +1074,9 @@ uv sync --extra dev
 uv run pytest -n auto
 ```
 
-`-n auto` runs tests in parallel via `pytest-xdist`. The component
-pins `python 3.13` via `.python-version` because newer Python versions
-may not have compatible `pytest-homeassistant-custom-component` releases.
+`-n auto` runs tests in parallel via `pytest-xdist`. `.python-version`
+pins Python 3.14, which Home Assistant 2026.3 and later require. That is
+also the oldest release `hacs.json` allows.
 
 If tests fail with import errors from `homeassistant.*`, bump
 `pytest-homeassistant-custom-component` in `pyproject.toml` to match

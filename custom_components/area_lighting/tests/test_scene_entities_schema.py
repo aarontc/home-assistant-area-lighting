@@ -48,6 +48,17 @@ def test_scene_with_hs_color_passes():
     )
 
 
+def test_scene_with_mired_color_temp_is_coerced_to_int():
+    scene = SCENE_SCHEMA(_scene({"light.a": {"state": "on", "color_temp": "370"}}))
+    assert scene["entities"]["light.a"]["color_temp"] == 370
+
+
+@pytest.mark.parametrize("mired", [0, -5, "warm"])
+def test_scene_rejects_invalid_mired_color_temp(mired):
+    with pytest.raises(vol.Invalid):
+        SCENE_SCHEMA(_scene({"light.a": {"state": "on", "color_temp": mired}}))
+
+
 def test_scene_off_state_passes():
     SCENE_SCHEMA(_scene({"light.theater_center": {"state": "off"}}))
 

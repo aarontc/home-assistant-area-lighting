@@ -40,7 +40,7 @@ def read_source_colortemp(hass: HomeAssistant, source: str) -> float | None:
         return None
     try:
         return float(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

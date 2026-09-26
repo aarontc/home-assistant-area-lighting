@@ -43,12 +43,10 @@ No em dashes in commit messages: use commas, colons, or parentheses.
 
 The `tag:auto` CI job on `main` reads commit subjects, computes the next
 version, writes `release: bump version to X.Y.Z` as its own commit, and
-tags. **Do not manually edit `pyproject.toml` / `manifest.json` /
-`uv.lock` versions** in content commits: it makes the bot's bump commit
-redundant and leaves the lock out of sync if forgotten.
-
-If you do need to manually align `uv.lock`, run `uv lock` (which updates
-only the local-virtual-package entry) and commit it separately.
+tags. The bump commit rewrites the version in `pyproject.toml`,
+`manifest.json` and `uv.lock` (the list is `VersionFiles` in
+`dagger/versioning/versioning.go`). **Do not manually edit those
+versions** in content commits: it makes the bot's bump commit redundant.
 
 ## Test layout
 

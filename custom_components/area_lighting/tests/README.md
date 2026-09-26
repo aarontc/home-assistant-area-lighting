@@ -36,16 +36,12 @@ uv run pytest -m unit
 
 ## Python version
 
-The test harness uses Python 3.13 (pinned via `.python-version`) rather
-than the system default. `pytest-homeassistant-custom-component` depends
-on Home Assistant core, which needs `sqlite3` from Python's standard
-library and does not yet support Python 3.14.
-
-If `uv sync` fails with sqlite3 or build errors, install uv-managed
-Python 3.13:
+The test harness uses Python 3.14 (pinned via `.python-version`), which
+Home Assistant 2026.3 and later require. If `uv sync` fails with sqlite3
+or build errors, install uv-managed Python 3.14:
 
 ```bash
-uv python install 3.13
+uv python install 3.14
 ```
 
 ## Adding tests
@@ -55,3 +51,11 @@ uv python install 3.13
 - Integration tests: use the `hass`, `helper_entities`,
   `network_room_config`, and `service_calls` fixtures from
   `tests/integration/conftest.py`.
+- `service_calls` mocks `light.turn_on` without Home Assistant's argument
+  schema, so it accepts calls the real service rejects. To check the
+  arguments themselves, mock with `LIGHT_TURN_ON_SCHEMA` as
+  `integration/test_scene_color_attributes.py` does.
+- The harness fails any test that leaves an event-loop timer running. The
+  autouse `shutdown_controllers` fixture cancels the controllers' timers;
+  a test that fires a scheduled callback by hand must cancel its handle
+  first.

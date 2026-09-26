@@ -15,11 +15,26 @@ from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting.const import DOMAIN
+
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Make area_lighting discoverable by the HA test harness."""
     return
+
+
+@pytest.fixture(autouse=True)
+async def shutdown_controllers(hass: HomeAssistant):
+    """Cancel controller timers before the harness checks for lingering ones.
+
+    Controllers schedule motion, occupancy and self-heal timers straight
+    on the event loop, and nothing cancels them when HA stops. The
+    harness fails any test that leaves a loop timer behind.
+    """
+    yield
+    for ctrl in hass.data.get(DOMAIN, {}).get("controllers", {}).values():
+        ctrl.shutdown()
 
 
 @pytest.fixture

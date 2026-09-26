@@ -99,13 +99,16 @@ CIRCADIAN_KELVIN_HYSTERESIS = 25
 DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS = 2.0
 
 # Scene light attributes — the allowlist of per-light keys honored in a scene's
-# `entities` block. Each of these is passed straight through to light.turn_on,
-# so Home Assistant performs any needed color-mode conversion (e.g. rgbw_color
-# on an rgbww-only bulb). This is the SINGLE source of truth: the config schema
-# validates scene entity state against this same set, so an unsupported key
-# (e.g. color_mode, or a typo) fails loudly at startup instead of being silently
-# dropped at apply time. "state" is allowed in scene config too but handled
-# separately (it selects turn_on vs turn_off rather than being a turn_on arg).
+# `entities` block. light_targets.light_turn_on_data passes these through to
+# light.turn_on, so Home Assistant performs any needed color-mode conversion
+# (e.g. rgbw_color on an rgbww-only bulb). The exceptions: mired `color_temp`,
+# which Home Assistant 2026.3 no longer accepts, is sent as kelvin, and only
+# one color key is sent, chosen the way Home Assistant scenes choose it. This
+# is the SINGLE source of truth: the config schema validates scene entity state
+# against this same set, so an unsupported key (e.g. color_mode, or a typo)
+# fails loudly at startup instead of being silently dropped at apply time.
+# "state" is allowed in scene config too but handled separately (it selects
+# turn_on vs turn_off rather than being a turn_on arg).
 SCENE_LIGHT_ON_ATTRIBUTES = (
     "brightness",
     "color_temp_kelvin",

@@ -102,6 +102,15 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **BREAKING: Home Assistant 2026.3 or later is required.** `hacs.json` now
+  declares 2026.3.0 as the minimum, and the component uses Python 3.14
+  syntax, which older Home Assistant releases (Python 3.13) cannot load.
+
+- **Development and CI moved to Python 3.14 and Home Assistant 2026.9.3.**
+  Tests, lint and type checks now run against `pytest-homeassistant-custom-component`
+  0.13.366, ruff 0.16 and mypy 2.3, and `uv.lock` resolves from PyPI only.
+  The CI pipeline runs on Dagger 0.21.9.
+
 - **GitHub releases are now published by GitLab CI, not GitHub Actions** —
   packaging only; no effect on the integration itself. GitHub is in the
   release chain purely because HACS installs from there, and the old path
@@ -147,6 +156,27 @@ readable companion that highlights user-facing changes.
   makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **Scenes with color failed to activate.** A snapshot from
+  `area_lighting.snapshot_scene` stores every color value the light reports
+  (a bulb in color-temperature mode also reports hs, rgb and xy), and replaying
+  it sent all of them to `light.turn_on`, which accepts only one. Home
+  Assistant rejected the call, so the scene never applied. Scene colors are
+  now chosen the way Home Assistant's own scenes choose them: the color the
+  target's `color_mode` names, `white` for white mode, no color for on/off
+  and brightness-only modes, and otherwise the first color present. One
+  deliberate difference: where Home Assistant skips a light whose snapshot
+  lacks the color its mode names, Area Lighting sends the first color it has.
+  Snapshots now also record `rgbw_color` and `rgbww_color`, so RGBW and RGBWW
+  bulbs restore their native color. Separately, Home Assistant 2026.3
+  removed the mired `color_temp` argument. Scene config and older snapshots
+  that still use `color_temp` are now sent as `color_temp_kelvin`, and new
+  snapshots no longer record it. A scene `color_temp` that is not a positive
+  whole number of mireds now fails config validation at startup.
+
+- **Diagnostics refresh timer outlived shutdown.** The once-a-second refresh
+  of `sensor.area_lighting_diagnostics` kept running after Home Assistant
+  began stopping. It now cancels on shutdown.
 
 - **Dims did not stick** — scene self-healing treated a dim as drift and drove
   the lights back to full scene brightness a few seconds later, while the area

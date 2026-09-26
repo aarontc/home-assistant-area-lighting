@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"dagger/area-lighting/internal/dagger"
@@ -102,8 +101,9 @@ func (m *AreaLighting) CommitsSinceTag(
 }
 
 // CreateTag calculates the next version, commits updated version strings
-// to manifest.json and pyproject.toml, then creates a Git tag on that
-// commit via the GitLab API. `token` needs `write_repository` scope.
+// to every file in versioning.VersionFiles (manifest.json, pyproject.toml
+// and uv.lock), then creates a Git tag on that commit via the GitLab API.
+// `token` needs `write_repository` scope.
 //
 // The version-bump commit and the tag ref both need to exist on the
 // default branch without triggering another `tag:auto` run (which would
@@ -169,7 +169,7 @@ func (m *AreaLighting) TestVersioning(
 	source *dagger.Directory,
 ) (string, error) {
 	return dag.Container().
-		From("golang:1.25").
+		From("golang:1.26").
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod-versioning")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build-versioning")).
 		WithMountedDirectory("/src", source).
@@ -219,25 +219,6 @@ func getCommitsSinceTag(ctx context.Context, git *dagger.Container, tag string) 
 	return commits, nil
 }
 
-// Version files to bump. The regex matches the version string in each
-// file; the replacement uses the bare version (no "v" prefix).
-var versionFiles = []struct {
-	path    string
-	pattern *regexp.Regexp
-	format  string // fmt format string; receives the bare version
-}{
-	{
-		path:    "custom_components/area_lighting/manifest.json",
-		pattern: regexp.MustCompile(`"version"\s*:\s*"[^"]*"`),
-		format:  `"version": "%s"`,
-	},
-	{
-		path:    "pyproject.toml",
-		pattern: regexp.MustCompile(`(?m)^version\s*=\s*"[^"]*"`),
-		format:  `version = "%s"`,
-	},
-}
-
 // createVersionBumpCommit reads the version files from the repo via the
 // GitLab API, replaces the version string, and commits the result.
 // Returns the new commit SHA. The commit's title format is load-bearing:
@@ -258,18 +239,21 @@ func createVersionBumpCommit(
 	}
 
 	var actions []action
-	for _, vf := range versionFiles {
-		content, err := readGitLabFile(ctx, gitlabURL, encodedProject, token, vf.path, branch)
+	for _, vf := range versioning.VersionFiles {
+		content, err := readGitLabFile(ctx, gitlabURL, encodedProject, token, vf.Path, branch)
 		if err != nil {
-			return "", fmt.Errorf("read %s: %w", vf.path, err)
+			return "", fmt.Errorf("read %s: %w", vf.Path, err)
 		}
-		updated := vf.pattern.ReplaceAllString(content, fmt.Sprintf(vf.format, bareVersion))
+		updated, err := vf.Apply(content, bareVersion)
+		if err != nil {
+			return "", err
+		}
 		if updated == content {
 			continue // no change needed
 		}
 		actions = append(actions, action{
 			Action:   "update",
-			FilePath: vf.path,
+			FilePath: vf.Path,
 			Content:  updated,
 		})
 	}

@@ -19,7 +19,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import DOMAIN, SCENE_LIGHT_ON_ATTRIBUTES
+from .const import DOMAIN
+from .light_targets import light_turn_on_data
 from .models import AreaConfig, SceneConfig
 from .scene_storage import SceneStorage
 
@@ -163,14 +164,7 @@ class AreaLightingScene(Scene):
                 service_data["transition"] = transition
 
             if target_state == "on":
-                # Apply the allowlisted attributes, passing them straight through
-                # so HA can do any color-mode conversion (e.g. rgbw_color on an
-                # rgbww bulb). Skip keys whose value is None — Hue's 2025
-                # deprecation warns when `effect=None` is passed to
-                # light.turn_on, and None is never meaningful here anyway.
-                for attr in SCENE_LIGHT_ON_ATTRIBUTES:
-                    if attr in state_data and state_data[attr] is not None:
-                        service_data[attr] = state_data[attr]
+                service_data.update(light_turn_on_data(state_data))
                 _LOGGER.debug(
                     "Area %s: scene_apply light.turn_on %s",
                     self._area.id,

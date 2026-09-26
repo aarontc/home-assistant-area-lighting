@@ -85,11 +85,13 @@ class AreaLightingDiagnosticSensor(SensorEntity):
 
         # Periodic refresh so countdown values (motion/occupancy timer
         # remaining_seconds) visibly tick in the UI without waiting for
-        # the next state_changed event.
+        # the next state_changed event. HA does not remove entities when
+        # it stops, so the timer cancels itself on shutdown.
         self._unsub_refresh = async_track_time_interval(
             self.hass,
             self._on_periodic_refresh,
             DIAGNOSTIC_REFRESH_INTERVAL,
+            cancel_on_shutdown=True,
         )
 
     async def async_will_remove_from_hass(self) -> None:

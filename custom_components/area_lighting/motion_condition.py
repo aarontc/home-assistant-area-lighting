@@ -89,7 +89,7 @@ def _resolve_numeric_value(state: _StateLike, attribute: str | None) -> float | 
         raw = state.state
     try:
         return float(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

@@ -76,9 +76,10 @@ class SceneStorage:
                 for attr in (
                     "brightness",
                     "color_temp_kelvin",
-                    "color_temp",
                     "hs_color",
                     "rgb_color",
+                    "rgbw_color",
+                    "rgbww_color",
                     "xy_color",
                     "color_mode",
                     "effect",

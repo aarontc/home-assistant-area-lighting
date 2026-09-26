@@ -35,10 +35,10 @@ from .const import (
     SCENE_DRIFT_ISSUE_ID,
     SCENE_HEAL_ATTEMPT_WINDOW_SECONDS,
     SCENE_HEAL_MAX_ATTEMPTS,
-    SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF_INTERNAL,
 )
 from .demand_response import apply_demand_response, demand_response_shed_ids
+from .light_targets import light_turn_on_data
 from .models import AreaConfig, AreaLightingConfig, LightConfig, SceneConfig
 from .scene_machine import (
     ActionType,
@@ -716,7 +716,6 @@ class AreaLightingController:
             "brightness",
             "brightness_step_pct",
             "color_temp_kelvin",
-            "color_temp",
             "rgb_color",
             "hs_color",
             "rgbw_color",
@@ -1135,14 +1134,7 @@ class AreaLightingController:
             svc_data["transition"] = int(transition)
 
         if target_state == "on":
-            # Pass the allowlisted attributes straight through so HA can do any
-            # color-mode conversion it needs (e.g. rgbw_color on an rgbww bulb).
-            # Skip keys whose value is None — Hue's 2025 deprecation warns when
-            # `effect=None` is passed to light.turn_on, and None is never
-            # meaningful for any of these attributes anyway.
-            for attr in SCENE_LIGHT_ON_ATTRIBUTES:
-                if attr in state_data and state_data[attr] is not None:
-                    svc_data[attr] = state_data[attr]
+            svc_data.update(light_turn_on_data(state_data))
             await self._call_service("light.turn_on", **svc_data)
         else:
             await self._call_service("light.turn_off", **svc_data)
@@ -2026,10 +2018,8 @@ class AreaLightingController:
         glitch that landed *during* the fade (which the event path ignores as
         'still settling'). Superseded by the next scene command.
 
-        Uses loop.call_later (like TimerHandle) rather than the HA
-        async_call_later helper, so this one-shot check is not flagged by the
-        test harness's lingering-timer guard and matches this component's
-        existing timer pattern.
+        Uses loop.call_later, like TimerHandle, to match this component's
+        existing timer pattern. `shutdown()` cancels it.
         """
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
