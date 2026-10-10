@@ -194,13 +194,48 @@ class AreaLightingController:
         self._circadian_tick_running: bool = False
         self._circadian_commanded_at: dict[str, float] = {}
 
-        self._kelvin_router: CircadianKelvinRouter | None = None
-        if area.circadian_kelvin_routes is not None:
-            self._kelvin_router = CircadianKelvinRouter(
-                hass,
-                area.id,
-                area.circadian_kelvin_routes,
-            )
+        self._kelvin_router = self._build_kelvin_router()
+
+    def _build_kelvin_router(self) -> CircadianKelvinRouter | None:
+        routes = self.area.circadian_kelvin_routes
+        if routes is None:
+            return None
+        return CircadianKelvinRouter(self.hass, self.area.id, routes)
+
+    def apply_config(self, area: AreaConfig, global_config: AreaLightingConfig) -> None:
+        """Apply a reloaded config, keeping the state and the running timers.
+
+        A timer is cancelled when the area has none of its sensors left, or
+        when one of them is already on. Such a sensor sends no event when its
+        listener is registered, and neither timer rechecks its sensors when it
+        expires. No light is turned on for it. The caller rewires the leader
+        links this clears and registers the new listeners before it next
+        awaits, so no sensor change goes unheard. It then resumes circadian.
+        """
+        self._stop_circadian()
+        self.area = area
+        self._global_config = global_config
+        self._scene_self_heal = global_config.scene_self_heal
+        if not self._scene_self_heal and self._heal_selfcheck_handle is not None:
+            self._heal_selfcheck_handle.cancel()
+            self._heal_selfcheck_handle = None
+        self._kelvin_router = self._build_kelvin_router()
+        self.leader = None
+        self.followers = []
+        motion_ids = area.motion_light_motion_sensor_ids
+        if not motion_ids or self._any_on(motion_ids):
+            self._motion_timer.cancel()
+            self._motion_night_timer.cancel()
+        occupancy_ids = area.occupancy_light_sensor_ids
+        if not occupancy_ids or self._any_on(occupancy_ids):
+            self._occupancy_timer.cancel()
+        if self._state.is_scene:
+            self._rebuild_scene_tracking()
+        self._enforce_occupancy_timer()
+        self._notify_state_change()
+
+    def _any_on(self, entity_ids: list[str]) -> bool:
+        return any(self._get_state(eid) == STATE_ON for eid in entity_ids)
 
     # ── Persistence ────────────────────────────────────────────────────
 
@@ -344,9 +379,7 @@ class AreaLightingController:
         if not self._state_was_persisted:
             return
         if self._state.is_scene:
-            self._active_scene_targets = self._effective_scene_targets(self._state.scene_slug)
-            self._dr_shed_ids = self._compute_scene_shed_ids(self._state.scene_slug)
-            self._stamp_targets_with_command_metadata(None)
+            self._rebuild_scene_tracking()
         elif self._state.is_circadian and self._demand_response_active():
             self._dr_shed_ids = self._compute_circadian_shed_ids()
         if not self._state.is_off:
@@ -362,6 +395,12 @@ class AreaLightingController:
                 self._state.transition_to_manual()
                 self._notify_state_change()
                 return
+
+    def _rebuild_scene_tracking(self) -> None:
+        """Rebuild the active scene's targets and shed set from the config."""
+        self._active_scene_targets = self._effective_scene_targets(self._state.scene_slug)
+        self._dr_shed_ids = self._compute_scene_shed_ids(self._state.scene_slug)
+        self._stamp_targets_with_command_metadata(None)
 
     @staticmethod
     def _timer_remaining_seconds(timer: TimerHandle) -> float | None:
@@ -776,7 +815,7 @@ class AreaLightingController:
         if not self.followers:
             return
         for follower in self.followers:
-            self.hass.async_create_task(follower.handle_leader_change(new_slug, reason))
+            self.hass.async_create_task(follower.handle_leader_change(self, new_slug, reason))
 
     def _stamp_targets_with_command_metadata(self, transition: float | None) -> None:
         """Record commanded_at + transition on every active scene target.
@@ -2263,9 +2302,10 @@ class AreaLightingController:
     def _heal_suppressed(self) -> str | None:
         """Why scene self-heal must stand down right now, or None.
 
-        Mirrors two of the manual-detection suppressions in event_handlers,
-        which the heal paths must honour for the same reasons:
+        Mirrors the manual-detection suppressions in event_handlers, which
+        the heal paths must honour for the same reasons:
 
+        - A reload can turn self-heal off after a heal was scheduled.
         - An alert owns the area's lights for the length of its pattern, and
           restores them itself afterwards. Healing mid-pattern re-asserts scene
           brightness over the flashes and swallows the alert.
@@ -2275,6 +2315,8 @@ class AreaLightingController:
 
         Returned as a reason string so the caller can log which one applied.
         """
+        if not self._scene_self_heal:
+            return "self-heal disabled"
         if self._alert_active:
             return "alert active"
         if self._state.dimmed:
@@ -2520,13 +2562,13 @@ class AreaLightingController:
         if self._state.is_off or self._state.is_ambient_like:
             self._occupancy_timer.cancel()
             return
-        if not self.area.has_occupancy_lighting:
+        if not self.area.occupancy_light_sensor_ids:
             return
         if self._occupancy_timer.is_active:
             return  # Already running — don't reset on scene changes
         any_sensor_on = any(
             (s := self.hass.states.get(sid)) is not None and s.state == "on"
-            for sid in (self.area.occupancy_light_sensor_ids or [])
+            for sid in self.area.occupancy_light_sensor_ids
         )
         if not any_sensor_on:
             self._start_occupancy_timer()
@@ -2654,6 +2696,7 @@ class AreaLightingController:
 
     async def handle_leader_change(
         self,
+        leader: AreaLightingController,
         new_slug: str | None,
         reason,
     ) -> None:
@@ -2669,6 +2712,10 @@ class AreaLightingController:
         cluttering the top of the module with feature-specific types.
         """
         from .area_state import LeaderReason
+
+        # A notification queued before a reload rewired this follower.
+        if leader is not self.leader:
+            return
 
         _LOGGER.debug(
             "Area %s: handle_leader_change leader=%s reason=%s slug=%s follower_state=%s",

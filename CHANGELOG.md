@@ -150,6 +150,18 @@ readable companion that highlights user-facing changes.
   route whose lights are on and turns on no route light that is off, unless
   the kelvin crossed into another route while Home Assistant was down.
 
+- **`area_lighting.reload` applies the new config to running areas.** Changes
+  to lights, circadian groups, sensors, remotes, kelvin routes,
+  `scene_self_heal` and the `circadian:` block take effect without a restart.
+  Each area keeps its scene, dimmed flag and timer deadlines, and its
+  `select.<area>_last_scene` writes no state change. A motion or occupancy
+  countdown stops when the area loses those sensors or a newly configured one
+  is already on. An empty `occupancy_light_sensor_ids` list no longer starts
+  an occupancy countdown. Adding or removing an area or a scene still needs a
+  restart.
+  A reload that fails validation now raises an error to the caller and
+  changes nothing.
+
 - **BREAKING: Circadian switches are now circadian groups.** Rename the area
   key `circadian_switches` to `circadian_groups` and each light's
   `circadian_switch` to `circadian_group`. The group entries and names stay

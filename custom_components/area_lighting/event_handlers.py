@@ -62,10 +62,6 @@ def _controllers(hass: HomeAssistant) -> dict[str, AreaLightingController]:
     return hass.data[DOMAIN]["controllers"]  # type: ignore[no-any-return]
 
 
-def _config(hass: HomeAssistant) -> AreaLightingConfig:
-    return hass.data[DOMAIN]["config"]  # type: ignore[no-any-return]
-
-
 _REPAIRS_ISSUE_ID = "missing_external_entities"
 _LUTRON_REPAIRS_ISSUE_ID = "lutron_remotes_missing"
 
@@ -263,10 +259,9 @@ async def async_validate_lutron_remotes(
     return missing
 
 
-async def async_setup_event_handlers(hass: HomeAssistant) -> list:
-    """Register all event listeners. Returns list of unsub callbacks."""
+async def async_setup_event_handlers(hass: HomeAssistant, config: AreaLightingConfig) -> list:
+    """Register all event listeners for `config`. Returns list of unsub callbacks."""
     unsubs: list = []
-    config = _config(hass)
     controllers = _controllers(hass)
 
     # ── Scene activation tracking (replaces global_last_scene_updater) ──

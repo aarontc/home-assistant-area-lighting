@@ -1,0 +1,621 @@
+"""area_lighting.reload applies a new config to the running areas."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+from datetime import timedelta
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from homeassistant.const import EVENT_STATE_CHANGED
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+from custom_components.area_lighting import alert
+from custom_components.area_lighting.alert import execute_alert
+from custom_components.area_lighting.area_state import ActivationSource, LeaderReason
+from custom_components.area_lighting.const import DOMAIN
+from custom_components.area_lighting.controller import AreaLightingController
+from custom_components.area_lighting.models import AlertPattern, AlertStep, CircadianConfig
+
+AREA = "den"
+LIGHT_1 = "light.den_1"
+LIGHT_2 = "light.den_2"
+LIGHT_3 = "light.den_3"
+MOTION = "binary_sensor.den_motion"
+OCCUPANCY = "binary_sensor.den_occupancy"
+SLEEP_ENTITY = "input_boolean.den_sleep"
+REMOTE = "den_remote_device"
+
+
+def _light(entity_id: str, group: str = "Main") -> dict:
+    return {
+        "id": entity_id,
+        "circadian_group": group,
+        "circadian_type": "ct",
+        "roles": ["dimming", "white"],
+    }
+
+
+def _area(area_id: str = AREA, **extra) -> dict:
+    return {
+        "id": area_id,
+        "name": area_id.title(),
+        "event_handlers": True,
+        "circadian_groups": [{"name": "Main"}],
+        "lights": [_light(f"light.{area_id}_1"), _light(f"light.{area_id}_2")],
+        "scenes": [
+            {"id": "circadian", "name": "Circadian"},
+            {"id": "daylight", "name": "Daylight"},
+            {"id": "evening", "name": "Evening"},
+            {"id": "off", "name": "Off"},
+        ],
+        **extra,
+    }
+
+
+def _config(*areas: dict, **extra) -> dict:
+    return {DOMAIN: {"areas": list(areas) or [_area()], **extra}}
+
+
+async def _setup(hass: HomeAssistant, cfg: dict) -> dict[str, AreaLightingController]:
+    for area in cfg[DOMAIN]["areas"]:
+        for light in area["lights"]:
+            if hass.states.get(light["id"]) is None:
+                hass.states.async_set(light["id"], "off", {})
+    assert await async_setup_component(hass, DOMAIN, copy.deepcopy(cfg))
+    await hass.async_block_till_done()
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    return hass.data[DOMAIN]["controllers"]
+
+
+async def _reload(hass: HomeAssistant, cfg: dict) -> None:
+    with patch(
+        "custom_components.area_lighting.async_hass_config_yaml",
+        AsyncMock(return_value=copy.deepcopy(cfg)),
+    ):
+        await hass.services.async_call(DOMAIN, "reload", {}, blocking=True)
+    await hass.async_block_till_done()
+
+
+def _turn_ons(service_calls) -> dict[str, dict]:
+    """entity_id -> data of the light.turn_on calls, without entity_id."""
+    return {
+        c.data["entity_id"]: {k: v for k, v in c.data.items() if k != "entity_id"}
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_on"
+    }
+
+
+def _both(payload: dict) -> dict[str, dict]:
+    return {LIGHT_1: payload, LIGHT_2: payload}
+
+
+def _turn_offs(service_calls) -> set[str]:
+    return {c.data["entity_id"] for c in service_calls if c.service == "turn_off"}
+
+
+def _set_on(hass: HomeAssistant, *entity_ids: str) -> None:
+    for entity_id in entity_ids:
+        hass.states.async_set(entity_id, "on", {"brightness": 100})
+
+
+async def _circadian_with_lights_on(hass: HomeAssistant, ctrl, *entity_ids: str) -> None:
+    await ctrl.lighting_circadian()
+    _set_on(hass, *entity_ids)
+    await hass.async_block_till_done()
+
+
+@pytest.mark.integration
+async def test_reload_applies_a_new_light_list(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    area = _area()
+    area["lights"].append(_light(LIGHT_3))
+    hass.states.async_set(LIGHT_3, "off", {})
+
+    await _reload(hass, _config(area))
+    service_calls.clear()
+    _set_on(hass, LIGHT_3)
+    await hass.async_block_till_done()
+
+    assert [light.id for light in ctrl.area.lights] == [LIGHT_1, LIGHT_2, LIGHT_3]
+    assert _turn_ons(service_calls) == {
+        LIGHT_3: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+    }
+
+
+@pytest.mark.integration
+async def test_reload_applies_new_motion_sensors(hass: HomeAssistant, helper_entities) -> None:
+    hass.states.async_set(MOTION, "off")
+    hass.states.async_set("binary_sensor.den_motion_2", "off")
+    ctrl = (await _setup(hass, _config(_area(motion_light_motion_sensor_ids=[MOTION]))))[AREA]
+    ctrl.motion_light_enabled = True
+
+    await _reload(
+        hass, _config(_area(motion_light_motion_sensor_ids=[MOTION, "binary_sensor.den_motion_2"]))
+    )
+    hass.states.async_set("binary_sensor.den_motion_2", "on")
+    await hass.async_block_till_done()
+
+    assert ctrl._state.source == ActivationSource.MOTION
+    assert not ctrl._state.is_off
+
+
+@pytest.mark.integration
+async def test_reload_applies_new_remote_favorite_cycle(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    def remote(cycle: list[str]) -> dict:
+        return {"id": REMOTE, "name": "Den Remote", "buttons": {"favorite": cycle}}
+
+    ctrl = (await _setup(hass, _config(_area(lutron_remotes=[remote(["evening"])]))))[AREA]
+
+    await _reload(hass, _config(_area(lutron_remotes=[remote(["daylight"])])))
+    hass.bus.async_fire(
+        "lutron_caseta_button_event",
+        {"device_id": REMOTE, "button_type": "stop", "action": "press"},
+    )
+    await hass.async_block_till_done()
+
+    assert ctrl._state.scene_slug == "daylight"
+
+
+@pytest.mark.integration
+async def test_reload_applies_group_bounds_and_sleep_options(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    hass.states.async_set(SLEEP_ENTITY, "on")
+    cfg = _config(
+        _area(
+            circadian_groups=[{"name": "Main"}, {"name": "Bed"}],
+            lights=[_light(LIGHT_1), _light(LIGHT_2, "Bed")],
+        )
+    )
+    ctrl = (await _setup(hass, cfg))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    groups = [
+        {"name": "Main", "max_brightness": 50},
+        {
+            "name": "Bed",
+            "sleep_entity": SLEEP_ENTITY,
+            "sleep_state": "on",
+            "sleep_brightness": 10,
+            "sleep_colortemp": 2000,
+        },
+    ]
+    cfg[DOMAIN]["areas"][0]["circadian_groups"] = groups
+    service_calls.clear()
+
+    await _reload(hass, cfg)
+
+    assert _turn_ons(service_calls) == {
+        LIGHT_1: {"brightness": 127, "color_temp_kelvin": 4000, "transition": 60},
+        LIGHT_2: {"brightness": 26, "color_temp_kelvin": 2000, "transition": 60},
+    }
+    service_calls.clear()
+    hass.states.async_set(SLEEP_ENTITY, "off")
+    await hass.async_block_till_done()
+    assert _turn_ons(service_calls) == {
+        LIGHT_2: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+    }
+
+
+@pytest.mark.integration
+async def test_reload_applies_the_global_circadian_block(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    old_clock = hass.data[DOMAIN]["circadian_clock"]
+    block = {"min_colortemp": 2000, "max_colortemp": 6000, "interval": 120, "transition": 10}
+
+    await _reload(hass, _config(_area(), circadian=block))
+    await pin_circadian(60, 4500, tick=False)
+    ctrl._circadian_commanded_at.clear()
+    service_calls.clear()
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=121))
+    await hass.async_block_till_done()
+
+    clock = hass.data[DOMAIN]["circadian_clock"]
+    assert clock is not old_clock
+    assert old_clock._unsub_interval is None
+    assert clock.config == CircadianConfig(2000, 6000, 120, 10)
+    assert _turn_ons(service_calls) == _both(
+        {"brightness": 255, "color_temp_kelvin": 4500, "transition": 10}
+    )
+    assert hass.states.get("sensor.area_lighting_circadian").attributes["colortemp"] == 4500
+
+
+@pytest.mark.integration
+async def test_reload_applies_scene_self_heal(hass: HomeAssistant, helper_entities) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    assert ctrl.scene_self_heal_enabled
+
+    await _reload(hass, _config(_area(), scene_self_heal=False))
+
+    assert not ctrl.scene_self_heal_enabled
+
+
+@pytest.mark.integration
+async def test_reload_disabling_scene_self_heal_stops_pending_heals(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    scenes = [
+        {"id": "circadian", "name": "Circadian"},
+        {"id": "daylight", "name": "Daylight", "entities": {LIGHT_1: {"state": "on"}}},
+    ]
+    ctrl = (await _setup(hass, _config(_area(scenes=scenes))))[AREA]
+    await ctrl._activate_scene("daylight", ActivationSource.USER, transition=5)
+    await hass.async_block_till_done()
+    assert ctrl._heal_selfcheck_handle is not None
+
+    await _reload(hass, _config(_area(scenes=scenes), scene_self_heal=False))
+    hass.states.async_set(LIGHT_1, "off", {})
+    hass.states.async_set(LIGHT_1, "on", {"brightness": 30})
+    await hass.async_block_till_done()
+    service_calls.clear()
+    ctrl._run_post_settle_selfcheck()
+    await ctrl.handle_scene_drift_reassert(LIGHT_1, "glitch_window")
+    await hass.async_block_till_done()
+
+    assert not service_calls
+
+
+def _sensor_area(**extra) -> dict:
+    return _area(
+        motion_light_motion_sensor_ids=[MOTION],
+        occupancy_light_sensor_ids=[OCCUPANCY],
+        **extra,
+    )
+
+
+async def _evening_with_timers(hass: HomeAssistant) -> AreaLightingController:
+    hass.states.async_set(MOTION, "off")
+    hass.states.async_set(OCCUPANCY, "off")
+    ctrl = (await _setup(hass, _config(_sensor_area())))[AREA]
+    await ctrl._activate_scene("evening", ActivationSource.MOTION)
+    ctrl._motion_timer.start()
+    await hass.async_block_till_done()
+    assert ctrl._motion_timer.is_active
+    assert ctrl._occupancy_timer.is_active
+    return ctrl
+
+
+@pytest.mark.integration
+async def test_reload_keeps_state_dimmed_flag_and_timer_deadlines(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+    ctrl._state.mark_dimmed()
+    deadlines = (ctrl._motion_timer.deadline_utc, ctrl._occupancy_timer.deadline_utc)
+    service_calls.clear()
+
+    await _reload(hass, _config(_sensor_area()))
+
+    assert ctrl.current_scene == "evening"
+    assert ctrl.dimmed
+    assert (ctrl._motion_timer.deadline_utc, ctrl._occupancy_timer.deadline_utc) == deadlines
+    assert not service_calls
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "sensors",
+    [{}, {"motion_light_motion_sensor_ids": [], "occupancy_light_sensor_ids": []}],
+    ids=["omitted", "empty"],
+)
+async def test_reload_cancels_timers_for_removed_sensors(
+    hass: HomeAssistant, helper_entities, sensors: dict
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+
+    await _reload(hass, _config(_area(**sensors)))
+
+    assert not ctrl._motion_timer.is_active
+    assert not ctrl._occupancy_timer.is_active
+    assert ctrl.current_scene == "evening"
+
+
+@pytest.mark.integration
+async def test_reload_cancels_occupancy_countdown_when_a_new_sensor_is_on(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+    hass.states.async_set("binary_sensor.den_occupancy_2", "on")
+    service_calls.clear()
+
+    await _reload(
+        hass,
+        _config(
+            _area(
+                motion_light_motion_sensor_ids=[MOTION],
+                occupancy_light_sensor_ids=[OCCUPANCY, "binary_sensor.den_occupancy_2"],
+            )
+        ),
+    )
+
+    assert not ctrl._occupancy_timer.is_active
+    assert ctrl._motion_timer.is_active
+    assert not service_calls
+
+
+@pytest.mark.integration
+async def test_reload_cancels_motion_countdown_when_a_new_sensor_is_on(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+    hass.states.async_set("binary_sensor.den_motion_2", "on")
+    service_calls.clear()
+
+    await _reload(
+        hass,
+        _config(
+            _area(
+                motion_light_motion_sensor_ids=[MOTION, "binary_sensor.den_motion_2"],
+                occupancy_light_sensor_ids=[OCCUPANCY],
+            )
+        ),
+    )
+
+    assert not ctrl._motion_timer.is_active
+    assert ctrl._occupancy_timer.is_active
+    assert not service_calls
+
+
+@pytest.mark.integration
+async def test_reload_hears_a_sensor_that_turns_on_while_lights_are_commanded(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    hass.states.async_set(OCCUPANCY, "off")
+    cfg = _config(_area(occupancy_light_sensor_ids=[OCCUPANCY]))
+    ctrl = (await _setup(hass, cfg))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    assert ctrl._occupancy_timer.is_active
+    commanding, release = asyncio.Event(), asyncio.Event()
+
+    async def paused_turn_on(_call) -> None:
+        commanding.set()
+        await release.wait()
+
+    hass.services.async_register("light", "turn_on", paused_turn_on)
+    with patch(
+        "custom_components.area_lighting.async_hass_config_yaml",
+        AsyncMock(return_value=copy.deepcopy(cfg)),
+    ):
+        reload = asyncio.ensure_future(
+            hass.services.async_call(DOMAIN, "reload", {}, blocking=True)
+        )
+        await asyncio.wait_for(commanding.wait(), 5)
+        hass.states.async_set(OCCUPANCY, "on")
+        await hass.async_block_till_done()
+        release.set()
+        await reload
+    await hass.async_block_till_done()
+
+    assert not ctrl._occupancy_timer.is_active
+
+
+@pytest.mark.integration
+async def test_reload_recomputes_circadian_shed_set_without_routes(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ids = [f"light.den_{i}" for i in range(1, 6)]
+    ctrl = (await _setup(hass, _config(_area(lights=[_light(i) for i in ids[:4]]))))[AREA]
+    hass.data[DOMAIN]["global"]._demand_response_active = True
+    await ctrl.lighting_circadian()
+    await hass.async_block_till_done()
+    assert ctrl.dr_shed_ids == frozenset(ids[2:4])
+    _set_on(hass, ids[0], ids[1], ids[4])
+    hass.states.async_set(ids[2], "off", {})
+    hass.states.async_set(ids[3], "off", {})
+    await hass.async_block_till_done()
+    service_calls.clear()
+
+    await _reload(hass, _config(_area(lights=[_light(i) for i in ids])))
+
+    # Five lights keep three: den_3 comes back, den_5 is shed.
+    assert ctrl.dr_shed_ids == frozenset(ids[3:])
+    assert ids[2] in _turn_ons(service_calls)
+    assert _turn_offs(service_calls) == {ids[4]}
+
+
+@pytest.mark.integration
+async def test_reload_during_alert_resumes_circadian_after_the_alert(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    new_cfg = _config(_area(circadian_groups=[{"name": "Main", "max_brightness": 50}]))
+    running_during_alert = []
+
+    async def steps(*_args) -> None:
+        await _reload(hass, new_cfg)
+        running_during_alert.append(ctrl.circadian_running)
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    service_calls.clear()
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+    await hass.async_block_till_done()
+
+    assert running_during_alert == [False]
+    assert ctrl.circadian_running
+    assert _turn_ons(service_calls) == _both(
+        {"brightness": 127, "color_temp_kelvin": 4000, "transition": 60}
+    )
+
+
+def _leader_config(follower_leader: str | None) -> dict:
+    follower = _area("closet")
+    if follower_leader is not None:
+        follower["leader_area_id"] = follower_leader
+    return _config(_area("bath"), _area("hall"), follower)
+
+
+@pytest.mark.integration
+async def test_leader_notification_queued_before_rewiring_is_ignored(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    ctrls = await _setup(hass, _leader_config("bath"))
+    closet = ctrls["closet"]
+    await closet.lighting_circadian()
+    queued = closet.handle_leader_change(ctrls["bath"], "evening", LeaderReason.SCENE_ACTIVATED)
+
+    await _reload(hass, _leader_config("hall"))
+    await queued
+
+    assert closet.leader is ctrls["hall"]
+    assert closet.current_scene == "circadian"
+
+
+@pytest.mark.integration
+async def test_reload_resumes_circadian_with_new_groups(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    area = _area(
+        circadian_groups=[{"name": "Accent", "max_brightness": 20}],
+        lights=[_light(LIGHT_1, "Accent"), _light(LIGHT_2, "Accent")],
+    )
+    service_calls.clear()
+
+    await _reload(hass, _config(area))
+    assert ctrl.circadian_running
+    assert _turn_ons(service_calls) == _both(
+        {"brightness": 51, "color_temp_kelvin": 4000, "transition": 60}
+    )
+
+    service_calls.clear()
+    ctrl._circadian_commanded_at.clear()
+    await pin_circadian(60, 4500)
+    assert _turn_ons(service_calls) == _both(
+        {"brightness": 51, "color_temp_kelvin": 4500, "transition": 60}
+    )
+
+
+@pytest.mark.integration
+async def test_reload_rewires_leader_and_followers(hass: HomeAssistant, helper_entities) -> None:
+    ctrls = await _setup(hass, _leader_config("bath"))
+    bath, hall, closet = ctrls["bath"], ctrls["hall"], ctrls["closet"]
+
+    await _reload(hass, _leader_config("bath"))
+    assert closet.leader is bath
+    assert bath.followers == [closet]
+
+    await _reload(hass, _leader_config("hall"))
+    assert closet.leader is hall
+    assert bath.followers == []
+    assert hall.followers == [closet]
+
+    await _reload(hass, _leader_config(None))
+    assert closet.leader is None
+    assert hall.followers == []
+
+
+@pytest.mark.integration
+async def test_reload_rebuilds_scene_targets_for_the_active_scene(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    def daylight(brightness: int) -> dict:
+        return {
+            "id": "daylight",
+            "name": "Daylight",
+            "entities": {
+                LIGHT_1: {"state": "on", "brightness": brightness},
+                LIGHT_2: {"state": "on", "brightness": brightness},
+            },
+        }
+
+    def cfg(brightness: int) -> dict:
+        return _config(
+            _area(scenes=[{"id": "circadian", "name": "Circadian"}, daylight(brightness)])
+        )
+
+    ctrl = (await _setup(hass, cfg(100)))[AREA]
+    await ctrl._activate_scene("daylight", ActivationSource.USER)
+    await hass.async_block_till_done()
+    assert ctrl._active_scene_targets[LIGHT_1]["brightness"] == 100
+
+    await _reload(hass, cfg(200))
+
+    assert {eid: t["brightness"] for eid, t in ctrl._active_scene_targets.items()} == {
+        LIGHT_1: 200,
+        LIGHT_2: 200,
+    }
+    assert "commanded_at" in ctrl._active_scene_targets[LIGHT_1]
+
+
+@pytest.mark.integration
+async def test_invalid_reload_raises_and_keeps_the_running_config(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    data = hass.data[DOMAIN]
+    before = (data["config"], data["circadian_clock"], list(data["unsubs"]), ctrl.area)
+    unknown_key = _config(_area(), not_a_key=True)
+    unknown_group = _config(_area(lights=[_light(LIGHT_1, "Missing")]))
+
+    for cfg in (unknown_key, unknown_group, {}):
+        with pytest.raises(HomeAssistantError):
+            await _reload(hass, cfg)
+
+    assert (data["config"], data["circadian_clock"], data["unsubs"], ctrl.area) == before
+
+
+@pytest.mark.integration
+async def test_reload_emits_no_select_state_change(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    await _setup(hass, network_room_config)
+    changes = []
+    hass.bus.async_listen(EVENT_STATE_CHANGED, changes.append)
+
+    await _reload(hass, network_room_config)
+
+    assert [e for e in changes if e.data["entity_id"].startswith("select.")] == []
+
+
+@pytest.mark.integration
+async def test_reload_reruns_external_entity_validation(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    await _setup(hass, _config(_area(ambient_lighting_zone="upstairs")))
+    issues = ir.async_get(hass)
+    assert issues.async_get_issue(DOMAIN, "missing_external_entities") is None
+
+    await _reload(hass, _config(_area(ambient_lighting_zone="attic")))
+    assert issues.async_get_issue(DOMAIN, "missing_external_entities") is not None
+
+    await _reload(hass, _config(_area(ambient_lighting_zone="upstairs")))
+    assert issues.async_get_issue(DOMAIN, "missing_external_entities") is None
+
+
+@pytest.mark.integration
+async def test_reload_refuses_area_set_change(hass: HomeAssistant, helper_entities) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    fewer_scenes = _area(scenes=[{"id": "circadian", "name": "Circadian"}])
+
+    for cfg in (_config(_area(), _area("hall")), _config(fewer_scenes)):
+        with pytest.raises(HomeAssistantError, match="needs a restart"):
+            await _reload(hass, cfg)
+
+    assert hass.data[DOMAIN]["controllers"] == {AREA: ctrl}
+    assert len(ctrl.area.scenes) == 4

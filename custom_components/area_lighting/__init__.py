@@ -11,6 +11,7 @@ import voluptuous as vol
 from homeassistant.config import async_hass_config_yaml
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.typing import ConfigType
@@ -31,6 +32,7 @@ from .controller import AreaLightingController
 from .diagnostics import AreaLightingDiagnosticSensor
 from .event_handlers import async_setup_event_handlers
 from .global_state import GlobalToggles
+from .models import AreaConfig, AreaLightingConfig
 from .number import (
     AreaManualFadeoutNumber,
     AreaMotionFadeoutNumber,
@@ -135,6 +137,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "state_storage": state_storage,
         "global": global_toggles,
         "circadian_clock": clock,
+        "reload_lock": asyncio.Lock(),
         # Every entity added, by area id, for reload and teardown to find.
         "entities": {},
     }
@@ -148,24 +151,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         controllers[area.id] = ctrl
     hass.data[DOMAIN]["controllers"] = controllers
 
-    # Wire leader/follower references. Safe because every enabled
-    # controller is in `controllers` by this point; graph invariants were
-    # already validated above.
-    for ctrl in controllers.values():
-        leader_id = ctrl.area.leader_area_id
-        if leader_id is None:
-            continue
-        leader = controllers.get(leader_id)
-        if leader is None:
-            _LOGGER.warning(
-                "Area %s: configured leader %s is not an enabled area; "
-                "follower will run standalone",
-                ctrl.area.id,
-                leader_id,
-            )
-            continue
-        ctrl.leader = leader
-        leader.followers.append(ctrl)
+    _wire_leaders(controllers)
 
     enabled = area_config.enabled_areas
     _LOGGER.info(
@@ -177,39 +163,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Register services
     await async_register_services(hass)
 
-    # Reload service — re-reads YAML and updates the parsed config so
-    # new/changed alert patterns (and other top-level config) take effect
-    # without restarting HA.  Controllers and entities stay alive; only
-    # the config object is swapped.
     async def _handle_reload(_call: ServiceCall) -> None:
-        raw_yaml = await async_hass_config_yaml(hass)
-        raw_conf = raw_yaml.get(DOMAIN)
-        if raw_conf is None:
-            _LOGGER.warning("area_lighting: YAML key %r not found during reload", DOMAIN)
-            return
-        validated = CONFIG_SCHEMA({DOMAIN: raw_conf})[DOMAIN]
-        new_config = parse_config(validated)
-        try:
-            validate_leader_follower_graph(new_config)
-        except vol.Invalid as err:
-            _LOGGER.error("area_lighting reload: invalid config: %s", err)
-            return
-        try:
-            validate_circadian_kelvin_routes(new_config)
-        except vol.Invalid as err:
-            _LOGGER.error("area_lighting reload: invalid circadian_kelvin_routes config: %s", err)
-            return
-        try:
-            validate_circadian_groups(new_config)
-        except vol.Invalid as err:
-            _LOGGER.error("area_lighting reload: invalid circadian_groups config: %s", err)
-            return
-        hass.data[DOMAIN]["config"] = new_config
-        _LOGGER.info(
-            "area_lighting: configuration reloaded (%d areas, %d alert patterns)",
-            len(new_config.enabled_areas),
-            len(new_config.alert_patterns),
-        )
+        async with hass.data[DOMAIN]["reload_lock"]:
+            await _async_reload(hass)
 
     hass.services.async_register(DOMAIN, "reload", _handle_reload)
 
@@ -224,8 +180,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         # Removing a listen_once listener that already fired logs an error.
         hass.data[DOMAIN]["unsub_started"] = None
         hass.data[DOMAIN]["startup_task"] = asyncio.current_task()
+        # A reload may have run before Home Assistant finished starting.
+        config = hass.data[DOMAIN]["config"]
         try:
-            await _register_scene_entities(hass, area_config, scene_storage)
+            await _register_scene_entities(hass, config, scene_storage)
         except Exception:
             _LOGGER.exception("Failed to register scene entities")
         try:
@@ -242,11 +200,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             _LOGGER.exception("Failed to hide entities registered by an earlier release")
         # Validate external entities (D10) — non-fatal, logs on failure
         try:
-            await async_validate_external_entities(hass, area_config)
+            await async_validate_external_entities(hass, config)
         except Exception:
             _LOGGER.exception("Failed to validate external entities")
         try:
-            await async_validate_lutron_remotes(hass, area_config)
+            await async_validate_lutron_remotes(hass, config)
         except Exception:
             _LOGGER.exception("Failed to validate Lutron remotes")
         # Restore persisted timer deadlines (D4)
@@ -272,10 +230,118 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
 
     # Set up event handlers
-    unsubs = await async_setup_event_handlers(hass)
-    hass.data[DOMAIN]["unsubs"] = unsubs
+    hass.data[DOMAIN]["unsubs"] = await async_setup_event_handlers(hass, area_config)
 
     return True
+
+
+def _wire_leaders(controllers: dict[str, AreaLightingController]) -> None:
+    """Link each follower to its leader. Every enabled controller must be in
+    `controllers`, and the leader/follower graph must already be validated."""
+    for ctrl in controllers.values():
+        leader_id = ctrl.area.leader_area_id
+        if leader_id is None:
+            continue
+        leader = controllers.get(leader_id)
+        if leader is None:
+            _LOGGER.warning(
+                "Area %s: configured leader %s is not an enabled area; "
+                "follower will run standalone",
+                ctrl.area.id,
+                leader_id,
+            )
+            continue
+        ctrl.leader = leader
+        leader.followers.append(ctrl)
+
+
+async def _async_read_config(hass: HomeAssistant) -> AreaLightingConfig:
+    """Read and validate the YAML config, raising HomeAssistantError on any failure."""
+    try:
+        raw_conf = (await async_hass_config_yaml(hass)).get(DOMAIN)
+        if raw_conf is None:
+            raise HomeAssistantError(f"YAML key {DOMAIN!r} not found")
+        config = parse_config(CONFIG_SCHEMA({DOMAIN: raw_conf})[DOMAIN])
+        validate_leader_follower_graph(config)
+        validate_circadian_kelvin_routes(config)
+        validate_circadian_groups(config)
+    except Exception as err:
+        _LOGGER.error("area_lighting reload: invalid config: %s", err)
+        raise HomeAssistantError(f"area_lighting reload failed: {err}") from err
+    return config
+
+
+async def _async_reload(hass: HomeAssistant) -> None:
+    """Apply the YAML config to the running areas without a restart."""
+    from .event_handlers import (
+        async_validate_external_entities,
+        async_validate_lutron_remotes,
+    )
+
+    new_config = await _async_read_config(hass)
+    data = hass.data[DOMAIN]
+    controllers: dict[str, AreaLightingController] = data["controllers"]
+    new_areas = {area.id: area for area in new_config.enabled_areas}
+    if new_areas.keys() != controllers.keys() or any(
+        area.scene_slugs != controllers[area_id].area.scene_slugs
+        for area_id, area in new_areas.items()
+    ):
+        _LOGGER.error("area_lighting reload: adding or removing areas or scenes needs a restart")
+        raise HomeAssistantError("adding or removing areas or scenes needs a restart")
+
+    # Nothing from here to the new listeners may await, or a sensor that
+    # changes in between goes unheard.
+    for unsub in data["unsubs"]:
+        unsub()
+    data["circadian_clock"].async_stop()
+    clock = CircadianClock(hass, new_config.circadian)
+    data["circadian_clock"] = clock
+    clock.async_start()
+
+    for area_id, ctrl in controllers.items():
+        ctrl.apply_config(new_areas[area_id], new_config)
+    _wire_leaders(controllers)
+    data["config"] = new_config
+    data["unsubs"] = await async_setup_event_handlers(hass, new_config)
+    _refresh_entities(hass)
+    for ctrl in controllers.values():
+        await ctrl.async_resume_circadian()
+    # Tick once the areas have their new config, so no light gets the old
+    # group values. The tick skips the lights that resuming areas just sent.
+    await clock.async_tick()
+
+    await async_validate_external_entities(hass, new_config)
+    await async_validate_lutron_remotes(hass, new_config)
+    _LOGGER.info(
+        "area_lighting: configuration reloaded (%d areas, %d alert patterns)",
+        len(new_config.enabled_areas),
+        len(new_config.alert_patterns),
+    )
+
+
+def _refresh_entities(hass: HomeAssistant) -> None:
+    """Have every recorded entity re-read its config-derived attributes."""
+    controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
+    for key, entities in hass.data[DOMAIN]["entities"].items():
+        for entity in entities:
+            if isinstance(entity, AreaLightingDiagnosticSensor):
+                entity.sync_controller_listeners()
+            elif key == GLOBAL_ENTITIES:
+                continue
+            elif isinstance(entity, AreaLightingScene):
+                area = controllers[key].area
+                scene_cfg = next(s for s in area.scenes if s.slug == entity._scene_cfg.slug)
+                entity.refresh_from_config(area, scene_cfg)
+            elif isinstance(entity, BehavioralScene):
+                area = controllers[key].area
+                entity.refresh_from_config(area, _behavioral_scene_name(area, entity._slug))
+            else:
+                entity.refresh_from_config()
+
+
+def _behavioral_scene_name(area: AreaConfig, slug: str) -> str:
+    """The configured name of a behavioral scene, or one made from its slug."""
+    return next((s.name for s in area.scenes if s.slug == slug), slug.title())
 
 
 async def async_teardown(hass: HomeAssistant) -> None:
@@ -339,12 +405,7 @@ async def _register_scene_entities(
         # Behavioral scenes (off, circadian) - always registered for every area
         # so external integrations can trigger them via scene.turn_on
         for slug, method in BEHAVIORAL_SCENE_HANDLERS.items():
-            # Use a friendly name from config if defined, otherwise generate one
-            name = slug.title()
-            for s in area.scenes:
-                if s.slug == slug:
-                    name = s.name
-                    break
+            name = _behavioral_scene_name(area, slug)
             entities.append(BehavioralScene(hass, area, slug, name, method))
 
     if not entities:
