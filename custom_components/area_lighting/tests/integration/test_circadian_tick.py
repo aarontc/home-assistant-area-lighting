@@ -37,12 +37,18 @@ def _set_on(hass: HomeAssistant, *entity_ids: str) -> None:
         hass.states.async_set(entity_id, "on", {"brightness": 100})
 
 
+async def _echo_on(hass: HomeAssistant, ctrl, *entity_ids: str) -> None:
+    """Report lights on as the echo of the activation, then let the echo
+    window lapse so the next tick sends."""
+    _set_on(hass, *entity_ids)
+    await hass.async_block_till_done()
+    ctrl._circadian_commanded_at.clear()
+
+
 async def _circadian(hass: HomeAssistant, area_id: str):
-    """Activate circadian, then forget the activation's echo window."""
     ctrl = hass.data[DOMAIN]["controllers"][area_id]
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
-    ctrl._circadian_commanded_at.clear()
     return ctrl
 
 
@@ -98,8 +104,8 @@ async def test_tick_updates_only_lights_that_are_on(
 ) -> None:
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
-    await _circadian(hass, "network_room")
-    _set_on(hass, "light.network_room_overhead_1")
+    ctrl = await _circadian(hass, "network_room")
+    await _echo_on(hass, ctrl, "light.network_room_overhead_1")
     _stub_off(hass, "light.network_room_overhead_2")
     service_calls.clear()
 
@@ -121,8 +127,8 @@ async def test_tick_uses_configured_transition(
     network_room_config[DOMAIN]["circadian"] = {"transition": 7}
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
-    await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
+    ctrl = await _circadian(hass, "network_room")
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
     service_calls.clear()
 
     await pin_circadian(50, 4000)
@@ -143,7 +149,7 @@ async def test_tick_skips_shed_lights(
     toggles._demand_response_active = True
     ctrl = await _circadian(hass, "study")
     assert ctrl.dr_shed_ids == frozenset(lights[2:])
-    _set_on(hass, *lights)
+    await _echo_on(hass, ctrl, *lights)
     service_calls.clear()
 
     await pin_circadian(50, 4000)
@@ -158,7 +164,7 @@ async def test_tick_skips_while_alert_active(
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
     ctrl._alert_active = True
     service_calls.clear()
 
@@ -211,9 +217,9 @@ async def test_tick_skips_route_lights_outside_the_active_route(
     )
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, cfg)
-    await _circadian(hass, "kitchen")
+    ctrl = await _circadian(hass, "kitchen")
     # The outgoing tube still reports on, as it would mid-crossfade.
-    _set_on(hass, tube, *strips)
+    await _echo_on(hass, ctrl, tube, *strips)
     service_calls.clear()
 
     await pin_circadian(50, 4000)
@@ -237,8 +243,8 @@ async def test_tick_skips_clusters_under_demand_response(
     await _setup(hass, cfg)
     toggles: GlobalToggles = hass.data[DOMAIN]["global"]
     toggles._demand_response_active = True
-    await _circadian(hass, "zone_room")
-    _set_on(hass, zone, *members)
+    ctrl = await _circadian(hass, "zone_room")
+    await _echo_on(hass, ctrl, zone, *members)
     service_calls.clear()
 
     await pin_circadian(50, 4000)
@@ -299,7 +305,7 @@ async def test_dimmed_circadian_area_is_not_adjusted(
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
     await ctrl.lighting_lower()
     await hass.async_block_till_done()
     assert ctrl._state.is_circadian
@@ -318,8 +324,7 @@ async def test_overlapping_ticks_do_not_run_concurrently(
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
-    await hass.async_block_till_done()
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
     service_calls.clear()
 
     release = asyncio.Event()
@@ -351,19 +356,18 @@ async def test_stop_before_dispatch_drops_the_tick_commands(
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
-    await hass.async_block_till_done()
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
     service_calls.clear()
 
-    payload = ctrl._circadian_payload
+    recently_commanded = ctrl._recently_commanded
 
-    def payload_then_queue_stop(light, values):
+    def recently_commanded_then_queue_stop(entity_id):
         # The stop is queued ahead of the send tasks, as a turn-off
         # handler already waiting on the loop would be.
         hass.loop.call_soon(ctrl._stop_circadian)
-        return payload(light, values)
+        return recently_commanded(entity_id)
 
-    ctrl._circadian_payload = payload_then_queue_stop
+    ctrl._recently_commanded = recently_commanded_then_queue_stop
     await pin_circadian(50, 4000)
 
     assert not ctrl.circadian_running
@@ -381,8 +385,7 @@ async def test_failed_command_holds_the_tick_until_its_siblings_finish(
     await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = await _circadian(hass, "network_room")
-    _set_on(hass, *NETWORK_LIGHTS)
-    await hass.async_block_till_done()
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
 
     failing, blocked = NETWORK_LIGHTS
     sent: list[str] = []

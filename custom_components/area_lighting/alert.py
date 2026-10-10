@@ -319,4 +319,8 @@ async def execute_alert(
             # shed skips the re-drive: the snapshot restore already
             # produced the correct state.
             await controller.reactivate_for_demand_response()
+        else:
+            # Restarts an adjuster a reload stopped mid-alert, and brings the
+            # restored lights to the current values, sleep changes included.
+            await controller.async_resume_circadian()
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

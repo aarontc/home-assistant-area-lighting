@@ -191,6 +191,7 @@ def _make_mock_controller(light_ids: list[str], state: AreaState | None = None):
     ctrl.demand_response_active = False
     ctrl.dr_shed_ids = frozenset()
     ctrl.reactivate_for_demand_response = AsyncMock()
+    ctrl.async_resume_circadian = AsyncMock()
     for timer_name in ("_motion_timer", "_motion_night_timer", "_occupancy_timer"):
         timer = MagicMock()
         timer.deadline_utc = None

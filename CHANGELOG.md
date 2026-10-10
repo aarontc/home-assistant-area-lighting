@@ -116,6 +116,18 @@ readable companion that highlights user-facing changes.
   While the state of `sleep_entity` is one of `sleep_state`, the group's
   lights get `sleep_brightness` and `sleep_colortemp`.
 
+- **Circadian reacts to lights, sleep entities and restarts.** While an area
+  is in `circadian`, a grouped light that comes on (from off, unavailable or
+  unknown) gets the current values with a 1-second transition, unless
+  area_lighting commanded it in the last 5 seconds. A change in the state of a
+  group's `sleep_entity` re-sends that group's lights that are on, also with a
+  1-second transition. Both work whether or not the area sets
+  `event_handlers`. An area that was in `circadian` when Home Assistant
+  stopped resumes at startup: its lights that are on get the current values
+  with the configured `transition`, and lights that are off stay off. When an
+  alert ends, the area's lights that are on get the current values, including
+  any sleep change made during the alert.
+
 ### Changed
 
 - **Circadian lights are driven by area_lighting itself.** While an area is

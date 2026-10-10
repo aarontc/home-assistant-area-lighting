@@ -244,6 +244,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ctrl.reconcile_startup_state()
         except Exception:
             _LOGGER.exception("Failed to reconcile startup state")
+        try:
+            for ctrl in hass.data[DOMAIN]["controllers"].values():
+                await ctrl.async_resume_circadian()
+        except Exception:
+            _LOGGER.exception("Failed to resume circadian areas")
 
     hass.data[DOMAIN]["unsub_started"] = hass.bus.async_listen_once(
         EVENT_HOMEASSISTANT_STARTED, _on_started

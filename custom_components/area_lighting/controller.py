@@ -9,8 +9,9 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from homeassistant.const import STATE_ON
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from . import circadian
@@ -187,9 +188,10 @@ class AreaLightingController:
         self.leader: AreaLightingController | None = None
         self.followers: list[AreaLightingController] = []
 
-        # Circadian adjuster: connected to the clock's tick while the area is
-        # in circadian. Commanded-at times are monotonic, per light entity id.
-        self._unsub_circadian_tick: Callable[[], None] | None = None
+        # Circadian adjuster: connected to the clock's tick and to its lights'
+        # and sleep entities' state changes while the area is in circadian.
+        # Commanded-at times are monotonic, per light entity id.
+        self._circadian_unsubs: list[Callable[[], None]] = []
         self._circadian_tick_running: bool = False
         self._circadian_commanded_at: dict[str, float] = {}
 
@@ -531,7 +533,7 @@ class AreaLightingController:
     @property
     def circadian_running(self) -> bool:
         """Whether the circadian adjuster is connected to the clock's tick."""
-        return self._unsub_circadian_tick is not None
+        return bool(self._circadian_unsubs)
 
     @property
     def scene_self_heal_enabled(self) -> bool:
@@ -670,8 +672,8 @@ class AreaLightingController:
 
     def _notify_state_change(self) -> None:
         self._log_state_snapshot_if_changed()
-        for callback in self._state_listeners:
-            callback()
+        for listener in self._state_listeners:
+            listener()
         self._schedule_save()
 
     async def _sync_kelvin_router(self) -> None:
@@ -1472,12 +1474,30 @@ class AreaLightingController:
     # ── Circadian helpers ──────────────────────────────────────────────
 
     def _start_circadian(self) -> None:
-        """Connect the adjuster to the clock's tick. Idempotent."""
-        if self._closed or self._unsub_circadian_tick is not None:
+        """Connect the adjuster to the clock's tick, its grouped lights and
+        its groups' sleep entities. Idempotent.
+
+        The listeners do not depend on the area's event_handlers flag.
+        """
+        if self._closed or self._circadian_unsubs:
             return
-        self._unsub_circadian_tick = async_dispatcher_connect(
-            self.hass, SIGNAL_CIRCADIAN_TICK, self._circadian_tick
+        self._circadian_unsubs.append(
+            async_dispatcher_connect(self.hass, SIGNAL_CIRCADIAN_TICK, self._circadian_tick)
         )
+        light_ids = [light.id for light in self.area.all_lights if light.circadian_switch]
+        if light_ids:
+            self._circadian_unsubs.append(
+                async_track_state_change_event(self.hass, light_ids, self._on_circadian_light_event)
+            )
+        sleep_ids = {
+            group.sleep_entity for group in self.area.circadian_switches if group.sleep_entity
+        }
+        if sleep_ids:
+            self._circadian_unsubs.append(
+                async_track_state_change_event(
+                    self.hass, sorted(sleep_ids), self._on_circadian_sleep_event
+                )
+            )
 
     def _stop_circadian(self) -> None:
         """Disconnect the adjuster. Idempotent.
@@ -1489,9 +1509,75 @@ class AreaLightingController:
         """
         if self._kelvin_router is not None:
             self._kelvin_router.deactivate()
-        if self._unsub_circadian_tick is not None:
-            self._unsub_circadian_tick()
-            self._unsub_circadian_tick = None
+        for unsub in self._circadian_unsubs:
+            unsub()
+        self._circadian_unsubs.clear()
+
+    async def async_resume_circadian(self) -> None:
+        """Restart the adjuster of an area that is already in circadian and
+        bring its lights that are on to the current values, without turning
+        on lights that are off. Runs at startup and when an alert ends.
+
+        The shed set is refreshed first, since no router reconcile does that
+        for an area without routes. The tick then syncs the router and sends.
+        """
+        if self._closed or self._alert_active or not self._state.is_circadian or self._state.dimmed:
+            return
+        self._start_circadian()
+        await self.recompute_and_apply_circadian_dr()
+        # An alert's steps and restore overwrote the lights since the
+        # adjuster last commanded them, so no echo is pending.
+        self._circadian_commanded_at.clear()
+        values = self._circadian_values()
+        if values is not None:
+            await self._circadian_tick(values)
+
+    @callback
+    def _on_circadian_light_event(self, event: Event[EventStateChangedData]) -> None:
+        """A grouped light that comes on gets the current values at once."""
+        new_state = event.data["new_state"]
+        old_state = event.data["old_state"]
+        if new_state is None or new_state.state != STATE_ON:
+            return
+        if old_state is not None and old_state.state == STATE_ON:
+            return
+        if self._closed or self._alert_active or self._recently_commanded(new_state.entity_id):
+            return
+        light = next(light for light in self.area.all_lights if light.id == new_state.entity_id)
+        self._send_circadian_now([light], CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+
+    @callback
+    def _on_circadian_sleep_event(self, event: Event[EventStateChangedData]) -> None:
+        """A sleep entity's state changed: re-send its groups' lights that are on."""
+        new_state = event.data["new_state"]
+        old_state = event.data["old_state"]
+        new_value = new_state.state if new_state is not None else None
+        old_value = old_state.state if old_state is not None else None
+        if new_value == old_value:
+            return
+        if self._closed or self._alert_active:
+            return
+        lights = [
+            light
+            for light in self.area.all_lights
+            if (group := self.area.circadian_switch_for_light(light)) is not None
+            and group.sleep_entity == event.data["entity_id"]
+        ]
+        self._send_circadian_now(lights, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+
+    def _send_circadian_now(self, lights: list[LightConfig], transition: float) -> None:
+        """Send these lights the current values from a state listener."""
+        values = self._circadian_values()
+        if lights and values is not None:
+            self.hass.async_create_task(self._send_circadian_logged(lights, values, transition))
+
+    def _recently_commanded(self, entity_id: str) -> bool:
+        """Whether the adjuster commanded this light within the echo window."""
+        commanded_at = self._circadian_commanded_at.get(entity_id)
+        return (
+            commanded_at is not None
+            and time.monotonic() - commanded_at < CIRCADIAN_COMMAND_ECHO_SECONDS
+        )
 
     async def _circadian_tick(self, values: CircadianValues) -> None:
         """Bring every adjustable light that is on to the clock's values."""
@@ -1507,35 +1593,46 @@ class AreaLightingController:
                 # The area left circadian, or an alert took it, while the
                 # router was reconciling.
                 return
-            now = time.monotonic()
-            sends = {}
-            for light in self.area.all_lights:
-                if not self._circadian_adjustable(light):
-                    continue
-                state = self.hass.states.get(light.id)
-                if state is None or state.state != STATE_ON:
-                    continue
-                commanded_at = self._circadian_commanded_at.get(light.id)
-                if commanded_at is not None and now - commanded_at < CIRCADIAN_COMMAND_ECHO_SECONDS:
-                    continue
-                payload = self._circadian_payload(light, values)
-                if payload is not None:
-                    sends[light.id] = self._send_circadian(
-                        payload, self._global_config.circadian.transition
-                    )
+            lights = [
+                light for light in self.area.all_lights if not self._recently_commanded(light.id)
+            ]
             # Wait for every send before releasing the guard, so one failure
             # cannot let the next tick overlap the sends still in flight.
-            results = await asyncio.gather(*sends.values(), return_exceptions=True)
-            for entity_id, result in zip(sends, results, strict=True):
-                if isinstance(result, Exception):
-                    _LOGGER.warning(
-                        "Area %s: circadian update of %s failed: %s",
-                        self.area.id,
-                        entity_id,
-                        result,
-                    )
+            await self._send_circadian_logged(
+                lights, values, self._global_config.circadian.transition
+            )
         finally:
             self._circadian_tick_running = False
+
+    async def _send_circadian_logged(
+        self, lights: list[LightConfig], values: CircadianValues, transition: float
+    ) -> None:
+        """Send the values to each of these lights that is on and adjustable,
+        logging failures instead of raising."""
+        results = await asyncio.gather(
+            *(self._send_circadian_if_on(light, values, transition) for light in lights),
+            return_exceptions=True,
+        )
+        for light, result in zip(lights, results, strict=True):
+            if isinstance(result, Exception):
+                _LOGGER.warning(
+                    "Area %s: circadian update of %s failed: %s",
+                    self.area.id,
+                    light.id,
+                    result,
+                )
+
+    async def _send_circadian_if_on(
+        self, light: LightConfig, values: CircadianValues, transition: float
+    ) -> None:
+        # Checked when the queued send starts, so a light switched off or
+        # shed since it was queued is not turned back on.
+        state = self.hass.states.get(light.id)
+        if state is None or state.state != STATE_ON or not self._circadian_adjustable(light):
+            return
+        payload = self._circadian_payload(light, values)
+        if payload is not None:
+            await self._send_circadian(payload, transition)
 
     def _circadian_adjustable(self, light: LightConfig) -> bool:
         """Whether the adjuster may send this light circadian values.
