@@ -100,6 +100,15 @@ readable companion that highlights user-facing changes.
   controller to refresh the shed set (the area is leaving circadian)
   drops its route commands instead of fighting the incoming scene.
 
+- **Built-in circadian clock.** area_lighting computes the circadian percent
+  and color temperature from Home Assistant's location, using
+  circadian_lighting's curve, and reports them as
+  `sensor.area_lighting_circadian` (state in percent, attribute `colortemp`
+  in kelvin, hidden by default). The optional top-level `circadian:` block
+  sets `min_colortemp` (default 2500), `max_colortemp` (5500), `interval`
+  (300 seconds between updates) and `transition` (60 seconds). Lights do not
+  follow it yet.
+
 ### Changed
 
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**

@@ -16,6 +16,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from custom_components.area_lighting import async_teardown
+from custom_components.area_lighting.circadian_clock import CircadianClock, CircadianValues
+from custom_components.area_lighting.const import DOMAIN
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +36,25 @@ async def shutdown_controllers(hass: HomeAssistant):
     """
     yield
     await async_teardown(hass)
+
+
+@pytest.fixture
+def pin_circadian(hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch):
+    """Fix the clock's circadian values, and by default run a tick with them.
+
+    `await pin_circadian(percent, kelvin)` makes every CircadianClock
+    return those values, then ticks the running clock. Pass `tick=False`
+    to set the values before setup or without notifying anything.
+    """
+
+    async def pin(percent: float, kelvin: float, *, tick: bool = True) -> None:
+        values = CircadianValues(percent, kelvin)
+        monkeypatch.setattr(CircadianClock, "values", lambda _self, _now=None: values)
+        if tick:
+            await hass.data[DOMAIN]["circadian_clock"].async_tick()
+            await hass.async_block_till_done()
+
+    return pin
 
 
 @pytest.fixture

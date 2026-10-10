@@ -13,7 +13,11 @@ from .const import (
     CIRCADIAN_BRIGHTNESS,
     CIRCADIAN_CT,
     CIRCADIAN_RGB,
+    DEFAULT_CIRCADIAN_INTERVAL_SECONDS,
     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
+    DEFAULT_CIRCADIAN_MAX_COLORTEMP,
+    DEFAULT_CIRCADIAN_MIN_COLORTEMP,
+    DEFAULT_CIRCADIAN_TRANSITION_SECONDS,
     SCENE_LIGHT_ON_ATTRIBUTES,
 )
 from .models import (
@@ -21,6 +25,7 @@ from .models import (
     AlertStep,
     AreaConfig,
     AreaLightingConfig,
+    CircadianConfig,
     CircadianKelvinRouteConfig,
     CircadianKelvinRoutesConfig,
     CircadianSwitchConfig,
@@ -39,6 +44,33 @@ CIRCADIAN_SWITCH_SCHEMA = vol.Schema(
         vol.Optional("max_brightness"): vol.All(int, vol.Range(min=1, max=100)),
         vol.Optional("min_brightness"): vol.All(int, vol.Range(min=1, max=100)),
     }
+)
+
+
+def _validate_colortemp_order(value: dict) -> dict:
+    if value["min_colortemp"] > value["max_colortemp"]:
+        raise vol.Invalid("min_colortemp must not be above max_colortemp")
+    return value
+
+
+CIRCADIAN_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional("min_colortemp", default=DEFAULT_CIRCADIAN_MIN_COLORTEMP): vol.All(
+                int, vol.Range(min=1000, max=10000)
+            ),
+            vol.Optional("max_colortemp", default=DEFAULT_CIRCADIAN_MAX_COLORTEMP): vol.All(
+                int, vol.Range(min=1000, max=10000)
+            ),
+            vol.Optional("interval", default=DEFAULT_CIRCADIAN_INTERVAL_SECONDS): vol.All(
+                int, vol.Range(min=1)
+            ),
+            vol.Optional("transition", default=DEFAULT_CIRCADIAN_TRANSITION_SECONDS): vol.All(
+                vol.Coerce(float), vol.Range(min=0, max=6553)
+            ),
+        }
+    ),
+    _validate_colortemp_order,
 )
 
 
@@ -544,6 +576,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
         areas=areas,
         alert_patterns=alert_patterns,
         scene_self_heal=raw.get("scene_self_heal", True),
+        circadian=CircadianConfig(**raw.get("circadian", {})),
     )
 
 

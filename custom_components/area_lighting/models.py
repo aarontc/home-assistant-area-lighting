@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .const import (
+    DEFAULT_CIRCADIAN_INTERVAL_SECONDS,
+    DEFAULT_CIRCADIAN_MAX_COLORTEMP,
+    DEFAULT_CIRCADIAN_MIN_COLORTEMP,
+    DEFAULT_CIRCADIAN_TRANSITION_SECONDS,
+)
+
 
 @dataclass
 class CircadianSwitchConfig:
@@ -288,12 +295,23 @@ class AreaConfig:
 
 
 @dataclass
+class CircadianConfig:
+    """The global `circadian:` block: curve bounds and update timing."""
+
+    min_colortemp: int = DEFAULT_CIRCADIAN_MIN_COLORTEMP
+    max_colortemp: int = DEFAULT_CIRCADIAN_MAX_COLORTEMP
+    interval: int = DEFAULT_CIRCADIAN_INTERVAL_SECONDS
+    transition: float = DEFAULT_CIRCADIAN_TRANSITION_SECONDS
+
+
+@dataclass
 class AreaLightingConfig:
     """Top-level configuration for the area_lighting integration."""
 
     areas: list[AreaConfig] = field(default_factory=list)
     alert_patterns: dict[str, AlertPattern] = field(default_factory=dict)
     scene_self_heal: bool = True
+    circadian: CircadianConfig = field(default_factory=CircadianConfig)
 
     @property
     def enabled_areas(self) -> list[AreaConfig]:

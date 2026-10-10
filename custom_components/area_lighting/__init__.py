@@ -14,9 +14,11 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
 from .binary_sensor import AreaOccupiedBinarySensor
+from .circadian_clock import AreaLightingCircadianSensor, CircadianClock
 from .config_schema import (
     ALERT_PATTERN_SCHEMA,
     AREA_SCHEMA,
+    CIRCADIAN_SCHEMA,
     parse_config,
     validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
@@ -61,6 +63,7 @@ CONFIG_SCHEMA = vol.Schema(
                     cv.string: ALERT_PATTERN_SCHEMA,
                 },
                 vol.Optional("scene_self_heal", default=True): cv.boolean,
+                vol.Optional("circadian", default={}): CIRCADIAN_SCHEMA,
                 # Ignored fields from templater.yaml kept for config compat
                 vol.Optional("base_url"): str,
             },
@@ -112,6 +115,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     global_toggles = GlobalToggles(hass, state_storage)
     global_toggles.load_persisted_state(state_storage.get_global_state())
 
+    clock = CircadianClock(hass, area_config.circadian)
+
     hass.data[DOMAIN] = {
         "config": area_config,
         "controllers": {},
@@ -119,7 +124,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "scene_storage": scene_storage,
         "state_storage": state_storage,
         "global": global_toggles,
+        "circadian_clock": clock,
     }
+    clock.async_start()
 
     # Create controllers for each enabled area, restoring persisted state
     controllers: dict[str, AreaLightingController] = {}
@@ -205,9 +212,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         except Exception:
             _LOGGER.exception("Failed to register scene entities")
         try:
-            await _register_diagnostic_sensor(hass)
+            await _register_sensors(hass)
         except Exception:
-            _LOGGER.exception("Failed to register diagnostic sensor")
+            _LOGGER.exception("Failed to register sensors")
         try:
             await _register_helper_entities(hass)
         except Exception:
@@ -264,6 +271,7 @@ async def async_teardown(hass: HomeAssistant) -> None:
     for unsub in data["unsubs"]:
         unsub()
     data["unsubs"].clear()
+    data["circadian_clock"].async_stop()
     for ctrl in data["controllers"].values():
         ctrl.shutdown()
 
@@ -499,17 +507,18 @@ def _apply_hidden_default(hass: HomeAssistant) -> None:
         _LOGGER.info("Hid %d entities registered by an earlier release", hidden)
 
 
-async def _register_diagnostic_sensor(hass: HomeAssistant) -> None:
-    """Register the diagnostic sensor via the sensor EntityComponent."""
+async def _register_sensors(hass: HomeAssistant) -> None:
+    """Register the diagnostic and circadian sensors via the sensor EntityComponent."""
     from homeassistant.components.sensor import (  # type: ignore[attr-defined]
         DATA_COMPONENT as SENSOR_DATA_COMPONENT,
     )
 
     component = hass.data.get(SENSOR_DATA_COMPONENT)
     if component is None:
-        _LOGGER.error("Sensor component not loaded; cannot register diagnostic sensor")
+        _LOGGER.error("Sensor component not loaded; cannot register sensors")
         return
 
-    sensor = AreaLightingDiagnosticSensor(hass)
-    await component.async_add_entities([sensor])
-    _LOGGER.info("Registered diagnostic sensor")
+    await component.async_add_entities(
+        [AreaLightingDiagnosticSensor(hass), AreaLightingCircadianSensor(hass)]
+    )
+    _LOGGER.info("Registered diagnostic and circadian sensors")
