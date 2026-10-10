@@ -5,19 +5,30 @@ from __future__ import annotations
 import pytest
 import voluptuous as vol
 
-from custom_components.area_lighting.config_schema import AREA_SCHEMA, parse_config
-from custom_components.area_lighting.models import CircadianSwitchConfig
+from custom_components.area_lighting.config_schema import (
+    AREA_SCHEMA,
+    parse_config,
+    validate_circadian_groups,
+)
+from custom_components.area_lighting.models import CircadianGroupConfig
 
 
-def _parse_group(**options) -> CircadianSwitchConfig:
+def _parse_group(**options) -> CircadianGroupConfig:
     area = AREA_SCHEMA(
         {
             "id": "stairs",
             "name": "Stairs",
-            "circadian_switches": [{"name": "Main", **options}],
+            "circadian_groups": [{"name": "Main", **options}],
         }
     )
-    return parse_config({"areas": [area]}).areas[0].circadian_switches[0]
+    return parse_config({"areas": [area]}).areas[0].circadian_groups[0]
+
+
+def _validate_area(groups: list[dict], lights: list[dict]) -> None:
+    area = AREA_SCHEMA(
+        {"id": "stairs", "name": "Stairs", "circadian_groups": groups, "lights": lights}
+    )
+    validate_circadian_groups(parse_config({"areas": [area]}))
 
 
 def test_bounds_default_to_1_and_100():
@@ -59,3 +70,83 @@ def test_sleep_defaults_match_circadian_lighting():
 def test_sleep_state_accepts_a_single_string():
     group = _parse_group(sleep_entity="select.theater_last_scene", sleep_state="movie")
     assert group.sleep_state == ["movie"]
+
+
+def test_valid_groups_pass_validation():
+    _validate_area(
+        [{"name": "Main", "min_brightness": 10, "max_brightness": 10}],
+        [
+            {"id": "light.stairs", "circadian_group": "Main", "circadian_type": "ct"},
+            {"id": "light.stairs_plain"},
+        ],
+    )
+
+
+def test_circadian_switches_key_is_rejected_with_rename_hint():
+    with pytest.raises(
+        vol.Invalid, match=r"circadian_switches was renamed to circadian_groups in 3\.0\.0"
+    ):
+        AREA_SCHEMA({"id": "stairs", "name": "Stairs", "circadian_switches": [{"name": "Main"}]})
+
+
+def test_circadian_switch_light_key_is_rejected_with_rename_hint():
+    with pytest.raises(
+        vol.Invalid, match=r"circadian_switch was renamed to circadian_group in 3\.0\.0"
+    ):
+        AREA_SCHEMA(
+            {
+                "id": "stairs",
+                "name": "Stairs",
+                "lights": [{"id": "light.stairs", "circadian_switch": "Main"}],
+            }
+        )
+
+
+def test_routes_source_is_rejected_with_removal_hint():
+    with pytest.raises(
+        vol.Invalid, match=r"circadian_kelvin_routes\.source was removed in 3\.0\.0"
+    ):
+        AREA_SCHEMA(
+            {
+                "id": "stairs",
+                "name": "Stairs",
+                "lights": [{"id": "light.a"}, {"id": "light.b"}],
+                "circadian_kelvin_routes": {
+                    "source": "sensor.circadian_values",
+                    "routes": [
+                        {"kelvin_range": [4000, 6000], "lights": ["light.a"]},
+                        {"lights": ["light.b"]},
+                    ],
+                },
+            }
+        )
+
+
+def test_unknown_group_is_rejected():
+    with pytest.raises(vol.Invalid, match="circadian_group 'Upper' is not declared"):
+        _validate_area(
+            [{"name": "Main"}],
+            [{"id": "light.stairs", "circadian_group": "Upper", "circadian_type": "ct"}],
+        )
+
+
+def test_type_without_group_is_rejected():
+    with pytest.raises(vol.Invalid, match="circadian_type is set without circadian_group"):
+        _validate_area([{"name": "Main"}], [{"id": "light.stairs", "circadian_type": "ct"}])
+
+
+def test_group_without_type_is_rejected():
+    with pytest.raises(vol.Invalid, match="circadian_group is set without circadian_type"):
+        _validate_area([{"name": "Main"}], [{"id": "light.stairs", "circadian_group": "Main"}])
+
+
+def test_duplicate_group_name_is_rejected():
+    with pytest.raises(vol.Invalid, match="circadian group 'Main' is declared more than once"):
+        _validate_area([{"name": "Main"}, {"name": "Main"}], [])
+
+
+def test_min_brightness_above_max_is_rejected():
+    with pytest.raises(
+        vol.Invalid, match=r"min_brightness \(60\) must not be above max_brightness \(50\)"
+    ):
+        _validate_area([{"name": "Main", "min_brightness": 60, "max_brightness": 50}], [])

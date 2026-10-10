@@ -146,14 +146,14 @@ async def async_validate_external_entities(
             )
         # A renamed or missing grouped light would silently get no
         # circadian updates, so report it.
-        for cs in area.circadian_switches:
+        for group in area.circadian_groups:
             for light in area.all_lights:
-                if light.circadian_switch != cs.short_name:
+                if light.circadian_group != group.name:
                     continue
                 required.append(
                     (
                         light.id,
-                        f"light assigned to circadian group {area.name}/{cs.name}"
+                        f"light assigned to circadian group {area.name}/{group.name}"
                         f" ({light.circadian_type or 'no type'})",
                     )
                 )
@@ -516,7 +516,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             return
 
         # While the area is circadian, light updates are driven by the
-        # circadian switches, so detection is normally skipped entirely.
+        # circadian adjuster, so detection is normally skipped entirely.
         # Exception: a demand-response-shed bulb is NOT circadian-driven
         # (it was forced off), so an on-report for it (all events past
         # the STATE_ON gate above are on-reports) is a genuine manual

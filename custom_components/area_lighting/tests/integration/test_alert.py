@@ -144,19 +144,19 @@ def _config_with_alert_patterns() -> dict:
                     "name": "Network Room",
                     "event_handlers": True,
                     "ambient_lighting_zone": "upstairs",
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Overhead", "max_brightness": 100, "min_brightness": 65},
                     ],
                     "lights": [
                         {
                             "id": "light.network_room_overhead_1",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },
                         {
                             "id": "light.network_room_overhead_2",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },

@@ -196,10 +196,10 @@ async def test_validator_does_not_require_circadian_lighting_entities(
 
 
 @pytest.mark.integration
-async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
+async def test_validator_flags_light_referenced_by_circadian_group_but_missing(
     hass: HomeAssistant, helper_entities, caplog
 ) -> None:
-    """If a light assigned to a circadian switch doesn't exist as an
+    """If a light assigned to a circadian group doesn't exist as an
     HA entity, the validator must flag it as missing."""
     import logging
 
@@ -210,13 +210,13 @@ async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
                     "id": "test_area",
                     "name": "Test Area",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Main", "max_brightness": 100, "min_brightness": 50}
                     ],
                     "lights": [
                         {
                             "id": "light.nonexistent_light",
-                            "circadian_switch": "Main",
+                            "circadian_group": "Main",
                             "circadian_type": "ct",
                             "roles": ["color"],
                         }

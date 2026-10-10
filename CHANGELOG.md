@@ -108,7 +108,7 @@ readable companion that highlights user-facing changes.
   sets `min_colortemp` (default 2500), `max_colortemp` (5500), `interval`
   (300 seconds between updates) and `transition` (60 seconds).
 
-- **Sleep options on circadian groups.** An entry under `circadian_switches`
+- **Sleep options on circadian groups.** An entry under `circadian_groups`
   accepts `sleep_entity`, `sleep_state` (one state or a list, required when
   `sleep_entity` is set), `sleep_brightness` (percent, default 1) and
   `sleep_colortemp` (kelvin, default 1000). `min_brightness` and
@@ -144,13 +144,28 @@ readable companion that highlights user-facing changes.
 
 - **Kelvin routes follow the built-in clock.** `circadian_kelvin_routes` picks
   its route from the clock's kelvin at each `interval` update instead of
-  watching a `source` entity's `colortemp`. `source` is still accepted but
-  nothing reads it, and an area with two or more circadian groups no longer
-  needs one. A route light with a circadian group turns on with that group's
-  brightness and color temperature, and a route light without one is only
-  switched on. At startup the area keeps the route whose lights are on and
-  turns on no route light that is off, unless the kelvin crossed into another
-  route while Home Assistant was down.
+  watching a `source` entity's `colortemp`. A route light with a circadian
+  group turns on with that group's brightness and color temperature, and a
+  route light without one is only switched on. At startup the area keeps the
+  route whose lights are on and turns on no route light that is off, unless
+  the kelvin crossed into another route while Home Assistant was down.
+
+- **BREAKING: Circadian switches are now circadian groups.** Rename the area
+  key `circadian_switches` to `circadian_groups` and each light's
+  `circadian_switch` to `circadian_group`. The group entries and names stay
+  the same. A config that still uses an old key fails validation with a
+  message naming the new one.
+
+- **BREAKING: `circadian_kelvin_routes.source` is removed.** Routes follow
+  the integration's own circadian color temperature. Delete the `source`
+  key; a config that keeps it fails validation.
+
+- **BREAKING: Circadian groups are validated.** Setup and
+  `area_lighting.reload` now reject an area where two groups share a name, a
+  group's `min_brightness` is above its `max_brightness`, a light's
+  `circadian_group` names a group the area does not declare, or a light sets
+  only one of `circadian_group` and `circadian_type`. Fix the named group or
+  light, setting both keys or neither.
 
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
   The first two collide with global master switch unique ids and entity

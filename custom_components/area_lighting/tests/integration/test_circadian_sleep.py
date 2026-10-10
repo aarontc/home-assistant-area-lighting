@@ -46,7 +46,7 @@ def _config(lights: list[dict] | None = None, **extra) -> dict:
                     "id": "bedroom",
                     "name": "Bedroom",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {
                             "name": "Main",
                             "sleep_entity": SLEEP_ENTITY,
@@ -58,8 +58,8 @@ def _config(lights: list[dict] | None = None, **extra) -> dict:
                     ],
                     "lights": lights
                     or [
-                        {"id": MAIN, "circadian_switch": "Main", "circadian_type": "ct"},
-                        {"id": OTHER, "circadian_switch": "Other", "circadian_type": "ct"},
+                        {"id": MAIN, "circadian_group": "Main", "circadian_type": "ct"},
+                        {"id": OTHER, "circadian_group": "Other", "circadian_type": "ct"},
                     ],
                     "scenes": [
                         {"id": "circadian", "name": "Circadian"},
@@ -239,7 +239,7 @@ async def test_sleep_change_skips_clusters_under_demand_response(
     zone = "light.bedroom_zone"
     for entity_id in (zone, *members):
         hass.states.async_set(entity_id, "off", {})
-    grouped = {"circadian_switch": "Main", "circadian_type": "ct"}
+    grouped = {"circadian_group": "Main", "circadian_type": "ct"}
     cfg = _config(
         [{"id": member, **grouped} for member in members],
         light_clusters=[{"id": zone, **grouped, "members": members}],

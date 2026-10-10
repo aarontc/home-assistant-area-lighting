@@ -25,7 +25,6 @@ def test_routes_config_exposes_fallback_and_all_lights():
     fallback = CircadianKelvinRouteConfig(lights=["light.strip_1", "light.strip_2"])
     cfg = CircadianKelvinRoutesConfig(
         routes=[banded, fallback],
-        source="switch.circadian_kitchen",
         crossfade_seconds=2.0,
     )
     assert cfg.fallback_route is fallback

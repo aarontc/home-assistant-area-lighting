@@ -60,7 +60,7 @@ def _area(area_id: str, lights: list[dict], **extra) -> dict:
                     "id": area_id,
                     "name": area_id.replace("_", " ").title(),
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Main", "max_brightness": 100, "min_brightness": 40},
                     ],
                     "lights": lights,
@@ -76,7 +76,7 @@ def _area(area_id: str, lights: list[dict], **extra) -> dict:
 
 
 def _grouped(entity_id: str, circadian_type: str = "ct") -> dict:
-    return {"id": entity_id, "circadian_switch": "Main", "circadian_type": circadian_type}
+    return {"id": entity_id, "circadian_group": "Main", "circadian_type": circadian_type}
 
 
 def _stub_off(hass: HomeAssistant, *entity_ids: str) -> None:

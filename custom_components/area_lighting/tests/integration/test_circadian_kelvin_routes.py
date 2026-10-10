@@ -34,28 +34,28 @@ def kitchen_with_routes_config() -> dict:
                     "id": "kitchen",
                     "name": "Kitchen",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Kitchen", "max_brightness": 100, "min_brightness": 20},
                     ],
                     "lights": [
                         {
                             "id": "light.kitchen_fluorescent",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_1",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_2",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_3",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                     ],
@@ -292,7 +292,7 @@ async def test_route_light_without_group_is_switched_only(
 ) -> None:
     """A route light with no group turns on with only a transition."""
     tube = kitchen_with_routes_config["area_lighting"]["areas"][0]["lights"][0]
-    del tube["circadian_switch"], tube["circadian_type"]
+    del tube["circadian_group"], tube["circadian_type"]
     await _enter_circadian(hass, pin_circadian, kitchen_with_routes_config, 5000)
 
     assert [dict(c.data) for c in service_calls if c.data.get("entity_id") == _TUBE] == [
@@ -344,9 +344,9 @@ async def test_tick_after_cluster_route_change_leaves_outgoing_members_fading(
                     "id": "media",
                     "name": "Media",
                     "event_handlers": True,
-                    "circadian_switches": [{"name": "Media"}],
+                    "circadian_groups": [{"name": "Media"}],
                     "lights": [
-                        {"id": eid, "circadian_switch": "Media", "circadian_type": "ct"}
+                        {"id": eid, "circadian_group": "Media", "circadian_type": "ct"}
                         for eid in [*_MEDIA_MEMBERS, "light.media_lamp"]
                     ],
                     "light_clusters": [{"id": _MEDIA_ZONE, "members": list(_MEDIA_MEMBERS)}],
@@ -404,16 +404,16 @@ async def test_routes_without_circadian_scene_logs_warning(
                     "id": "kitchen",
                     "name": "Kitchen",
                     "event_handlers": True,
-                    "circadian_switches": [{"name": "Kitchen"}],
+                    "circadian_groups": [{"name": "Kitchen"}],
                     "lights": [
                         {
                             "id": "light.kitchen_fluorescent",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_1",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                     ],

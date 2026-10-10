@@ -39,28 +39,28 @@ def _kitchen_routes_config() -> dict:
                     "id": "kitchen",
                     "name": "Kitchen",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Kitchen", "max_brightness": 100, "min_brightness": 20},
                     ],
                     "lights": [
                         {
                             "id": "light.kitchen_fluorescent",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_1",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_2",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip_3",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                     ],
@@ -232,7 +232,7 @@ async def test_external_circadian_recomputes_shed_set(
 
 def _loft_mixed_config() -> dict:
     """MIXED area: two banded route lights + one fallback route light + two
-    NON-route circadian-switch lamps. Config order: tracks, accent, lamps."""
+    NON-route grouped lamps. Config order: tracks, accent, lamps."""
     return {
         "area_lighting": {
             "areas": [
@@ -240,33 +240,33 @@ def _loft_mixed_config() -> dict:
                     "id": "loft",
                     "name": "Loft",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Loft", "max_brightness": 100, "min_brightness": 20},
                     ],
                     "lights": [
                         {
                             "id": "light.loft_track_1",
-                            "circadian_switch": "Loft",
+                            "circadian_group": "Loft",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.loft_track_2",
-                            "circadian_switch": "Loft",
+                            "circadian_group": "Loft",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.loft_accent",
-                            "circadian_switch": "Loft",
+                            "circadian_group": "Loft",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.loft_lamp_1",
-                            "circadian_switch": "Loft",
+                            "circadian_group": "Loft",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.loft_lamp_2",
-                            "circadian_switch": "Loft",
+                            "circadian_group": "Loft",
                             "circadian_type": "ct",
                         },
                     ],
@@ -506,13 +506,13 @@ def _den_config() -> dict:
                     "id": "den",
                     "name": "Den",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Den", "max_brightness": 100, "min_brightness": 20},
                     ],
                     "lights": [
                         {
                             "id": f"light.den_spot_{i}",
-                            "circadian_switch": "Den",
+                            "circadian_group": "Den",
                             "circadian_type": "ct",
                         }
                         for i in (1, 2, 3)
@@ -520,7 +520,7 @@ def _den_config() -> dict:
                     + [
                         {
                             "id": "light.den_lamp",
-                            "circadian_switch": "Den",
+                            "circadian_group": "Den",
                             "circadian_type": "ct",
                         }
                     ],

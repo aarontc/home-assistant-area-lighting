@@ -18,7 +18,7 @@ def _toggles(hass: HomeAssistant) -> GlobalToggles:
 
 
 def _config() -> dict:
-    # 6 lights, all bound to one circadian switch -> circadian on-set = 6.
+    # 6 lights, all bound to one circadian group -> circadian on-set = 6.
     return {
         "area_lighting": {
             "areas": [
@@ -26,13 +26,13 @@ def _config() -> dict:
                     "id": "study",
                     "name": "Study",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Main", "max_brightness": 100, "min_brightness": 40},
                     ],
                     "lights": [
                         {
                             "id": f"light.study_{i}",
-                            "circadian_switch": "Main",
+                            "circadian_group": "Main",
                             "circadian_type": "ct",
                             "roles": ["dimming"],
                         }
@@ -104,7 +104,7 @@ async def test_external_circadian_sets_and_off_clears_shed_set(
 async def test_manual_relight_of_shed_bulb_during_circadian_latches_manual(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
-    """A DR-shed bulb is not driven by the circadian switches: the user
+    """A DR-shed bulb is not driven by the circadian adjuster: the user
     relighting it is a genuine override, so the area must latch manual,
     and a later flag flip must not re-fire circadian over that state."""
     await _setup(hass, _config())
@@ -221,7 +221,7 @@ async def test_shed_bulb_relight_while_circadian_area_dimmed_latches_manual(
 async def test_circadian_tick_on_kept_light_stays_circadian_under_dr(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
-    """A circadian-switch-driven update to a KEPT light is still skipped by
+    """An adjuster-driven update to a KEPT light is still skipped by
     manual detection while shedding is active: no false manual latch."""
     await _setup(hass, _config())
     ctrl = hass.data["area_lighting"]["controllers"]["study"]
@@ -263,14 +263,14 @@ async def test_dark_bring_up_sheds(hass: HomeAssistant, helper_entities, service
 
 def _cluster_switch_config() -> dict:
     """The base 6-light config plus a Hue-Zone cluster over all of them that
-    itself carries the circadian switch (a cluster turn_on would relight
+    itself carries the circadian group (a cluster turn_on would relight
     shed members through the zone)."""
     cfg = _config()
     cfg["area_lighting"]["areas"][0]["light_clusters"] = [
         {
             "id": "light.study_all",
             "members": [f"light.study_{i}" for i in range(1, 7)],
-            "circadian_switch": "Main",
+            "circadian_group": "Main",
             "circadian_type": "ct",
         }
     ]
@@ -281,7 +281,7 @@ def _cluster_switch_config() -> dict:
 async def test_circadian_never_drives_cluster_entity_under_dr(
     hass: HomeAssistant, helper_entities, service_calls
 ) -> None:
-    """A cluster with a circadian switch must be skipped under DR: its
+    """A cluster with a circadian group must be skipped under DR: its
     members are driven individually (kept on, shed off) and the cluster is
     neither turned on (would relight shed members) nor turned off (clusters
     are not in the shed universe)."""

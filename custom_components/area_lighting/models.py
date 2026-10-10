@@ -13,31 +13,16 @@ from .const import (
 
 
 @dataclass
-class CircadianSwitchConfig:
-    """Configuration for a circadian lighting switch."""
+class CircadianGroupConfig:
+    """Brightness bounds and sleep options shared by an area's grouped lights."""
 
     name: str
-    area_id: str
-    area_name: str
     max_brightness: int = 100
     min_brightness: int = 1
     sleep_entity: str | None = None
     sleep_state: list[str] = field(default_factory=list)
     sleep_brightness: int = 1
     sleep_colortemp: int = 1000
-
-    @property
-    def short_name(self) -> str:
-        return self.name
-
-    @property
-    def full_name(self) -> str:
-        return f"{self.area_name} {self.name} Circadian"
-
-    @property
-    def entity_id(self) -> str:
-        slug = self.full_name.lower().replace(" ", "_").replace("-", "_")
-        return f"switch.circadian_lighting_{slug}"
 
 
 @dataclass
@@ -52,7 +37,7 @@ class LightConfig:
     """
 
     id: str
-    circadian_switch: str | None = None
+    circadian_group: str | None = None
     circadian_type: str | None = None
     roles: list[str] = field(default_factory=list)
     scenes: list[str] = field(default_factory=list)
@@ -164,11 +149,10 @@ class CircadianKelvinRoutesConfig:
 
     While the area's active scene is `circadian`, the controller's
     router dispatches the lights listed across `routes` based on the
-    clock's kelvin. `source` is parsed but not read.
+    clock's kelvin.
     """
 
     routes: list[CircadianKelvinRouteConfig]
-    source: str
     crossfade_seconds: float
 
     @property
@@ -229,7 +213,7 @@ class AreaConfig:
     # When True, follower also follows leader transitions to off/ambient.
     follow_leader_deactivation: bool = False
 
-    circadian_switches: list[CircadianSwitchConfig] = field(default_factory=list)
+    circadian_groups: list[CircadianGroupConfig] = field(default_factory=list)
     lights: list[LightConfig] = field(default_factory=list)
     light_clusters: list[LightConfig] = field(default_factory=list)
     scenes: list[SceneConfig] = field(default_factory=list)
@@ -289,13 +273,10 @@ class AreaConfig:
     def lights_in_scene(self, scene_slug: str) -> list[LightConfig]:
         return [light for light in self.all_lights if light.in_scene(scene_slug)]
 
-    def circadian_switch_for_light(self, light: LightConfig) -> CircadianSwitchConfig | None:
-        if not light.circadian_switch:
+    def circadian_group_for_light(self, light: LightConfig) -> CircadianGroupConfig | None:
+        if not light.circadian_group:
             return None
-        for cs in self.circadian_switches:
-            if cs.short_name == light.circadian_switch:
-                return cs
-        return None
+        return next((g for g in self.circadian_groups if g.name == light.circadian_group), None)
 
 
 @dataclass

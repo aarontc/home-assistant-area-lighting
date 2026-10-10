@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
@@ -26,9 +27,9 @@ from .models import (
     AreaConfig,
     AreaLightingConfig,
     CircadianConfig,
+    CircadianGroupConfig,
     CircadianKelvinRouteConfig,
     CircadianKelvinRoutesConfig,
-    CircadianSwitchConfig,
     LightConfig,
     LinkedMotionConfig,
     LinkedMotionMapping,
@@ -39,13 +40,22 @@ from .models import (
 from .state_storage import GLOBAL_STATE_KEY
 
 
+def _removed(message: str) -> Callable[[object], None]:
+    """Validator for a key that no longer exists: always raises `message`."""
+
+    def validate(_value: object) -> None:
+        raise vol.Invalid(message)
+
+    return validate
+
+
 def _validate_sleep_state_present(value: dict) -> dict:
     if "sleep_entity" in value and "sleep_state" not in value:
         raise vol.Invalid("sleep_state is required when sleep_entity is set")
     return value
 
 
-CIRCADIAN_SWITCH_SCHEMA = vol.All(
+CIRCADIAN_GROUP_SCHEMA = vol.All(
     vol.Schema(
         {
             vol.Required("name"): cv.string,
@@ -100,7 +110,10 @@ def _validate_quoted_string(value: object) -> str:
 LIGHT_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.entity_id,
-        vol.Optional("circadian_switch"): cv.string,
+        vol.Optional("circadian_group"): cv.string,
+        vol.Optional("circadian_switch"): _removed(
+            "circadian_switch was renamed to circadian_group in 3.0.0"
+        ),
         vol.Optional("circadian_type"): vol.In([CIRCADIAN_CT, CIRCADIAN_BRIGHTNESS, CIRCADIAN_RGB]),
         vol.Optional("roles", default=[]): vol.All(cv.ensure_list, [vol.In(ALL_ROLES)]),
         vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [_validate_quoted_string]),
@@ -174,7 +187,10 @@ CIRCADIAN_KELVIN_ROUTE_SCHEMA = vol.Schema(
 
 CIRCADIAN_KELVIN_ROUTES_SCHEMA = vol.Schema(
     {
-        vol.Optional("source"): cv.entity_id,
+        vol.Optional("source"): _removed(
+            "circadian_kelvin_routes.source was removed in 3.0.0: routes follow the "
+            "integration's own circadian color temperature; delete the key"
+        ),
         vol.Optional("crossfade_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
         vol.Required("routes"): vol.All(
             cv.ensure_list,
@@ -347,8 +363,11 @@ AREA_SCHEMA = vol.Schema(
         vol.Optional("night_fadeout_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
         vol.Optional("leader_area_id"): cv.string,
         vol.Optional("follow_leader_deactivation", default=False): cv.boolean,
-        vol.Optional("circadian_switches", default=[]): vol.All(
-            cv.ensure_list, [CIRCADIAN_SWITCH_SCHEMA]
+        vol.Optional("circadian_groups", default=[]): vol.All(
+            cv.ensure_list, [CIRCADIAN_GROUP_SCHEMA]
+        ),
+        vol.Optional("circadian_switches"): _removed(
+            "circadian_switches was renamed to circadian_groups in 3.0.0"
         ),
         vol.Optional("lights", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
         vol.Optional("light_clusters", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
@@ -378,15 +397,12 @@ def parse_config(raw: dict) -> AreaLightingConfig:
         area_id = area_raw["id"]
         area_name = area_raw["name"]
 
-        circadian_switches = [
-            CircadianSwitchConfig(area_id=area_id, area_name=area_name, **cs)
-            for cs in area_raw.get("circadian_switches", [])
-        ]
+        circadian_groups = [CircadianGroupConfig(**g) for g in area_raw.get("circadian_groups", [])]
 
         lights = [
             LightConfig(
                 id=light_raw["id"],
-                circadian_switch=light_raw.get("circadian_switch"),
+                circadian_group=light_raw.get("circadian_group"),
                 circadian_type=light_raw.get("circadian_type"),
                 roles=light_raw.get("roles", []),
                 scenes=light_raw.get("scenes", []),
@@ -398,7 +414,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
         light_clusters = [
             LightConfig(
                 id=light_raw["id"],
-                circadian_switch=light_raw.get("circadian_switch"),
+                circadian_group=light_raw.get("circadian_group"),
                 circadian_type=light_raw.get("circadian_type"),
                 roles=light_raw.get("roles", []),
                 scenes=light_raw.get("scenes", []),
@@ -514,7 +530,6 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             ]
             circadian_kelvin_routes = CircadianKelvinRoutesConfig(
                 routes=parsed_routes,
-                source=ckr_raw.get("source", ""),
                 crossfade_seconds=ckr_raw.get(
                     "crossfade_seconds",
                     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
@@ -532,7 +547,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 ambient_lighting_zone=area_raw.get("ambient_lighting_zone"),
                 brightness_step_pct=area_raw.get("brightness_step_pct"),
                 night_fadeout_seconds=area_raw.get("night_fadeout_seconds"),
-                circadian_switches=circadian_switches,
+                circadian_groups=circadian_groups,
                 lights=lights,
                 light_clusters=light_clusters,
                 scenes=scenes,
@@ -667,3 +682,44 @@ def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
                         f"light '{entity_id}' appears in more than one route"
                     )
                 seen.add(entity_id)
+
+
+def validate_circadian_groups(config: AreaLightingConfig) -> None:
+    """Enforce semantic rules on circadian groups.
+
+    For each area:
+      - group names are unique
+      - a group's min_brightness is not above its max_brightness
+      - every light's circadian_group names a group declared in the area
+      - circadian_group and circadian_type are set together
+    """
+    for area in config.areas:
+        names: set[str] = set()
+        for group in area.circadian_groups:
+            if group.name in names:
+                raise vol.Invalid(
+                    f"area '{area.id}': circadian group '{group.name}' is declared more than once"
+                )
+            names.add(group.name)
+            if group.min_brightness > group.max_brightness:
+                raise vol.Invalid(
+                    f"area '{area.id}': circadian group '{group.name}': min_brightness "
+                    f"({group.min_brightness}) must not be above max_brightness "
+                    f"({group.max_brightness})"
+                )
+        for light in area.all_lights:
+            if light.circadian_group and not light.circadian_type:
+                raise vol.Invalid(
+                    f"area '{area.id}': light '{light.id}': "
+                    f"circadian_group is set without circadian_type"
+                )
+            if light.circadian_type and not light.circadian_group:
+                raise vol.Invalid(
+                    f"area '{area.id}': light '{light.id}': "
+                    f"circadian_type is set without circadian_group"
+                )
+            if light.circadian_group and light.circadian_group not in names:
+                raise vol.Invalid(
+                    f"area '{area.id}': light '{light.id}': circadian_group "
+                    f"'{light.circadian_group}' is not declared in the area's circadian_groups"
+                )

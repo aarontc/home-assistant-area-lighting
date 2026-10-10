@@ -919,8 +919,8 @@ class AreaLightingController:
         With kelvin routes only the ACTIVE route is lit at any colortemp, so
         the route portion of the on-set is the active route's lights only
         (sizing it over every route would over-count and keep inactive-route
-        lights at the expense of active ones), plus circadian-switch lights
-        outside any route. Without routes: all circadian-switch lights.
+        lights at the expense of active ones), plus grouped lights outside
+        any route. Without routes: all grouped lights.
 
         The router is the authority on the active route: once it has
         published an index (its reconcile publishes BEFORE it has this
@@ -934,13 +934,13 @@ class AreaLightingController:
         """
         routes = self.area.circadian_kelvin_routes
         if routes is None:
-            return [light.id for light in self.area.lights if light.circadian_switch]
+            return [light.id for light in self.area.lights if light.circadian_group]
         active = self._expand_cluster_ids(routes.routes[self._active_route_index(routes)].lights)
         route_lights = self._expand_cluster_ids(routes.all_route_lights)
         return [
             light.id
             for light in self.area.lights
-            if light.id in active or (light.circadian_switch and light.id not in route_lights)
+            if light.id in active or (light.circadian_group and light.id not in route_lights)
         ]
 
     def _compute_circadian_shed_ids(self) -> frozenset[str]:
@@ -1005,7 +1005,7 @@ class AreaLightingController:
     ) -> dict[str, Any] | None:
         """light.turn_on data for one grouped light, or None when the light
         has no group or no circadian_type."""
-        group = self.area.circadian_switch_for_light(light)
+        group = self.area.circadian_group_for_light(light)
         if group is None or light.circadian_type is None:
             return None
         sleep_state = self.hass.states.get(group.sleep_entity) if group.sleep_entity else None
@@ -1479,13 +1479,13 @@ class AreaLightingController:
         self._circadian_unsubs.append(
             async_dispatcher_connect(self.hass, SIGNAL_CIRCADIAN_TICK, self._circadian_tick)
         )
-        light_ids = [light.id for light in self.area.all_lights if light.circadian_switch]
+        light_ids = [light.id for light in self.area.all_lights if light.circadian_group]
         if light_ids:
             self._circadian_unsubs.append(
                 async_track_state_change_event(self.hass, light_ids, self._on_circadian_light_event)
             )
         sleep_ids = {
-            group.sleep_entity for group in self.area.circadian_switches if group.sleep_entity
+            group.sleep_entity for group in self.area.circadian_groups if group.sleep_entity
         }
         if sleep_ids:
             self._circadian_unsubs.append(
@@ -1559,7 +1559,7 @@ class AreaLightingController:
         lights = [
             light
             for light in self.area.all_lights
-            if (group := self.area.circadian_switch_for_light(light)) is not None
+            if (group := self.area.circadian_group_for_light(light)) is not None
             and group.sleep_entity == event.data["entity_id"]
         ]
         self._send_circadian_now(lights, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
@@ -1642,7 +1642,7 @@ class AreaLightingController:
         outside the router's active route (an outgoing bulb still reports on
         mid-crossfade).
         """
-        if not light.circadian_switch or not light.circadian_type:
+        if not light.circadian_group or not light.circadian_type:
             return False
         if light.id in self._dr_shed_ids:
             return False

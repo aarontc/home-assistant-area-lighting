@@ -60,9 +60,9 @@ def _area(area_id: str, light_ids: list[str], **extra) -> dict:
                     "id": area_id,
                     "name": area_id.replace("_", " ").title(),
                     "event_handlers": True,
-                    "circadian_switches": [{"name": "Main"}],
+                    "circadian_groups": [{"name": "Main"}],
                     "lights": [
-                        {"id": light_id, "circadian_switch": "Main", "circadian_type": "ct"}
+                        {"id": light_id, "circadian_group": "Main", "circadian_type": "ct"}
                         for light_id in light_ids
                     ],
                     "scenes": [

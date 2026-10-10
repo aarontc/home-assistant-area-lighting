@@ -32,18 +32,18 @@ def routed_kitchen_config() -> dict:
                     "id": "kitchen",
                     "name": "Kitchen",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Kitchen", "max_brightness": 100, "min_brightness": 20},
                     ],
                     "lights": [
                         {
                             "id": "light.kitchen_fluorescent",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                         {
                             "id": "light.kitchen_strip",
-                            "circadian_switch": "Kitchen",
+                            "circadian_group": "Kitchen",
                             "circadian_type": "ct",
                         },
                     ],

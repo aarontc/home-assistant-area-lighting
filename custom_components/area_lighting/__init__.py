@@ -20,6 +20,7 @@ from .config_schema import (
     AREA_SCHEMA,
     CIRCADIAN_SCHEMA,
     parse_config,
+    validate_circadian_groups,
     validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
 )
@@ -90,6 +91,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         validate_circadian_kelvin_routes(area_config)
     except vol.Invalid as err:
         _LOGGER.error("Area Lighting: invalid circadian_kelvin_routes config: %s", err)
+        return False
+    try:
+        validate_circadian_groups(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid circadian_groups config: %s", err)
         return False
 
     for area in area_config.areas:
@@ -186,6 +192,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             validate_circadian_kelvin_routes(new_config)
         except vol.Invalid as err:
             _LOGGER.error("area_lighting reload: invalid circadian_kelvin_routes config: %s", err)
+            return
+        try:
+            validate_circadian_groups(new_config)
+        except vol.Invalid as err:
+            _LOGGER.error("area_lighting reload: invalid circadian_groups config: %s", err)
             return
         hass.data[DOMAIN]["config"] = new_config
         _LOGGER.info(

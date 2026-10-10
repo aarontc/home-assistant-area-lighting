@@ -88,13 +88,13 @@ async def test_motion_off_starts_timer_with_mixed_state_sensors(
                     "id": "test_area",
                     "name": "Test Area",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Main", "max_brightness": 100, "min_brightness": 50}
                     ],
                     "lights": [
                         {
                             "id": "light.test_area_a",
-                            "circadian_switch": "Main",
+                            "circadian_group": "Main",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming"],
                         }
