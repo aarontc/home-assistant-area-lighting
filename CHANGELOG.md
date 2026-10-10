@@ -142,6 +142,16 @@ readable companion that highlights user-facing changes.
   choosing `circadian` there or activating `scene.<area>_circadian` from
   outside starts them.
 
+- **Kelvin routes follow the built-in clock.** `circadian_kelvin_routes` picks
+  its route from the clock's kelvin at each `interval` update instead of
+  watching a `source` entity's `colortemp`. `source` is still accepted but
+  nothing reads it, and an area with two or more circadian groups no longer
+  needs one. A route light with a circadian group turns on with that group's
+  brightness and color temperature, and a route light without one is only
+  switched on. At startup the area keeps the route whose lights are on and
+  turns on no route light that is off, unless the kelvin crossed into another
+  route while Home Assistant was down.
+
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
   The first two collide with global master switch unique ids and entity
   ids, respectively, and `area_lighting.alert` reads `all` as every area.

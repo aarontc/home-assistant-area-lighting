@@ -163,8 +163,8 @@ class CircadianKelvinRoutesConfig:
     """Per-area circadian kelvin routing config.
 
     While the area's active scene is `circadian`, the controller's
-    router subscribes to `source` and dispatches the lights listed
-    across `routes` based on the source's `colortemp` attribute.
+    router dispatches the lights listed across `routes` based on the
+    clock's kelvin. `source` is parsed but not read.
     """
 
     routes: list[CircadianKelvinRouteConfig]

@@ -1,10 +1,10 @@
 """Circadian kelvin-routing for Area Lighting.
 
 While the `circadian` scene is active in an area, this module's
-`CircadianKelvinRouter` subscribes to a configured source entity's
-`colortemp` attribute and dispatches the area's routed lights between
-mutually-exclusive routes. The pure `select_route` function is split
-out so it can be unit-tested without an HA harness.
+`CircadianKelvinRouter` dispatches the area's routed lights between
+mutually-exclusive routes by the built-in clock's kelvin. The controller's
+circadian tick drives each reconcile. The pure `select_route` function is
+split out so it can be unit-tested without an HA harness.
 """
 
 from __future__ import annotations
@@ -14,34 +14,12 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.core import HomeAssistant
 
 from .const import CIRCADIAN_KELVIN_HYSTERESIS, DOMAIN
 from .models import CircadianKelvinRouteConfig, CircadianKelvinRoutesConfig
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def read_source_colortemp(hass: HomeAssistant, source: str) -> float | None:
-    """Read the routing colortemp from `source`'s `colortemp` attribute.
-
-    Returns None when the entity is missing/unavailable/unknown or the
-    attribute is absent/unparseable. This is the ONLY colortemp-read policy
-    for kelvin routing, shared by the router's reconcile and the
-    controller's shed sizing, so both always select the same route (no
-    per-component fallback sources).
-    """
-    state = hass.states.get(source)
-    if state is None or state.state in ("unavailable", "unknown"):
-        return None
-    raw = state.attributes.get("colortemp")
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except TypeError, ValueError:
-        return None
 
 
 def select_route(
@@ -88,11 +66,10 @@ def select_route(
 
 
 class CircadianKelvinRouter:
-    """Per-area router that swaps routed lights based on a source's colortemp.
+    """Per-area router that swaps routed lights based on the clock's kelvin.
 
     Active only while the area is in the `circadian` scene. Outside of
-    that, the state-change listener is deregistered and reconciliation
-    is suppressed.
+    that, reconciliation is suppressed.
     """
 
     def __init__(
@@ -104,9 +81,10 @@ class CircadianKelvinRouter:
         self._hass = hass
         self._area_id = area_id
         self._config = config
-        self._unsub: Any = None
+        self._active = False
         self._current_index: int | None = None
         self._last_shed_ids: frozenset[str] = frozenset()
+        self._adopted_off_ids: frozenset[str] = frozenset()
         self._reconcile_lock = asyncio.Lock()
 
     @property
@@ -120,40 +98,63 @@ class CircadianKelvinRouter:
         return self._current_index
 
     async def sync_to_state(self, scene_slug: str | None) -> None:
-        """Called after every controller state transition.
+        """Called after every controller state transition and circadian tick.
 
-        Registers / deregisters the listener and reconciles immediately
-        on first entry to circadian.
+        Activates the router and reconciles while the area is in
+        circadian, and deactivates it otherwise.
         """
         if scene_slug == "circadian":
-            if self._unsub is None:
-                self._unsub = async_track_state_change_event(
-                    self._hass,
-                    [self._config.source],
-                    self._on_source_changed,
-                )
+            self._active = True
             await self._reconcile()
         else:
             self.deactivate()
 
     def deactivate(self) -> None:
-        """Deregister the source listener and reset routing state.
+        """Deactivate and reset routing state.
 
         Called at the top of the controller's _stop_circadian (every
         leave-circadian or dim-suspend path) and by sync_to_state for any
         non-circadian scene, so no reconcile runs against the outgoing
         circadian scene.
         """
-        if self._unsub is not None:
-            self._unsub()
-            self._unsub = None
+        self._active = False
         self._current_index = None
         self._last_shed_ids = frozenset()
+        self._adopted_off_ids = frozenset()
 
-    @callback
-    def _on_source_changed(self, event: Event[EventStateChangedData]) -> None:
-        """HA fires this for every state change on `source`."""
-        self._hass.async_create_task(self._reconcile())
+    def adopt_current_state(self) -> None:
+        """Activate with the route whose lights are on, without sending a
+        command. Does nothing when already active.
+
+        The current route is the first one with a light that is on, or, when
+        no route light is on, the one the clock's kelvin selects. The current
+        shed set is taken as the last one, so the next reconcile is stable
+        unless the kelvin has crossed a route boundary. Active-route lights
+        that are off stay off until the route or shed set changes.
+        """
+        if self._active:
+            return
+        ctrl = self._controller()
+        cluster_members = self._route_used_cluster_members(ctrl)
+        for index, route in enumerate(self._config.routes):
+            if any(
+                (s := self._hass.states.get(eid)) is not None and s.state == "on"
+                for eid in self._expand_clusters(route.lights, cluster_members)
+            ):
+                self._current_index = index
+                break
+        else:
+            kelvin = ctrl.circadian_kelvin() if ctrl is not None else None
+            self._current_index = select_route(self._config.routes, kelvin, None)
+        self._last_shed_ids = frozenset(ctrl.dr_shed_ids) if ctrl is not None else frozenset()
+        self._adopted_off_ids = frozenset(
+            eid
+            for eid in self._expand_clusters(
+                self._config.routes[self._current_index].lights, cluster_members
+            )
+            if (s := self._hass.states.get(eid)) is None or s.state != "on"
+        )
+        self._active = True
 
     def _controller(self) -> Any:
         controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
@@ -162,14 +163,13 @@ class CircadianKelvinRouter:
     async def _reconcile(self) -> None:
         """Reconcile light state against the active route, idempotently."""
         async with self._reconcile_lock:
-            if self._unsub is None:
-                # Stale reconcile enqueued before deactivate() deregistered
-                # the listener: the area is leaving (or has left) circadian,
-                # so driving lights here would fight the incoming scene. The
-                # direct call from sync_to_state("circadian") is unaffected:
-                # it runs after _unsub is set.
+            if not self._active:
+                # Stale reconcile that waited on the lock while deactivate()
+                # ran: the area is leaving (or has left) circadian, so
+                # driving lights here would fight the incoming scene.
                 return
-            colortemp = self._read_colortemp()
+            ctrl = self._controller()
+            colortemp = ctrl.circadian_kelvin() if ctrl is not None else None
             prev_index = self._current_index
             new_index = select_route(self._config.routes, colortemp, prev_index)
             # Publish the selection BEFORE the controller refreshes the shed
@@ -177,14 +177,13 @@ class CircadianKelvinRouter:
             # reconcile is activating (hysteresis-consistent: it reads
             # current_index back and passes it to select_route).
             self._current_index = new_index
-            ctrl = self._controller()
             if ctrl is not None:
                 # The circadian shed set is sized over the ACTIVE route, so a
                 # colortemp change can change it: have the controller refresh
                 # it (and converge its non-route circadian lights) before we
                 # read it. Never calls back into this router.
                 await ctrl.recompute_and_apply_circadian_dr()
-            if self._unsub is None:
+            if not self._active:
                 # deactivate() ran while the controller call above was in
                 # flight: the area is leaving (or has left) circadian, so
                 # dispatching route commands now would fight the incoming
@@ -220,6 +219,8 @@ class CircadianKelvinRouter:
                 return
 
             self._last_shed_ids = shed
+            if not stable:
+                self._adopted_off_ids = frozenset()
             active = self._config.routes[new_index]
             active_lights = self._expand_clusters(active.lights, cluster_members) - shed
             inactive_lights = (
@@ -232,8 +233,10 @@ class CircadianKelvinRouter:
                 # a shed member relit through the aggregate zone): converge
                 # ONLY the expanded members against live state; every other
                 # route light keeps the stable-path hands-off behavior.
+                # Members that were off when the router adopted the lights
+                # at resume are not turned on.
                 member_ids = {m for members in cluster_members.values() for m in members}
-                active_lights &= member_ids
+                active_lights &= member_ids - self._adopted_off_ids
                 inactive_lights &= member_ids
                 if not active_lights and not inactive_lights:
                     return
@@ -279,18 +282,12 @@ class CircadianKelvinRouter:
                 )
                 for entity_id in off_calls_to_issue
             ]
-            tasks.extend(
-                self._hass.services.async_call(
-                    "light",
-                    "turn_on",
-                    {
-                        "entity_id": entity_id,
-                        "transition": int(self._config.crossfade_seconds),
-                    },
-                    blocking=True,
+            if ctrl is not None:
+                # The controller sends a grouped light its group's values.
+                tasks.extend(
+                    ctrl.async_turn_on_route_light(entity_id, self._config.crossfade_seconds)
+                    for entity_id in on_calls_to_issue
                 )
-                for entity_id in on_calls_to_issue
-            )
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -339,6 +336,3 @@ class CircadianKelvinRouter:
             return f"fallback[{','.join(sorted(route.lights))}]"
         lo, hi = route.kelvin_range  # type: ignore[misc]
         return f"banded[{lo}-{hi}K]"
-
-    def _read_colortemp(self) -> float | None:
-        return read_source_colortemp(self._hass, self._config.source)

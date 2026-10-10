@@ -22,7 +22,6 @@ from .area_state import (
 from .circadian_clock import CircadianValues
 from .circadian_kelvin_router import (
     CircadianKelvinRouter,
-    read_source_colortemp,
     select_route,
 )
 from .const import (
@@ -899,16 +898,12 @@ class AreaLightingController:
                     LeaderReason.SCENE_ACTIVATED,
                 )
 
-    def _route_source_colortemp(self) -> float | None:
-        """Colortemp the kelvin router routes on, read through the router
-        module's shared policy: the routes' `source` entity ONLY, with no
-        other fallback source, so controller and router always select the
-        same route. None when the area has no routes or the source is
-        unavailable/unparseable."""
-        routes = self.area.circadian_kelvin_routes
-        if routes is None:
-            return None
-        return read_source_colortemp(self.hass, routes.source)
+    def circadian_kelvin(self) -> float | None:
+        """The clock's current kelvin, which the kelvin routes follow. None
+        when the clock has no values. The controller and the router both
+        read it here, so both select the same route."""
+        values = self._circadian_values()
+        return values.kelvin if values is not None else None
 
     def _active_route_index(self, routes: CircadianKelvinRoutesConfig) -> int:
         """The router's active route, or before its first reconcile the route
@@ -916,7 +911,7 @@ class AreaLightingController:
         current_idx = self._kelvin_router.current_index if self._kelvin_router is not None else None
         if current_idx is not None:
             return current_idx
-        return select_route(routes.routes, self._route_source_colortemp(), None)
+        return select_route(routes.routes, self.circadian_kelvin(), None)
 
     def _circadian_on_ids(self) -> list[str]:
         """Individual lights (config order) that circadian activation turns on.
@@ -932,7 +927,7 @@ class AreaLightingController:
         controller refresh the shed set), that index is used directly, which
         also carries the router's hysteresis grace. Only before the router's
         first reconcile (a fresh circadian activation) is the route selected
-        here, with the router's exact source policy and no prior index, so
+        here, from the same kelvin and with no prior index, so
         the router's follow-up reconcile lands on the same route. A route's
         cluster entities are expanded to their members (the shed universe is
         individual lights).
@@ -1518,12 +1513,16 @@ class AreaLightingController:
         bring its lights that are on to the current values, without turning
         on lights that are off. Runs at startup and when an alert ends.
 
-        The shed set is refreshed first, since no router reconcile does that
-        for an area without routes. The tick then syncs the router and sends.
+        The router adopts the route that is lit, so syncing it does not turn
+        on route lights that are off. The shed set is refreshed next, since
+        no router reconcile does that for an area without routes. The tick
+        then syncs the router and sends.
         """
         if self._closed or self._alert_active or not self._state.is_circadian or self._state.dimmed:
             return
         self._start_circadian()
+        if self._kelvin_router is not None:
+            self._kelvin_router.adopt_current_state()
         await self.recompute_and_apply_circadian_dr()
         # An alert's steps and restore overwrote the lights since the
         # adjuster last commanded them, so no echo is pending.
@@ -1658,6 +1657,24 @@ class AreaLightingController:
         return ids <= self._expand_cluster_ids(
             routes.routes[self._active_route_index(routes)].lights
         )
+
+    async def async_turn_on_route_light(self, entity_id: str, transition: float) -> None:
+        """Turn on a kelvin route light for the router. A light with a group
+        and type gets its group's values, and any other light is only
+        switched on."""
+        light = next((light for light in self.area.all_lights if light.id == entity_id), None)
+        values = self._circadian_values()
+        payload = (
+            self._circadian_payload(light, values)
+            if light is not None and values is not None
+            else None
+        )
+        if payload is None:
+            await self._call_service(
+                "light.turn_on", entity_id=entity_id, transition=int(transition)
+            )
+        else:
+            await self._send_circadian(payload, transition)
 
     async def _send_circadian(self, payload: dict[str, Any], transition: float) -> None:
         # A queued send starts a loop iteration later, and by then the area

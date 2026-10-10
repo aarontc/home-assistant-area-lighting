@@ -240,28 +240,13 @@ def test_validator_rejects_light_in_two_routes():
         validate_circadian_kelvin_routes(config)
 
 
-def test_parse_defaults_source_to_only_circadian_switch():
-    config = _parsed_config(
-        circadian_kelvin_routes={
-            "routes": [
-                {
-                    "kelvin_range": [4500, 5500],
-                    "lights": ["light.kitchen_fluorescent"],
-                },
-                {"lights": ["light.kitchen_strip_1"]},
-            ]
-        }
-    )
-    assert (
-        config.areas[0].circadian_kelvin_routes.source
-        == "switch.circadian_lighting_kitchen_kitchen_circadian"
-    )
-    validate_circadian_kelvin_routes(config)  # validator should no-op
-
-
-def test_validator_requires_explicit_source_when_two_switches():
+def test_validator_accepts_routes_without_source_and_two_groups():
     area = _minimum_area_dict(
         circadian_switches=[{"name": "A"}, {"name": "B"}],
+        lights=[
+            {"id": "light.kitchen_fluorescent", "circadian_switch": "A"},
+            {"id": "light.kitchen_strip_1", "circadian_switch": "B"},
+        ],
         circadian_kelvin_routes={
             "routes": [
                 {
@@ -272,32 +257,5 @@ def test_validator_requires_explicit_source_when_two_switches():
             ]
         },
     )
-    validated = AREA_SCHEMA(area)
-    config = parse_config({"areas": [validated]})
-    with pytest.raises(vol.Invalid, match="must specify 'source'"):
-        validate_circadian_kelvin_routes(config)
-
-
-def test_validator_requires_explicit_source_when_no_switches():
-    area = {
-        "id": "kitchen",
-        "name": "Kitchen",
-        "lights": [
-            {"id": "light.kitchen_fluorescent"},
-            {"id": "light.kitchen_strip_1"},
-        ],
-        "scenes": [{"id": "circadian", "name": "Circadian"}],
-        "circadian_kelvin_routes": {
-            "routes": [
-                {
-                    "kelvin_range": [4500, 5500],
-                    "lights": ["light.kitchen_fluorescent"],
-                },
-                {"lights": ["light.kitchen_strip_1"]},
-            ]
-        },
-    }
-    validated = AREA_SCHEMA(area)
-    config = parse_config({"areas": [validated]})
-    with pytest.raises(vol.Invalid, match="must specify 'source'"):
-        validate_circadian_kelvin_routes(config)
+    config = parse_config({"areas": [AREA_SCHEMA(area)]})
+    validate_circadian_kelvin_routes(config)  # does not raise

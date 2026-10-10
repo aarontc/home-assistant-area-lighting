@@ -512,16 +512,9 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 )
                 for r in ckr_raw["routes"]
             ]
-            raw_source = ckr_raw.get("source")
-            if raw_source:
-                resolved_source = raw_source
-            elif len(circadian_switches) == 1:
-                resolved_source = circadian_switches[0].entity_id
-            else:
-                resolved_source = ""  # validator will reject empty source
             circadian_kelvin_routes = CircadianKelvinRoutesConfig(
                 routes=parsed_routes,
-                source=resolved_source,
+                source=ckr_raw.get("source", ""),
                 crossfade_seconds=ckr_raw.get(
                     "crossfade_seconds",
                     DEFAULT_CIRCADIAN_KELVIN_CROSSFADE_SECONDS,
@@ -618,7 +611,7 @@ def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
 
 
 def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
-    """Enforce semantic rules on circadian_kelvin_routes and resolve `source`.
+    """Enforce semantic rules on circadian_kelvin_routes.
 
     For each area that declares `circadian_kelvin_routes`:
       - exactly one route must omit `kelvin_range` (the fallback)
@@ -627,8 +620,6 @@ def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
       - every entity id in `routes[].lights` must appear in the area's
         `lights` or `light_clusters`
       - no entity id may appear in more than one route
-      - `source` defaults to the area's sole circadian switch when one
-        is configured; otherwise it must be supplied explicitly
     """
     for area in config.areas:
         ckr = area.circadian_kelvin_routes
@@ -676,10 +667,3 @@ def validate_circadian_kelvin_routes(config: AreaLightingConfig) -> None:
                         f"light '{entity_id}' appears in more than one route"
                     )
                 seen.add(entity_id)
-
-        if not ckr.source:
-            raise vol.Invalid(
-                f"area '{area.id}': circadian_kelvin_routes must "
-                f"specify 'source' when the area declares "
-                f"{len(area.circadian_switches)} circadian switches"
-            )

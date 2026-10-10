@@ -159,33 +159,111 @@ async def test_resume_skips_manual_and_scene_areas(
     assert _turn_ons(service_calls) == {}
 
 
+TUBE = "light.kitchen_fluorescent"
+STRIPS = ("light.kitchen_strip_1", "light.kitchen_strip_2")
+
+
+def _kitchen(*, tube_grouped: bool) -> dict:
+    """Kitchen with a banded fluorescent route and a fallback strips route."""
+    cfg = _area(
+        "kitchen",
+        [TUBE, *STRIPS],
+        circadian_kelvin_routes={
+            "crossfade_seconds": 1.0,
+            "routes": [
+                {"kelvin_range": [4500, 5500], "lights": [TUBE]},
+                {"lights": list(STRIPS)},
+            ],
+        },
+    )
+    if not tube_grouped:
+        cfg[DOMAIN]["areas"][0]["lights"][0] = {"id": TUBE}
+    return cfg
+
+
 @pytest.mark.integration
 async def test_resume_syncs_kelvin_router(
     hass: HomeAssistant, hass_storage, helper_entities, service_calls, pin_circadian
 ) -> None:
-    strips = [f"light.kitchen_strip_{i}" for i in range(1, 3)]
-    tube = "light.kitchen_fluorescent"
-    hass.states.async_set(tube, "off", {})
-    _set_on(hass, *strips)
-    # The routes' source puts the router on its fallback (strips) route.
-    hass.states.async_set(
-        "switch.circadian_lighting_kitchen_main_circadian", "on", {"colortemp": 3000}
-    )
-    routes = {
-        "crossfade_seconds": 1.0,
-        "routes": [
-            {"kelvin_range": [4500, 5500], "lights": [tube]},
-            {"lights": strips},
-        ],
-    }
+    hass.states.async_set(TUBE, "off", {})
+    _set_on(hass, *STRIPS)
     _persist(hass_storage, {"kitchen": _area_state("circadian", "circadian")})
+    # 4000 K puts the router on its fallback (strips) route.
     await pin_circadian(50, 4000, tick=False)
 
-    await _start(hass, _area("kitchen", [tube, *strips], circadian_kelvin_routes=routes))
+    await _start(hass, _kitchen(tube_grouped=True))
 
     ctrl = hass.data[DOMAIN]["controllers"]["kitchen"]
     assert ctrl._kelvin_router.current_index == 1
-    assert _turn_ons(service_calls) == dict.fromkeys(strips, TICK_PAYLOAD)
+    assert _turn_ons(service_calls) == dict.fromkeys(STRIPS, TICK_PAYLOAD)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("tube_grouped", [True, False], ids=["grouped", "ungrouped"])
+async def test_resume_leaves_off_route_lights_off(
+    hass: HomeAssistant,
+    hass_storage,
+    helper_entities,
+    service_calls,
+    pin_circadian,
+    tube_grouped: bool,
+) -> None:
+    for entity_id in (TUBE, *STRIPS):
+        hass.states.async_set(entity_id, "off", {})
+    _persist(hass_storage, {"kitchen": _area_state("circadian", "circadian")})
+    await pin_circadian(50, 5000, tick=False)
+
+    await _start(hass, _kitchen(tube_grouped=tube_grouped))
+
+    ctrl = hass.data[DOMAIN]["controllers"]["kitchen"]
+    assert ctrl.circadian_running
+    assert ctrl._kelvin_router.current_index == 0
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
+@pytest.mark.integration
+async def test_resume_adopts_the_route_that_is_on(
+    hass: HomeAssistant, hass_storage, helper_entities, service_calls, pin_circadian
+) -> None:
+    hass.states.async_set(TUBE, "on", {})
+    for entity_id in STRIPS:
+        hass.states.async_set(entity_id, "off", {})
+    _persist(hass_storage, {"kitchen": _area_state("circadian", "circadian")})
+    # 5510 K is outside the fluorescent's band but inside its hysteresis. A
+    # router with no route would pick the strips, and one that adopts the
+    # fluorescent keeps it.
+    await pin_circadian(50, 5510, tick=False)
+
+    await _start(hass, _kitchen(tube_grouped=True))
+
+    ctrl = hass.data[DOMAIN]["controllers"]["kitchen"]
+    assert ctrl._kelvin_router.current_index == 0
+    assert [c.service for c in service_calls if c.domain == "light"] == ["turn_on"]
+    assert _turn_ons(service_calls) == {TUBE: {**TICK_PAYLOAD, "color_temp_kelvin": 5510}}
+
+
+@pytest.mark.integration
+async def test_resume_crossfades_when_the_route_changed_while_down(
+    hass: HomeAssistant, hass_storage, helper_entities, service_calls, pin_circadian
+) -> None:
+    hass.states.async_set(TUBE, "off", {})
+    _set_on(hass, *STRIPS)
+    _persist(hass_storage, {"kitchen": _area_state("circadian", "circadian")})
+    await pin_circadian(50, 5000, tick=False)
+
+    await _start(hass, _kitchen(tube_grouped=True))
+
+    ctrl = hass.data[DOMAIN]["controllers"]["kitchen"]
+    assert ctrl._kelvin_router.current_index == 0
+    turn_offs = {
+        c.data["entity_id"]: c.data["transition"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert turn_offs == dict.fromkeys(STRIPS, 1)
+    assert _turn_ons(service_calls) == {
+        TUBE: {"brightness": 255, "color_temp_kelvin": 5000, "transition": 1}
+    }
 
 
 @pytest.mark.integration
@@ -216,3 +294,51 @@ async def test_resume_recomputes_shed_set_without_routes(
     assert ctrl.dr_shed_ids == shed
     turn_offs = {c.data["entity_id"] for c in service_calls if c.service == "turn_off"}
     assert turn_offs == shed
+
+
+MEDIA_ZONE = "light.media_zone"
+MEDIA_MEMBERS = ("light.media_1", "light.media_2", "light.media_3")
+
+
+@pytest.mark.integration
+async def test_resume_leaves_off_cluster_route_members_off_under_demand_response(
+    hass: HomeAssistant, hass_storage, helper_entities, service_calls, pin_circadian
+) -> None:
+    cfg = _area(
+        "media",
+        [*MEDIA_MEMBERS, "light.media_lamp"],
+        light_clusters=[{"id": MEDIA_ZONE, "members": list(MEDIA_MEMBERS)}],
+        circadian_kelvin_routes={
+            "crossfade_seconds": 1.0,
+            "routes": [
+                {"kelvin_range": [4500, 5500], "lights": [MEDIA_ZONE]},
+                {"lights": ["light.media_lamp"]},
+            ],
+        },
+    )
+    # The shed member and one kept member are off, and the other kept member is on.
+    for entity_id in ("light.media_2", "light.media_3", "light.media_lamp"):
+        hass.states.async_set(entity_id, "off", {})
+    _set_on(hass, "light.media_1", MEDIA_ZONE)
+    _persist(
+        hass_storage,
+        {
+            "media": _area_state("circadian", "circadian"),
+            GLOBAL_STATE_KEY: {"demand_response_active": True},
+        },
+    )
+    await pin_circadian(50, 5000, tick=False)
+
+    await _start(hass, cfg)
+
+    ctrl = hass.data[DOMAIN]["controllers"]["media"]
+    assert ctrl.dr_shed_ids == frozenset({"light.media_3"})
+    assert ctrl._kelvin_router.current_index == 0
+    assert [c.service for c in service_calls if c.domain == "light"] == ["turn_on"]
+    assert set(_turn_ons(service_calls)) == {"light.media_1"}
+
+    # Later ticks on the same route and shed set leave it off too.
+    ctrl._circadian_commanded_at.clear()
+    service_calls.clear()
+    await pin_circadian(50, 5000)
+    assert set(_turn_ons(service_calls)) == {"light.media_1"}
