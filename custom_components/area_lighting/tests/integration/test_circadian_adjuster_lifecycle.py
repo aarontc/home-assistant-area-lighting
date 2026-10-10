@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import async_mock_service
 
 from custom_components.area_lighting.area_state import ActivationSource
 
@@ -205,6 +206,12 @@ async def test_external_circadian_scene_starts_adjuster(
 async def test_circadian_never_calls_switch_services(
     hass: HomeAssistant, helper_entities, network_room_config, service_calls, pin_circadian
 ) -> None:
+    # Load switch first so its setup does not replace the mocks.
+    assert await async_setup_component(hass, "switch", {})
+    switch_calls = [
+        async_mock_service(hass, "switch", "turn_on"),
+        async_mock_service(hass, "switch", "turn_off"),
+    ]
     ctrl = await _circadian_area(hass, network_room_config, pin_circadian)
     for entity_id in LIGHTS:
         hass.states.async_set(entity_id, "on", {"brightness": 100})
@@ -216,4 +223,4 @@ async def test_circadian_never_calls_switch_services(
     await hass.async_block_till_done()
 
     assert _light_turn_ons(service_calls)
-    assert [c for c in service_calls if c.domain == "switch"] == []
+    assert switch_calls == [[], []]

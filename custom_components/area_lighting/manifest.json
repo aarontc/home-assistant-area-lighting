@@ -13,7 +13,6 @@
     "number"
   ],
   "after_dependencies": [
-    "circadian_lighting",
     "lutron_caseta"
   ],
   "documentation": "https://gitlab.idleengineers.com/aaron/home-assistant-area-lighting",

@@ -199,10 +199,6 @@ async def test_tick_skips_route_lights_outside_the_active_route(
     strips = [f"light.kitchen_strip_{i}" for i in range(1, 4)]
     tube = "light.kitchen_fluorescent"
     _stub_off(hass, tube, *strips)
-    # The routes' source puts the router on its fallback (strips) route.
-    hass.states.async_set(
-        "switch.circadian_lighting_kitchen_main_circadian", "on", {"colortemp": 3000}
-    )
     routes = {
         "crossfade_seconds": 1.0,
         "routes": [

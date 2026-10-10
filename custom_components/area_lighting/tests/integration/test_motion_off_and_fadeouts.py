@@ -111,11 +111,6 @@ async def test_motion_off_starts_timer_with_mixed_state_sensors(
             ]
         }
     }
-    hass.states.async_set(
-        "switch.circadian_lighting_test_area_main_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
     hass.states.async_set("light.test_area_a", "off", {})
     await _setup(hass, cfg)
     ctrl = hass.data["area_lighting"]["controllers"]["test_area"]

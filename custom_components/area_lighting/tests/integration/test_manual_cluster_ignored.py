@@ -100,12 +100,7 @@ async def _setup(hass: HomeAssistant, cfg: dict) -> None:
 
 @pytest.fixture
 async def cluster_helper_entities(hass: HomeAssistant, helper_entities) -> None:
-    """Stub the cluster_room lights + its circadian switch."""
-    hass.states.async_set(
-        "switch.circadian_lighting_cluster_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
+    """Stub the cluster_room lights."""
     hass.states.async_set("light.cluster_room_overhead_1", "off", {})
     hass.states.async_set("light.cluster_room_overhead_2", "off", {})
     hass.states.async_set("light.hz_cluster_room_all", "off", {})

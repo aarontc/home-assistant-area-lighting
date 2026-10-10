@@ -70,11 +70,6 @@ def routed_kitchen_config() -> dict:
 async def _setup_routed_kitchen(hass: HomeAssistant, cfg: dict):
     hass.states.async_set("light.kitchen_fluorescent", "off", {})
     hass.states.async_set("light.kitchen_strip", "off", {})
-    hass.states.async_set(
-        "switch.circadian_lighting_kitchen_kitchen_circadian",
-        "on",
-        {"brightness": 100.0, "colortemp": 5000},
-    )
     await _setup(hass, cfg)
     return hass.data["area_lighting"]["controllers"]["kitchen"]
 

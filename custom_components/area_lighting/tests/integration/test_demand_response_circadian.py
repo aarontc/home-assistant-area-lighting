@@ -51,11 +51,6 @@ def _config() -> dict:
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:
     for i in range(1, 7):
         hass.states.async_set(f"light.study_{i}", "off", {})
-    hass.states.async_set(
-        "switch.circadian_lighting_study_main_circadian",
-        "on",
-        {"brightness": 80.0, "colortemp": 3500},
-    )
     assert await async_setup_component(hass, "area_lighting", cfg)
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")

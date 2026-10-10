@@ -243,6 +243,14 @@ readable companion that highlights user-facing changes.
   scene's lights up to the minimum dimming level (the brightness step). This
   makes `lower` from a dark area light the room (previously a no-op).
 
+### Removed
+
+- **The circadian_lighting integration is no longer used or required.**
+  area_lighting no longer loads after it, and the Repairs issue for missing
+  external entities no longer asks for `sensor.circadian_values` or the
+  `switch.circadian_lighting_*` switches, nor offers YAML to create them. It
+  still reports a light assigned to a circadian group that does not exist.
+
 ### Fixed
 
 - **Occupied sensors could silently fail to load.** `manifest.json` did not

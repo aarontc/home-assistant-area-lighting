@@ -1,8 +1,8 @@
 """Integration-layer fixtures for area_lighting tests.
 
 These fixtures pre-populate the external entities that area_lighting reads
-(holiday_mode, ambient_scene, ambient zone booleans, circadian sensor/switch)
-so individual tests don't have to recreate them.
+(holiday_mode, ambient_scene, ambient zone booleans, the lights of the
+default area) so individual tests don't have to recreate them.
 """
 
 from __future__ import annotations
@@ -104,16 +104,8 @@ async def helper_entities(hass: HomeAssistant) -> None:
             }
         },
     )
-    # Stub the circadian_lighting sensor that the controller reads for colortemp
-    hass.states.async_set("sensor.circadian_values", "0", {"colortemp": 3500})
-    # Stub circadian switch for the network_room fixture area
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
     # Stub the lights the network_room_config references so the validator's
-    # light-assigned-to-circadian-switch check is satisfied in tests that
+    # light-assigned-to-circadian-group check is satisfied in tests that
     # use the default fixture.
     hass.states.async_set("light.network_room_overhead_1", "off", {})
     hass.states.async_set("light.network_room_overhead_2", "off", {})
@@ -134,8 +126,6 @@ class _AggregatedCalls:
         self._sources = [
             async_mock_service(hass, "light", "turn_on"),
             async_mock_service(hass, "light", "turn_off"),
-            async_mock_service(hass, "switch", "turn_on"),
-            async_mock_service(hass, "switch", "turn_off"),
         ]
 
     def __iter__(self):
@@ -155,8 +145,8 @@ class _AggregatedCalls:
 
 @pytest.fixture
 def service_calls(hass: HomeAssistant) -> _AggregatedCalls:
-    """Mock light.turn_on/turn_off and switch.turn_on/turn_off so tests
-    can assert on captured service calls. Returns an aggregated iterable
+    """Mock light.turn_on and light.turn_off so tests can assert on
+    captured service calls. Returns an aggregated iterable
     of ServiceCall objects with .domain, .service, and .data attributes.
     """
     return _AggregatedCalls(hass)

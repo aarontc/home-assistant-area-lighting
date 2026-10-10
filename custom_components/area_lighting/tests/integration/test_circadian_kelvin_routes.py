@@ -87,10 +87,9 @@ def kitchen_with_routes_config() -> dict:
 
 @pytest.fixture
 def _stub_kitchen_entities(hass: HomeAssistant):
-    """Pre-populate the light and switch states the validator expects."""
+    """Pre-populate the light states the validator expects."""
     for entity_id in (_TUBE, *_STRIPS):
         hass.states.async_set(entity_id, "off", {})
-    hass.states.async_set("switch.circadian_lighting_kitchen_kitchen_circadian", "off", {})
 
 
 def _targets(service_calls, service: str) -> set[str]:
