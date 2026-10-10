@@ -3,7 +3,7 @@
   "issues": {
     "missing_external_entities": {
       "title": "{count} required entities are missing",
-      "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting, circadian sensor readings).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
+      "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
     },
     "lutron_remotes_missing": {
       "title": "{count} Lutron remotes have missing devices",
@@ -77,7 +77,7 @@
     },
     "lighting_circadian": {
       "name": "Activate circadian lighting",
-      "description": "Activates circadian lighting for an area (enables the circadian_lighting switches and applies their brightness/color temperature to the lights).",
+      "description": "Activates circadian lighting for an area. area_lighting sets each grouped light's brightness and color temperature from the sun and keeps them updated.",
       "fields": {
         "area_id": {
           "name": "Area ID",
@@ -115,7 +115,7 @@
     },
     "reload": {
       "name": "Reload",
-      "description": "Re-read area_lighting YAML configuration. Updates alert patterns and other top-level config without restarting Home Assistant."
+      "description": "Re-reads the area_lighting YAML and applies it to running areas, adding and removing areas and scenes. Running areas keep their state and timers."
     }
   }
 }

@@ -3,7 +3,7 @@
   "issues": {
     "missing_external_entities": {
       "title": "{count} required entities are missing",
-      "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting, circadian sensor readings).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
+      "description": "The area_lighting integration expects the following entities to exist in Home Assistant, but they are missing:\n\n{missing_list}\n\nWithout these, features depending on them are disabled or degraded (holiday detection, ambient zones, motion lighting).\n\n### Copy-paste bootstrap\n\nAdd this to your `configuration.yaml` (or a package file) to create the missing helpers:\n\n```yaml\n{bootstrap_yaml}\n```\n\nAfter saving the file, reload the affected integrations or restart Home Assistant. See the component README for full setup details."
     },
     "lutron_remotes_missing": {
       "title": "{count} Lutron remotes have missing devices",

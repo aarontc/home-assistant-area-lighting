@@ -84,7 +84,7 @@ lighting_lower:
 
 lighting_circadian:
   name: Activate circadian lighting
-  description: Activates circadian lighting for an area (enables the circadian_lighting switches and applies their brightness/color temperature to the lights).
+  description: Activates circadian lighting for an area. area_lighting sets each grouped light's brightness and color temperature from the sun and keeps them updated.
   fields:
     area_id:
       name: Area ID
@@ -134,4 +134,4 @@ alert:
 
 reload:
   name: Reload
-  description: Re-read area_lighting YAML configuration. Updates alert patterns and other top-level config without restarting Home Assistant. Controllers and entities stay alive.
+  description: Re-reads the area_lighting YAML and applies it to running areas, adding and removing areas and scenes. Running areas keep their state and timers.

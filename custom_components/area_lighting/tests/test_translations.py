@@ -77,3 +77,15 @@ def test_snapshot_scene_has_scene_field_translation():
     fields = entry.get("fields", {})
     assert "scene" in fields
     assert "name" in fields["scene"]
+
+
+def test_user_text_does_not_mention_circadian_lighting():
+    component = _translations_path().parent.parent
+    for name in ("services.yaml", "strings.json", "translations/en.json"):
+        text = (component / name).read_text()
+        assert "circadian_lighting" not in text, f"{name} mentions circadian_lighting"
+        assert "circadian sensor" not in text, f"{name} mentions the circadian sensor"
+    strings = json.loads((component / "strings.json").read_text())
+    translations = json.loads(_translations_path().read_text())
+    issue = "missing_external_entities"
+    assert strings["issues"][issue] == translations["issues"][issue]
