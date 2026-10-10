@@ -7,6 +7,145 @@ readable companion that highlights user-facing changes.
 
 ## Unreleased
 
+### Built-in circadian lighting and reload (3.0.0)
+
+area_lighting now computes circadian brightness and color temperature itself
+and drives the lights of areas in the `circadian` scene directly. The
+circadian_lighting integration is no longer used, and
+`area_lighting.reload` applies a changed config to running areas. Read
+"Migrating from 2.x" below before upgrading.
+
+- **BREAKING: Circadian switches are now circadian groups.** Rename the area
+  key `circadian_switches` to `circadian_groups` and each light's
+  `circadian_switch` to `circadian_group`. The group entries and names stay
+  the same. A config that still uses an old key fails validation with a
+  message naming the new one.
+
+- **BREAKING: `circadian_kelvin_routes.source` is removed.** Routes follow
+  the integration's own circadian color temperature. Delete the `source`
+  key; a config that keeps it fails validation.
+
+- **BREAKING: Circadian groups are validated.** Setup and
+  `area_lighting.reload` now reject an area where two groups share a name, a
+  group's `min_brightness` is above its `max_brightness`, a light's
+  `circadian_group` names a group the area does not declare, or a light sets
+  only one of `circadian_group` and `circadian_type`. Fix the named group or
+  light, setting both keys or neither.
+
+- **BREAKING: The circadian_lighting integration is no longer used.**
+  area_lighting no longer loads after it or turns its switches on and off,
+  and the Repairs issue for missing external entities no longer asks for
+  `sensor.circadian_values` or the `switch.circadian_lighting_*` switches,
+  nor offers YAML to create them. It still reports a light assigned to a
+  circadian group that does not exist. Left installed, circadian_lighting
+  keeps driving the same lights as a second writer, so remove it in the
+  same restart.
+
+- **Built-in circadian clock.** area_lighting computes the circadian percent
+  and color temperature from Home Assistant's location and elevation, using
+  circadian_lighting's curve, and reports them as
+  `sensor.area_lighting_circadian` (state in percent, attribute `colortemp`
+  in kelvin, hidden by default). The optional top-level `circadian:` block
+  sets `min_colortemp` (default 2500), `max_colortemp` (5500), `interval`
+  (300 seconds between updates) and `transition` (60 seconds).
+
+- **Circadian lights are driven by area_lighting itself.** While an area is
+  in `circadian`, every `interval` seconds its grouped lights that are on get
+  the clock's values with the configured `transition`, and entering circadian
+  sends every grouped light outside a route the values with a 1-second
+  transition. A brightness percentage `b` is sent as `round(b * 2.55)`, and
+  `rgb` lights get `rgb_color` as well as brightness. Bulbs shed for demand
+  response, route lights outside the active route and areas an alert owns
+  are skipped.
+  Leaving circadian from the `last_scene` select stops the updates, and
+  choosing `circadian` there or activating `scene.<area>_circadian` from
+  outside starts them.
+
+- **Sleep options on circadian groups.** An entry under `circadian_groups`
+  accepts `sleep_entity`, `sleep_state` (one state or a list, required when
+  `sleep_entity` is set), `sleep_brightness` (percent, default 1) and
+  `sleep_colortemp` (kelvin, default 1000). `min_brightness` and
+  `max_brightness` now default to 1 and 100, as in circadian_lighting.
+  While the state of `sleep_entity` is one of `sleep_state`, the group's
+  lights get `sleep_brightness` and `sleep_colortemp`.
+
+- **Circadian reacts to lights, sleep entities and restarts.** While an area
+  is in `circadian`, a grouped light that comes on (from off, unavailable or
+  unknown) gets the current values with a 1-second transition, unless
+  area_lighting commanded it in the last 5 seconds. A change in the state of a
+  group's `sleep_entity` re-sends that group's lights that are on, also with a
+  1-second transition. Both work whether or not the area sets
+  `event_handlers`. An area that was in `circadian` when Home Assistant
+  stopped resumes at startup: its lights that are on get the current values
+  with the configured `transition`, and lights that are off stay off. When an
+  alert ends, the area's lights that are on get the current values, including
+  any sleep change made during the alert.
+
+- **Kelvin routes follow the built-in clock.** `circadian_kelvin_routes` picks
+  its route from the clock's kelvin at each `interval` update instead of
+  watching a `source` entity's `colortemp`. A route light with a circadian
+  group turns on with that group's brightness and color temperature, and a
+  route light without one is only switched on. At startup the area keeps the
+  route whose lights are on and turns on no route light that is off, unless
+  the kelvin crossed into another route while Home Assistant was down.
+
+- **`area_lighting.reload` applies the new config to running areas.** Changes
+  to lights, circadian groups, sensors, remotes, kelvin routes,
+  `scene_self_heal` and the `circadian:` block take effect without a restart.
+  Each area keeps its scene, dimmed flag and timer deadlines, and its
+  `select.<area>_last_scene` keeps its value. The select writes a state
+  change only when its scene options or the area name change. A motion or occupancy
+  countdown stops when the area loses those sensors or a newly configured one
+  is already on. An empty `occupancy_light_sensor_ids` list no longer starts
+  an occupancy countdown. A reload also adds and removes areas and scenes,
+  and treats a changed area id as one removal and one addition. A removed or
+  disabled area saves its state without its timers, and its entities become
+  unavailable but keep their registry entries. An area added back restores
+  that state. The global switches now register even when no area is
+  enabled, so they exist when a reload enables the first one.
+  A reload that fails validation now raises an error to the caller and
+  changes nothing.
+
+#### Migrating from 2.x
+
+Make these changes and install 3.0.0 in one restart. 2.x rejects the new
+keys and 3.0.0 rejects the old ones, so either half alone stops
+area_lighting from loading.
+
+1. In `area_lighting.yaml`, rename every `circadian_switches:` to
+   `circadian_groups:` and every `circadian_switch:` to `circadian_group:`.
+2. Delete `source:` from each `circadian_kelvin_routes` block.
+3. Add a top-level `circadian:` block with the values your
+   `circadian_lighting:` block set. Its defaults are circadian_lighting's,
+   so copy only what you changed:
+
+   ```yaml
+   area_lighting:
+     circadian:
+       min_colortemp: 2700
+       max_colortemp: 5600
+       interval: 60
+       transition: 60
+     areas: [...]
+   ```
+
+4. Where a group in `area_lighting.yaml` has no `min_brightness` or
+   `max_brightness`, copy the value from its circadian_lighting switch.
+   A missing bound now means 1 or 100. Where both files set a bound, 3.0.0
+   uses the value in `area_lighting.yaml`, so check that it is the one you
+   want.
+5. Move `sleep_entity`, `sleep_state`, `sleep_brightness` and
+   `sleep_colortemp` from each circadian_lighting switch onto its group.
+   `sleep_state` is required when `sleep_entity` is set.
+6. Point automations, templates and dashboards that read
+   `sensor.circadian_values` at `sensor.area_lighting_circadian`. The
+   `colortemp` attribute keeps its name. The state is still the percent.
+7. Remove the `circadian_lighting:` block from `configuration.yaml`, the
+   `switch:` entries that create its switches, and the integration itself
+   (through HACS if HACS installed it). Do this in the same restart as the
+   upgrade. A circadian_lighting switch that restores to on keeps driving
+   its lights alongside area_lighting.
+
 ### Added
 
 - **Global master switches** — the integration now creates two switches of
@@ -100,88 +239,7 @@ readable companion that highlights user-facing changes.
   controller to refresh the shed set (the area is leaving circadian)
   drops its route commands instead of fighting the incoming scene.
 
-- **Built-in circadian clock.** area_lighting computes the circadian percent
-  and color temperature from Home Assistant's location, using
-  circadian_lighting's curve, and reports them as
-  `sensor.area_lighting_circadian` (state in percent, attribute `colortemp`
-  in kelvin, hidden by default). The optional top-level `circadian:` block
-  sets `min_colortemp` (default 2500), `max_colortemp` (5500), `interval`
-  (300 seconds between updates) and `transition` (60 seconds).
-
-- **Sleep options on circadian groups.** An entry under `circadian_groups`
-  accepts `sleep_entity`, `sleep_state` (one state or a list, required when
-  `sleep_entity` is set), `sleep_brightness` (percent, default 1) and
-  `sleep_colortemp` (kelvin, default 1000). `min_brightness` and
-  `max_brightness` now default to 1 and 100, as in circadian_lighting.
-  While the state of `sleep_entity` is one of `sleep_state`, the group's
-  lights get `sleep_brightness` and `sleep_colortemp`.
-
-- **Circadian reacts to lights, sleep entities and restarts.** While an area
-  is in `circadian`, a grouped light that comes on (from off, unavailable or
-  unknown) gets the current values with a 1-second transition, unless
-  area_lighting commanded it in the last 5 seconds. A change in the state of a
-  group's `sleep_entity` re-sends that group's lights that are on, also with a
-  1-second transition. Both work whether or not the area sets
-  `event_handlers`. An area that was in `circadian` when Home Assistant
-  stopped resumes at startup: its lights that are on get the current values
-  with the configured `transition`, and lights that are off stay off. When an
-  alert ends, the area's lights that are on get the current values, including
-  any sleep change made during the alert.
-
 ### Changed
-
-- **Circadian lights are driven by area_lighting itself.** While an area is
-  in `circadian`, every `interval` seconds its grouped lights that are on get
-  the clock's values with the configured `transition`, and entering circadian
-  sends every grouped light outside a route the values with a 1-second
-  transition. area_lighting no longer turns the circadian_lighting switches
-  on or off. Brightness is `round(percent * 2.55)`, `rgb` lights get
-  `rgb_color` as well as brightness, and bulbs shed for demand response,
-  route lights outside the active route and areas an alert owns are skipped.
-  Leaving circadian from the `last_scene` select stops the updates, and
-  choosing `circadian` there or activating `scene.<area>_circadian` from
-  outside starts them.
-
-- **Kelvin routes follow the built-in clock.** `circadian_kelvin_routes` picks
-  its route from the clock's kelvin at each `interval` update instead of
-  watching a `source` entity's `colortemp`. A route light with a circadian
-  group turns on with that group's brightness and color temperature, and a
-  route light without one is only switched on. At startup the area keeps the
-  route whose lights are on and turns on no route light that is off, unless
-  the kelvin crossed into another route while Home Assistant was down.
-
-- **`area_lighting.reload` applies the new config to running areas.** Changes
-  to lights, circadian groups, sensors, remotes, kelvin routes,
-  `scene_self_heal` and the `circadian:` block take effect without a restart.
-  Each area keeps its scene, dimmed flag and timer deadlines, and its
-  `select.<area>_last_scene` writes no state change. A motion or occupancy
-  countdown stops when the area loses those sensors or a newly configured one
-  is already on. An empty `occupancy_light_sensor_ids` list no longer starts
-  an occupancy countdown. A reload also adds and removes areas and scenes,
-  and treats a changed area id as one removal and one addition. A removed or
-  disabled area saves its state without its timers, and its entities become
-  unavailable but keep their registry entries. An area added back restores
-  that state. The global switches now register even when no area is
-  enabled, so they exist when a reload enables the first one.
-  A reload that fails validation now raises an error to the caller and
-  changes nothing.
-
-- **BREAKING: Circadian switches are now circadian groups.** Rename the area
-  key `circadian_switches` to `circadian_groups` and each light's
-  `circadian_switch` to `circadian_group`. The group entries and names stay
-  the same. A config that still uses an old key fails validation with a
-  message naming the new one.
-
-- **BREAKING: `circadian_kelvin_routes.source` is removed.** Routes follow
-  the integration's own circadian color temperature. Delete the `source`
-  key; a config that keeps it fails validation.
-
-- **BREAKING: Circadian groups are validated.** Setup and
-  `area_lighting.reload` now reject an area where two groups share a name, a
-  group's `min_brightness` is above its `max_brightness`, a light's
-  `circadian_group` names a group the area does not declare, or a light sets
-  only one of `circadian_group` and `circadian_type`. Fix the named group or
-  light, setting both keys or neither.
 
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
   The first two collide with global master switch unique ids and entity
@@ -273,14 +331,6 @@ readable companion that highlights user-facing changes.
   remembered scene for color and next-`on`-press context and bring that
   scene's lights up to the minimum dimming level (the brightness step). This
   makes `lower` from a dark area light the room (previously a no-op).
-
-### Removed
-
-- **The circadian_lighting integration is no longer used or required.**
-  area_lighting no longer loads after it, and the Repairs issue for missing
-  external entities no longer asks for `sensor.circadian_values` or the
-  `switch.circadian_lighting_*` switches, nor offers YAML to create them. It
-  still reports a light assigned to a circadian group that does not exist.
 
 ### Fixed
 

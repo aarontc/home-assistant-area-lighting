@@ -13,13 +13,13 @@ rationale behind *why* a feature exists, see [`README.md`](README.md).
 ## Top-level structure
 
 `area_lighting` config lives under the `area_lighting:` key in
-`configuration.yaml` (or a YAML package). It has exactly two things worth
-configuring:
+`configuration.yaml` (or a YAML package):
 
 ```yaml
 area_lighting:
   areas: [...]            # required, list of areas
   alert_patterns: {...}   # optional, named flash/alert animations
+  circadian: {...}        # optional, circadian curve and update timing
   scene_self_heal: true   # optional, default true
 ```
 
@@ -27,7 +27,8 @@ area_lighting:
 |-------------------|-----------------------------------|----------|-------------|
 | `areas`           | list of [area](#area)              | **yes**  | One entry per area/room managed by this integration. |
 | `alert_patterns`  | dict of [pattern](#alert-pattern)  | no (default `{}`) | Named flash/alert animations invocable from remotes, automations, or the `area_lighting.alert` service. |
-| `scene_self_heal` | boolean                            | no (default `true`) | When `true`, out-of-band bulb divergences that look like glitches (Hue power-on defaults, RF dropouts, `unavailable` recovery) are silently re-asserted to the active scene target instead of latching the area to `manual`. Set to `false` to disable — all divergences latch `manual` as before. Changing this value takes effect on a Home Assistant **restart** (it is read when controllers are constructed; `area_lighting.reload` does not re-read it). See "Scene self-healing" in [`README.md`](README.md). |
+| `circadian`       | [circadian](#circadian)            | no (defaults below) | Color temperature bounds of the circadian curve, and how often and how slowly circadian lights follow it. |
+| `scene_self_heal` | boolean                            | no (default `true`) | When `true`, out-of-band bulb divergences that look like glitches (Hue power-on defaults, RF dropouts, `unavailable` recovery) are silently re-asserted to the active scene target instead of latching the area to `manual`. Set to `false` to disable — all divergences latch `manual` as before. `area_lighting.reload` applies a change to running areas. See "Scene self-healing" in [`README.md`](README.md). |
 
 Any other top-level key is rejected (`vol.PREVENT_EXTRA`).
 
@@ -43,7 +44,7 @@ area_lighting:
       brightness_step_pct, night_fadeout_seconds,
       leader_area_id, follow_leader_deactivation
       # sub-lists:
-      circadian_switches: [...]
+      circadian_groups:   [...]
       lights:             [...]   # individual lights
       light_clusters:     [...]   # batch targets (e.g. Hue Zones)
       scenes:             [...]
@@ -60,6 +61,8 @@ area_lighting:
     <pattern_name>:
       steps: [...]
       delay, repeat, start_inverted, restore
+  circadian:
+    min_colortemp, max_colortemp, interval, transition
   scene_self_heal: true   # optional, default true
 ```
 
@@ -86,28 +89,48 @@ entry in that list.
 | `leader_area_id`            | string                | no       | —       | Slug of another area whose scene this area mirrors. Not chainable (see [leader/follower rules](#leaderfollower-rules)). |
 | `follow_leader_deactivation`| boolean               | no       | `false` | When following a leader, also mirror its off/ambient transitions (default only mirrors active scenes). |
 
-### `circadian_switches`
+### `circadian_groups`
 
-Declares the circadian-profile switches that the integration creates for
-this area. Each entry becomes a `switch.circadian_lighting_{area_id}_{name}`
-entity. Lights reference a profile by its `name`.
+Brightness bounds and sleep options for the area's circadian lights. A light
+joins a group through `lights[].circadian_group`. While the area is in the
+`circadian` scene, area_lighting sets each grouped light from the
+[circadian curve](#circadian) and its group. Groups create no entities.
 
 ```yaml
-circadian_switches:
+circadian_groups:
   - name: Warm
     min_brightness: 20
     max_brightness: 100
+  - name: Stairs
+    min_brightness: 10
+    max_brightness: 55
+    sleep_entity: select.theater_last_scene
+    sleep_state: movie
+    sleep_brightness: 5
+    sleep_colortemp: 2700
 ```
 
-| Key              | Type          | Required | Default | Notes |
-|------------------|---------------|----------|---------|-------|
-| `name`           | string        | **yes**  | —       | Short label (e.g. `Warm`, `Cool`). Referenced from `lights[].circadian_switch`. |
-| `min_brightness` | int, `1..100` | no       | —       | Lower floor (percent) applied when the circadian profile drives brightness. |
-| `max_brightness` | int, `1..100` | no       | —       | Upper cap (percent). |
+| Key                | Type                     | Required | Default | Notes |
+|--------------------|--------------------------|----------|---------|-------|
+| `name`             | string                   | **yes**  | —       | Short label (e.g. `Warm`, `Cool`), unique within the area. Referenced from `lights[].circadian_group`. |
+| `min_brightness`   | int, `1..100`            | no       | `1`     | Brightness percent at solar midnight. Must not be above `max_brightness`. |
+| `max_brightness`   | int, `1..100`            | no       | `100`   | Brightness percent from sunrise to sunset. |
+| `sleep_entity`     | entity_id                | no       | —       | While this entity's state is one of `sleep_state`, the group's lights get the sleep values instead of the curve. A missing entity counts as awake. |
+| `sleep_state`      | string or list of string | with `sleep_entity` | — | States of `sleep_entity` that mean sleep. |
+| `sleep_brightness` | int, `1..100`            | no       | `1`     | Brightness percent while sleeping. |
+| `sleep_colortemp`  | int, `1000..10000`       | no       | `1000`  | Color temperature in kelvin while sleeping. |
 
-`area_lighting` exposes the switches and the profile metadata; the actual
-circadian updates come from an external integration (e.g. `circadian_lighting`)
-that observes the switches.
+Brightness follows the curve only at night. Between sunrise and sunset it is
+`max_brightness`. From sunset to sunrise it is
+`min + (max - min) * (100 + percent) / 100`, which falls from `max_brightness`
+at sunset to `min_brightness` at solar midnight and climbs back by sunrise.
+
+A change in the state of `sleep_entity` re-sends the group's lights that are
+on, with a 1-second transition. Attribute-only changes are ignored.
+
+Validation rejects two groups with the same name in one area, and
+`min_brightness` above `max_brightness`. The 2.x key `circadian_switches` is
+rejected with a message naming `circadian_groups`.
 
 ### `lights` and `light_clusters`
 
@@ -120,7 +143,7 @@ when every member shares the same target state.
 lights:
   - id: light.bedroom_main
     roles: [dimming, color]
-    circadian_switch: Warm
+    circadian_group: Warm
     circadian_type: ct
 
 light_clusters:
@@ -135,8 +158,8 @@ light_clusters:
 | `id`               | entity_id                               | **yes**  | —       | HA entity id of the light (or zone/group for clusters). |
 | `roles`            | list of string                          | no       | `[]`    | Subset of `color`, `dimming`, `white`, `night`, `movie`, `christmas`, `plant`. Used for selective scene targeting. Unknown values rejected. |
 | `scenes`           | list of string                          | no       | `[]`    | If non-empty, the light participates **only** in the listed scene slugs. Empty list = participates in all scenes. Slugs are not checked against the area's declared scenes, so update them when you rename a scene. |
-| `circadian_switch` | string                                  | no       | —       | Name of a circadian switch defined on this area. |
-| `circadian_type`   | `ct` \| `brightness` \| `rgb`           | no       | —       | How circadian control is applied. Only meaningful together with `circadian_switch`. |
+| `circadian_group`  | string                                  | no       | —       | Name of a circadian group declared on this area. Set together with `circadian_type`. The 2.x key `circadian_switch` is rejected with a message naming this one. |
+| `circadian_type`   | `ct` \| `brightness` \| `rgb`           | no       | —       | What the circadian updates send: `ct` sends `brightness` and `color_temp_kelvin`, `rgb` sends `brightness` and `rgb_color`, `brightness` sends `brightness` only. Set together with `circadian_group`. |
 | `members`          | list of entity_id                       | no       | `[]`    | Populated only on `light_clusters` entries. Lists the physical lights inside the cluster. |
 
 #### Light roles
@@ -158,8 +181,8 @@ A light can carry any combination of roles.
 ### Circadian kelvin routes
 
 Optional. When set, the listed lights are dispatched between
-mutually-exclusive routes based on the current circadian target color
-temperature — but only while the area's active scene is `circadian`.
+mutually-exclusive routes based on the circadian color temperature, but
+only while the area's active scene is `circadian`.
 Other scenes apply their `entities:` block as usual and ignore routing.
 
 Use case: a fixture that mixes light sources with very different native
@@ -169,8 +192,7 @@ native CT; the strips take over outside that band.
 
 ```yaml
 circadian_kelvin_routes:
-  source: switch.circadian_lighting_kitchen_kitchen_circadian   # optional
-  crossfade_seconds: 2.0                                        # optional, default 2.0
+  crossfade_seconds: 2.0   # optional, default 2.0
   routes:
     - kelvin_range: [4500, 5500]
       lights: [light.kitchen_fluorescent]
@@ -180,11 +202,14 @@ circadian_kelvin_routes:
         - light.kitchen_strip_3
 ```
 
-| Key                  | Type                       | Required | Default                                                   | Notes |
-|----------------------|----------------------------|----------|-----------------------------------------------------------|-------|
-| `source`             | entity_id                  | conditionally | the area's sole circadian switch                  | Entity whose `colortemp` attribute drives route selection. Required when the area declares 2+ circadian switches or zero. |
-| `crossfade_seconds`  | float `>= 0`               | no       | `2.0`                                                     | Passed as `transition` to the `light.turn_on` / `light.turn_off` calls when the active route changes. `0` snaps. |
-| `routes`             | list of [route](#route)     | **yes**  | —                                                         | Mutually-exclusive route definitions. Must have ≥ 2 entries (one banded + one fallback). |
+| Key                  | Type                       | Required | Default | Notes |
+|----------------------|----------------------------|----------|---------|-------|
+| `crossfade_seconds`  | float `>= 0`               | no       | `2.0`   | Passed as `transition` to the `light.turn_on` / `light.turn_off` calls when the active route changes. `0` snaps. |
+| `routes`             | list of [route](#route)     | **yes**  | —       | Mutually-exclusive route definitions. Must have ≥ 2 entries (one banded + one fallback). |
+
+The 2.x key `source` is gone. Routes follow the color temperature that
+area_lighting computes (`sensor.area_lighting_circadian`'s `colortemp`), and a
+config that still sets `source` fails validation.
 
 #### Route
 
@@ -198,22 +223,29 @@ circadian_kelvin_routes:
 - Routing is active **only while the area's scene is `circadian`.** Any
   other scene applies its `entities:` block exactly as today and
   bypasses the router. Re-entering circadian re-evaluates from the
-  current source state.
-- The router reads `state.attributes['colortemp']` on `source`. The
-  first banded route whose `kelvin_range` contains that value is
-  selected; if none match, the fallback is selected. A small
-  hardcoded hysteresis (±25K) is applied around the currently-active
-  banded route to suppress flapping at the boundary.
+  current color temperature.
+- The router checks the circadian color temperature at each `interval`
+  update of the [circadian](#circadian) block. The first banded route
+  whose `kelvin_range` contains it is selected; if none match, the
+  fallback is selected. A small hardcoded hysteresis (±25K) is applied
+  around the currently-active banded route to suppress flapping at the
+  boundary.
 - When the active route changes, lights in the now-inactive route
   receive `light.turn_off` and lights in the now-active route receive
-  `light.turn_on`, both with `transition: crossfade_seconds`. The
-  `circadian_lighting` switch then catches the new-on event and
-  applies the current CT and brightness.
-- Lights listed in any route are excluded from the controller's
-  default per-light circadian initialization — the router fully owns
-  their on/off state while the circadian scene is active.
-- If `source` is `unavailable` / `unknown` / lacks the `colortemp`
-  attribute, the fallback is selected.
+  `light.turn_on`, both with `transition: crossfade_seconds`.
+- A route light takes its brightness and color from its own
+  `circadian_group`. One with a group turns on with that group's
+  circadian values and then follows the periodic updates. One without a
+  group is only switched on and off.
+- Lights listed in any route are left out when the area enters
+  circadian. The router owns their on/off state while the circadian
+  scene is active.
+- At startup, an area in circadian keeps the route whose lights are on
+  and turns on no route light that is off, unless the color temperature
+  crossed into another route while Home Assistant was down.
+- If the color temperature cannot be computed, the periodic updates
+  stop and the active route stays. A route selection that runs anyway,
+  such as on entering circadian, picks the fallback.
 
 #### Validation rules (parse-time `vol.Invalid`)
 
@@ -226,10 +258,8 @@ circadian_kelvin_routes:
 4. Every entity id in `routes[].lights` must also appear in the
    area's `lights` or `light_clusters`.
 5. A light may appear in at most one route.
-6. `source` is required when the area declares 2+ circadian switches
-   or zero. With exactly one switch, `source` defaults to that
-   switch's entity id.
-7. `crossfade_seconds` is a float `≥ 0`.
+6. `crossfade_seconds` is a float `≥ 0`.
+7. `source` is rejected (removed in 3.0.0).
 
 #### Soft warning
 
@@ -239,10 +269,9 @@ is added.
 
 #### Reload behavior
 
-Reloading `area_lighting` (e.g. via the `area_lighting.reload` service or
-HA YAML reload) does not rebuild existing controllers. Edits to
-`circadian_kelvin_routes` take effect only after a full Home Assistant
-restart. This matches the rest of the integration's per-area config.
+`area_lighting.reload` applies edits to `circadian_kelvin_routes`. An
+area in circadian adopts its lights as they are, the same way it does at
+startup, and reconciles against the new routes.
 
 ### `scenes`
 
@@ -435,6 +464,38 @@ Violations raise `vol.Invalid` with a precise message at startup.
 
 ---
 
+## Circadian
+
+Top-level `circadian:` sets the color temperature range of the circadian
+curve and how circadian lights follow it. Every key is optional.
+
+```yaml
+circadian:
+  min_colortemp: 2700
+  max_colortemp: 5600
+  interval: 60
+  transition: 60
+```
+
+| Key             | Type                | Default | Notes |
+|-----------------|---------------------|---------|-------|
+| `min_colortemp` | int, `1000..10000`  | `2500`  | Kelvin from sunset to sunrise. Must not be above `max_colortemp`. |
+| `max_colortemp` | int, `1000..10000`  | `5500`  | Kelvin at solar noon. |
+| `interval`      | int seconds, `>= 1` | `300`   | Time between periodic updates of the circadian lights and of `sensor.area_lighting_circadian`. |
+| `transition`    | float seconds, `0..6553` | `60` | Fade time of each periodic update. Entering circadian, a light turning on and a sleep change use 1 second instead. |
+
+The curve's percent runs from -100 at solar midnight through 0 at sunrise
+and sunset to +100 at solar noon. Sun times come from Home Assistant's
+location and elevation. By day the color temperature rises linearly with the
+percent from `min_colortemp` to `max_colortemp`, and all night it stays at
+`min_colortemp`. Brightness comes from each light's
+[circadian group](#circadian_groups).
+
+`area_lighting.reload` applies a change to this block. Areas already in
+circadian pick up the new values at the next update.
+
+---
+
 ## Alert pattern
 
 Top-level `alert_patterns:` is a dict keyed by pattern name. Each value is
@@ -495,7 +556,7 @@ area_lighting:
       icon: mdi:bed
       brightness_step_pct: 8
 
-      circadian_switches:
+      circadian_groups:
         - name: Warm
           min_brightness: 20
           max_brightness: 100
@@ -503,7 +564,7 @@ area_lighting:
       lights:
         - id: light.bedroom_main
           roles: [dimming, color]
-          circadian_switch: Warm
+          circadian_group: Warm
           circadian_type: ct
         - id: light.bedroom_nightstand
           roles: [color, night]
@@ -599,8 +660,8 @@ area_lighting:
 ## Validation and error reporting
 
 - Schema errors surface at Home Assistant startup as `Invalid config for [area_lighting]` log entries with the specific field and rule that failed.
-- Post-parse semantic errors (unknown favorite slugs, leader/follower graph issues) surface the same way, carrying the offending area id and the reason.
-- `area_lighting.reload` reloads `configuration.yaml` without a full HA restart; the same validators run.
+- Post-parse semantic errors (unknown favorite slugs, leader/follower graph issues, circadian group and kelvin route rules) surface the same way, carrying the offending area id and the reason.
+- `area_lighting.reload` re-reads `configuration.yaml` and applies it to the running areas without a restart. The same validators run first. If any fails, the service call raises the error and nothing changes. See "Reload" in [`README.md`](README.md) for what a reload applies.
 
 ## What's *not* configured here
 
