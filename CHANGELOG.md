@@ -28,9 +28,9 @@ circadian_lighting integration is no longer used, and
 - **BREAKING: Circadian groups are validated.** Setup and
   `area_lighting.reload` now reject an area where two groups share a name, a
   group's `min_brightness` is above its `max_brightness`, a light's
-  `circadian_group` names a group the area does not declare, or a light sets
-  only one of `circadian_group` and `circadian_type`. Fix the named group or
-  light, setting both keys or neither.
+  `circadian_group` is empty or names a group the area does not declare, or a
+  light sets only one of `circadian_group` and `circadian_type`. Fix the named
+  group or light, setting both keys or neither.
 
 - **BREAKING: The circadian_lighting integration is no longer used.**
   area_lighting no longer loads after it or turns its switches on and off,
@@ -333,6 +333,12 @@ area_lighting from loading.
   makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **An alert no longer overrides countdown changes made while it ran.** When
+  an alert ends it puts back the motion and occupancy countdowns it paused.
+  A countdown that a sensor or a reload stopped or restarted during the alert
+  now keeps that change, so lights no longer turn off while the room is
+  occupied, or at the end of an old countdown.
 
 - **Occupied sensors could silently fail to load.** `manifest.json` did not
   list `binary_sensor` as a dependency, so when no other integration loaded

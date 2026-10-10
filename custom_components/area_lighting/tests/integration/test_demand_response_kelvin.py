@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting import alert
+from custom_components.area_lighting import circadian_kelvin_router as router_module
+from custom_components.area_lighting.alert import execute_alert
 from custom_components.area_lighting.area_state import ActivationSource
-from custom_components.area_lighting.circadian_clock import CircadianClock
+from custom_components.area_lighting.circadian_clock import CircadianClock, CircadianValues
 from custom_components.area_lighting.const import DOMAIN
 from custom_components.area_lighting.global_state import GlobalToggles
+from custom_components.area_lighting.models import AlertPattern, AlertStep
 
 
 def _toggles(hass: HomeAssistant) -> GlobalToggles:
@@ -638,6 +645,242 @@ async def test_deactivate_during_controller_await_drops_route_dispatch(
     await hass.async_block_till_done()
 
     assert [c for c in service_calls if c.domain == "light"] == []
+
+
+@pytest.mark.integration
+async def test_alert_that_starts_during_a_route_change_defers_it(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    """An alert that takes the area while the reconcile awaits the controller
+    gets no route commands, and the route change runs once the alert ends."""
+    await _setup(hass, pin_circadian, colortemp=3000)  # fallback route (strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl.lighting_circadian()
+    hass.states.async_set("light.kitchen_strip_1", "on", {})
+    hass.states.async_set("light.kitchen_strip_2", "on", {})
+    await hass.async_block_till_done()
+    recompute = ctrl.recompute_and_apply_circadian_dr
+
+    async def recompute_then_alert() -> None:
+        await recompute()
+        ctrl._alert_active = True
+
+    monkeypatch.setattr(ctrl, "recompute_and_apply_circadian_dr", recompute_then_alert)
+    service_calls.clear()
+    await pin_circadian(50, 5000)
+
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+    monkeypatch.setattr(ctrl, "recompute_and_apply_circadian_dr", recompute)
+    await ctrl.async_end_alert()
+    await hass.async_block_till_done()
+
+    assert "light.kitchen_fluorescent" in _light_calls(service_calls, "turn_on")
+    assert {"light.kitchen_strip_1", "light.kitchen_strip_2"} <= _light_calls(
+        service_calls, "turn_off"
+    )
+
+
+@pytest.mark.integration
+async def test_alert_that_starts_before_route_commands_run_defers_them(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    """An alert that takes the area after the reconcile queues its route
+    commands, but before they start, gets none of them, and the route change
+    runs once the alert ends."""
+    await _setup(hass, pin_circadian, colortemp=3000)  # fallback route (strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    await ctrl.lighting_circadian()
+    hass.states.async_set("light.kitchen_strip_1", "on", {})
+    hass.states.async_set("light.kitchen_strip_2", "on", {})
+    hass.states.async_set("light.kitchen_strip_3", "on", {})
+    await hass.async_block_till_done()
+
+    async def alert_then_gather(*commands):
+        ctrl._alert_active = True
+        return await asyncio.gather(*commands)
+
+    monkeypatch.setattr(router_module, "asyncio", SimpleNamespace(gather=alert_then_gather))
+    service_calls.clear()
+    await pin_circadian(50, 5000)
+
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+    monkeypatch.setattr(router_module, "asyncio", asyncio)
+    await ctrl.async_end_alert()
+    await hass.async_block_till_done()
+
+    assert "light.kitchen_fluorescent" in _light_calls(service_calls, "turn_on")
+    assert _light_calls(service_calls, "turn_off") == {
+        "light.kitchen_strip_1",
+        "light.kitchen_strip_2",
+        "light.kitchen_strip_3",
+    }
+
+
+@pytest.mark.integration
+async def test_queued_shed_of_a_non_route_lamp_is_dropped_when_an_alert_starts(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await _setup_loft(hass, pin_circadian, colortemp=3000)  # fallback route (accent) active
+    ctrl = hass.data["area_lighting"]["controllers"]["loft"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl.lighting_circadian()
+    hass.states.async_set("light.loft_accent", "on", {})
+    hass.states.async_set("light.loft_lamp_1", "on", {})
+    await hass.async_block_till_done()
+    ctrl._kelvin_router._current_index = 0  # the tracks route grows the shed set
+    service_calls.clear()
+
+    recompute = asyncio.ensure_future(ctrl.recompute_and_apply_circadian_dr())
+    await asyncio.sleep(0)
+    ctrl._alert_active = True
+    await recompute
+
+    assert ctrl.dr_shed_ids == frozenset({"light.loft_lamp_1", "light.loft_lamp_2"})
+    assert [c for c in service_calls if c.domain == "light"] == []
+
+
+@pytest.mark.integration
+async def test_alert_that_matches_the_incoming_route_does_not_settle_it(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    """An alert that starts while the reconcile awaits the controller, and
+    leaves the lights as the incoming route wants them, does not let the
+    reconcile take that route as done. The alert then restores the outgoing
+    route's lights, and the route change runs once it ends."""
+    await _setup(hass, pin_circadian, colortemp=3000)  # fallback route (strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    _toggles(hass)._demand_response_active = True
+    await ctrl.lighting_circadian()
+    hass.states.async_set("light.kitchen_strip_1", "on", {})
+    hass.states.async_set("light.kitchen_strip_2", "on", {})
+    await hass.async_block_till_done()
+    recompute = ctrl.recompute_and_apply_circadian_dr
+
+    async def recompute_then_alert() -> None:
+        await recompute()
+        ctrl._alert_active = True
+        hass.states.async_set("light.kitchen_strip_1", "off", {})
+        hass.states.async_set("light.kitchen_strip_2", "off", {})
+        hass.states.async_set("light.kitchen_fluorescent", "on", {})
+
+    monkeypatch.setattr(ctrl, "recompute_and_apply_circadian_dr", recompute_then_alert)
+    await pin_circadian(50, 5000)
+    monkeypatch.setattr(ctrl, "recompute_and_apply_circadian_dr", recompute)
+    hass.states.async_set("light.kitchen_strip_1", "on", {})
+    hass.states.async_set("light.kitchen_strip_2", "on", {})
+    hass.states.async_set("light.kitchen_fluorescent", "off", {})
+    await hass.async_block_till_done()
+    service_calls.clear()
+
+    await ctrl.async_end_alert()
+    await hass.async_block_till_done()
+
+    assert "light.kitchen_fluorescent" in _light_calls(service_calls, "turn_on")
+    assert {"light.kitchen_strip_1", "light.kitchen_strip_2"} <= _light_calls(
+        service_calls, "turn_off"
+    )
+
+
+@pytest.mark.integration
+async def test_route_change_finishing_inside_an_alert_is_applied_again_after_it(
+    hass: HomeAssistant, helper_entities, pin_circadian, monkeypatch
+) -> None:
+    """Route commands already inside their service calls when an alert starts
+    finish under it, and the alert restores the outgoing route's lights. When
+    the alert ends the incoming route is applied again."""
+    await _setup(hass, pin_circadian, colortemp=3000)  # fallback route (strips) active
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    await ctrl.lighting_circadian()
+    for eid in ("light.kitchen_strip_1", "light.kitchen_strip_2", "light.kitchen_strip_3"):
+        hass.states.async_set(eid, "on", {})
+    await hass.async_block_till_done()
+    calls: list[tuple[str, str]] = []
+    paused = {"on": True}
+    inside, release = asyncio.Event(), asyncio.Event()
+
+    async def light_service(call) -> None:
+        calls.append((call.service, call.data["entity_id"]))
+        if paused["on"]:
+            inside.set()
+            await release.wait()
+
+    hass.services.async_register("light", "turn_on", light_service)
+    hass.services.async_register("light", "turn_off", light_service)
+    await pin_circadian(50, 5000, tick=False)
+    tick = asyncio.ensure_future(ctrl._circadian_tick(CircadianValues(50, 5000)))
+    await asyncio.wait_for(inside.wait(), 5)
+
+    async def steps(*_args) -> None:
+        paused["on"] = False
+        release.set()
+        await tick
+        calls.clear()
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+    await hass.async_block_till_done()
+
+    assert ("turn_on", "light.kitchen_fluorescent") in calls
+    assert {eid for service, eid in calls if service == "turn_off"} == {
+        "light.kitchen_strip_1",
+        "light.kitchen_strip_2",
+        "light.kitchen_strip_3",
+    }
+
+
+@pytest.mark.integration
+async def test_alert_end_waits_for_a_tick_still_inside_its_route_commands(
+    hass: HomeAssistant, helper_entities, pin_circadian, monkeypatch
+) -> None:
+    """A tick's route commands are still inside their service calls when an
+    alert ends, and the clock moved back during the alert. The alert's end
+    waits for them, and the lit route then matches the clock."""
+    cfg = _kitchen_routes_config()
+    # A light outside the routes stays on, so swapping routes never leaves
+    # every light off for the all-off handler.
+    cfg["area_lighting"]["areas"][0]["lights"].append({"id": "light.kitchen_counter"})
+    hass.states.async_set("light.kitchen_counter", "on", {})
+    await _setup(hass, pin_circadian, colortemp=3000, cfg=cfg)  # fallback route (strips)
+    ctrl = hass.data["area_lighting"]["controllers"]["kitchen"]
+    await ctrl.lighting_circadian()
+    strips = ("light.kitchen_strip_1", "light.kitchen_strip_2", "light.kitchen_strip_3")
+    for eid in strips:
+        hass.states.async_set(eid, "on", {})
+    await hass.async_block_till_done()
+    paused = {"on": True}
+    inside, release = asyncio.Event(), asyncio.Event()
+
+    async def light_service(call) -> None:
+        if paused["on"]:
+            inside.set()
+            await release.wait()
+        hass.states.async_set(call.data["entity_id"], "on" if call.service == "turn_on" else "off")
+
+    hass.services.async_register("light", "turn_on", light_service)
+    hass.services.async_register("light", "turn_off", light_service)
+    await pin_circadian(50, 5000, tick=False)
+    tick = asyncio.ensure_future(ctrl._circadian_tick(CircadianValues(50, 5000)))
+    await asyncio.wait_for(inside.wait(), 5)
+
+    async def steps(*_args) -> None:
+        await pin_circadian(50, 3000, tick=False)
+        paused["on"] = False
+        asyncio.get_running_loop().call_later(0.1, release.set)
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+    await tick
+    await hass.async_block_till_done()
+
+    assert [hass.states.get(eid).state for eid in strips] == ["on", "on", "on"]
+    assert hass.states.get("light.kitchen_fluorescent").state == "off"
 
 
 _MEDIA_ZONE = "light.media_zone"

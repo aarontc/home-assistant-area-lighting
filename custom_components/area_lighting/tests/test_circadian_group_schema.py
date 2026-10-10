@@ -140,6 +140,11 @@ def test_group_without_type_is_rejected():
         _validate_area([{"name": "Main"}], [{"id": "light.stairs", "circadian_group": "Main"}])
 
 
+def test_empty_group_name_on_a_light_is_rejected():
+    with pytest.raises(vol.Invalid):
+        _validate_area([{"name": "Main"}], [{"id": "light.stairs", "circadian_group": ""}])
+
+
 def test_duplicate_group_name_is_rejected():
     with pytest.raises(vol.Invalid, match="circadian group 'Main' is declared more than once"):
         _validate_area([{"name": "Main"}, {"name": "Main"}], [])

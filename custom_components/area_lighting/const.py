@@ -54,6 +54,8 @@ DEFAULT_CIRCADIAN_TRANSITION_SECONDS = 60
 CIRCADIAN_INITIAL_TRANSITION_SECONDS = 1
 # A tick skips a light commanded this recently: its state is still settling.
 CIRCADIAN_COMMAND_ECHO_SECONDS = 5
+# Longest an alert's end waits for a circadian tick still sending commands.
+CIRCADIAN_SETTLE_SECONDS = 30
 
 # Remote button slugs
 BUTTON_ON = "on"

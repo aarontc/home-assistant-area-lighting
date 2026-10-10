@@ -110,7 +110,7 @@ def _validate_quoted_string(value: object) -> str:
 LIGHT_SCHEMA = vol.Schema(
     {
         vol.Required("id"): cv.entity_id,
-        vol.Optional("circadian_group"): cv.string,
+        vol.Optional("circadian_group"): vol.All(cv.string, vol.Length(min=1)),
         vol.Optional("circadian_switch"): _removed(
             "circadian_switch was renamed to circadian_group in 3.0.0"
         ),

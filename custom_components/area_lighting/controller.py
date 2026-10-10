@@ -31,6 +31,7 @@ from .const import (
     CIRCADIAN_COMMAND_ECHO_SECONDS,
     CIRCADIAN_DAYLIGHT_ENABLED_ENTITY,
     CIRCADIAN_INITIAL_TRANSITION_SECONDS,
+    CIRCADIAN_SETTLE_SECONDS,
     DOMAIN,
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
@@ -189,9 +190,15 @@ class AreaLightingController:
 
         # Circadian adjuster: connected to the clock's tick and to its lights'
         # and sleep entities' state changes while the area is in circadian.
-        # Commanded-at times are monotonic, per light entity id.
+        # Commanded-at times are monotonic, per light entity id. Stopping the
+        # adjuster starts a new generation, and a tick left over from an
+        # older one drops its work and does not hold off the new one's ticks.
         self._circadian_unsubs: list[Callable[[], None]] = []
-        self._circadian_tick_running: bool = False
+        self._circadian_generation: int = 0
+        self._circadian_tick_generation: int | None = None
+        # Resolved when the newest tick finishes, so an alert's end can wait
+        # for its route commands to land before the router re-reads the lights.
+        self._circadian_tick_done: asyncio.Future[None] | None = None
         self._circadian_commanded_at: dict[str, float] = {}
 
         self._kelvin_router = self._build_kelvin_router()
@@ -768,6 +775,9 @@ class AreaLightingController:
     # ── Service call helpers ───────────────────────────────────────────
 
     async def _call_service(self, service: str, **kwargs: Any) -> None:
+        # Drop a command that starts after a reload or teardown closed this controller.
+        if self._closed:
+            return
         domain, svc = service.split(".", 1)
         _LOGGER.debug(
             "Area %s: service_call %s %s",
@@ -885,6 +895,8 @@ class AreaLightingController:
         if scene_slug == SCENE_OFF_INTERNAL:
             self._stop_circadian()
             await self._turn_off_all_lights(transition)
+            if self._closed:
+                return
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
             self._state.transition_to_off(source)
@@ -912,6 +924,8 @@ class AreaLightingController:
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
         await self._apply_scene_data(scene_slug, transition)
+        if self._closed:
+            return
         if yield_if_superseded and my_activation != self._activation_seq:
             # A newer activation claimed the area while this one was applying.
             # It has already written the targets and will write the state, so
@@ -1010,6 +1024,7 @@ class AreaLightingController:
         self._notify_state_change()
 
         self._start_circadian()
+        generation = self._circadian_generation
 
         values = self._circadian_values()
         tasks: list = []
@@ -1028,12 +1043,16 @@ class AreaLightingController:
             if light.id in self._dr_shed_ids:
                 # Shed for demand response: force off (route-light shedding is
                 # handled by the kelvin router, which reads dr_shed_ids).
-                tasks.append(self._call_service("light.turn_off", entity_id=light.id))
+                tasks.append(
+                    self.async_circadian_call(generation, "light.turn_off", entity_id=light.id)
+                )
                 continue
             payload = self._circadian_payload(light, values) if values is not None else None
             if payload is None:
                 continue
-            tasks.append(self._send_circadian(payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS))
+            tasks.append(
+                self._send_circadian(payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS, generation)
+            )
         if tasks:
             await asyncio.gather(*tasks)
         await self._sync_kelvin_router()
@@ -1079,6 +1098,7 @@ class AreaLightingController:
         if not self._state.is_circadian or not self._demand_response_active():
             self._dr_shed_ids = frozenset()
             return
+        generation = self._circadian_generation
         old_shed = self._dr_shed_ids
         new_shed = self._compute_circadian_shed_ids()
         self._dr_shed_ids = new_shed
@@ -1099,12 +1119,16 @@ class AreaLightingController:
             is_on = state is not None and state.state == STATE_ON
             if light.id in new_shed:
                 if is_on:
-                    tasks.append(self._call_service("light.turn_off", entity_id=light.id))
+                    tasks.append(
+                        self.async_circadian_call(generation, "light.turn_off", entity_id=light.id)
+                    )
             elif not is_on and values is not None:
                 payload = self._circadian_payload(light, values)
                 if payload is not None:
                     tasks.append(
-                        self._send_circadian(payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+                        self._send_circadian(
+                            payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS, generation
+                        )
                     )
         if tasks:
             await asyncio.gather(*tasks)
@@ -1546,9 +1570,45 @@ class AreaLightingController:
         """
         if self._kelvin_router is not None:
             self._kelvin_router.deactivate()
+        self._circadian_generation += 1
         for unsub in self._circadian_unsubs:
             unsub()
         self._circadian_unsubs.clear()
+
+    async def async_end_alert(self) -> None:
+        """Hand the area back from an alert and bring its lights up to date.
+
+        A tick still in flight is waited for first, up to a bound, with the
+        alert still owning the area so its remaining commands are dropped.
+        Then the kelvin router forgets its route. Route commands that
+        finished while the alert ran may have left that route out of step
+        with the lights the alert restored, so the next sync derives the
+        route from the lights again and sends what is needed.
+        """
+        if self._circadian_tick_done is not None:
+            # asyncio.wait neither raises on timeout nor cancels the tick.
+            await asyncio.wait({self._circadian_tick_done}, timeout=CIRCADIAN_SETTLE_SECONDS)
+        self._alert_active = False
+        if self._kelvin_router is not None:
+            self._kelvin_router.deactivate()
+        if self.demand_response_active or self.dr_shed_ids:
+            # A demand-response edge deferred to this alert
+            # (reactivate_for_demand_response skips alert-owning areas)
+            # may have arrived mid-alert OR just before the alert
+            # started, so a changed-during-alert comparison would miss
+            # the pre-alert flip. Instead, re-drive the area through its
+            # normal activation path whenever the flag is active (the
+            # shed must be re-asserted over the alert's restore, and a
+            # restore-less pattern can leave shed bulbs on) or a stale
+            # shed set is still tracked (the flag went off, so those
+            # bulbs must be relit). Only an inactive flag with nothing
+            # shed skips the re-drive: the snapshot restore already
+            # produced the correct state.
+            await self.reactivate_for_demand_response()
+        else:
+            # Restarts an adjuster a reload stopped mid-alert, and brings the
+            # restored lights to the current values, sleep changes included.
+            await self.async_resume_circadian()
 
     async def async_resume_circadian(self) -> None:
         """Restart the adjuster of an area that is already in circadian and
@@ -1610,7 +1670,9 @@ class AreaLightingController:
         """Send these lights the current values from a state listener."""
         values = self._circadian_values()
         if lights and values is not None:
-            self.hass.async_create_task(self._send_circadian_logged(lights, values, transition))
+            self.hass.async_create_task(
+                self._send_circadian_logged(lights, values, transition, self._circadian_generation)
+            )
 
     def _recently_commanded(self, entity_id: str) -> bool:
         """Whether the adjuster commanded this light within the echo window."""
@@ -1624,10 +1686,12 @@ class AreaLightingController:
         """Bring every adjustable light that is on to the clock's values."""
         if not self.circadian_running or self._alert_active:
             return
-        if self._circadian_tick_running:
+        generation = self._circadian_generation
+        if self._circadian_tick_generation == generation:
             _LOGGER.debug("Area %s: previous circadian tick still running, skipping", self.area.id)
             return
-        self._circadian_tick_running = True
+        self._circadian_tick_generation = generation
+        done = self._circadian_tick_done = self.hass.loop.create_future()
         try:
             await self._sync_kelvin_router()
             if not self.circadian_running or self._alert_active:
@@ -1640,18 +1704,27 @@ class AreaLightingController:
             # Wait for every send before releasing the guard, so one failure
             # cannot let the next tick overlap the sends still in flight.
             await self._send_circadian_logged(
-                lights, values, self._global_config.circadian.transition
+                lights, values, self._global_config.circadian.transition, generation
             )
         finally:
-            self._circadian_tick_running = False
+            done.set_result(None)
+            if self._circadian_tick_generation == generation:
+                self._circadian_tick_generation = None
 
     async def _send_circadian_logged(
-        self, lights: list[LightConfig], values: CircadianValues, transition: float
+        self,
+        lights: list[LightConfig],
+        values: CircadianValues,
+        transition: float,
+        generation: int,
     ) -> None:
         """Send the values to each of these lights that is on and adjustable,
         logging failures instead of raising."""
         results = await asyncio.gather(
-            *(self._send_circadian_if_on(light, values, transition) for light in lights),
+            *(
+                self._send_circadian_if_on(light, values, transition, generation)
+                for light in lights
+            ),
             return_exceptions=True,
         )
         for light, result in zip(lights, results, strict=True):
@@ -1664,7 +1737,7 @@ class AreaLightingController:
                 )
 
     async def _send_circadian_if_on(
-        self, light: LightConfig, values: CircadianValues, transition: float
+        self, light: LightConfig, values: CircadianValues, transition: float, generation: int
     ) -> None:
         # Checked when the queued send starts, so a light switched off or
         # shed since it was queued is not turned back on.
@@ -1673,7 +1746,7 @@ class AreaLightingController:
             return
         payload = self._circadian_payload(light, values)
         if payload is not None:
-            await self._send_circadian(payload, transition)
+            await self._send_circadian(payload, transition, generation)
 
     def _circadian_adjustable(self, light: LightConfig) -> bool:
         """Whether the adjuster may send this light circadian values.
@@ -1700,7 +1773,9 @@ class AreaLightingController:
             routes.routes[self._active_route_index(routes)].lights
         )
 
-    async def async_turn_on_route_light(self, entity_id: str, transition: float) -> None:
+    async def async_turn_on_route_light(
+        self, entity_id: str, transition: float, generation: int
+    ) -> None:
         """Turn on a kelvin route light for the router. A light with a group
         and type gets its group's values, and any other light is only
         switched on."""
@@ -1710,21 +1785,37 @@ class AreaLightingController:
             self._circadian_payload(light, values)
             if light is not None and values is not None
             else None
-        )
-        if payload is None:
-            await self._call_service(
-                "light.turn_on", entity_id=entity_id, transition=int(transition)
-            )
-        else:
-            await self._send_circadian(payload, transition)
+        ) or {"entity_id": entity_id}
+        await self._send_circadian(payload, transition, generation)
 
-    async def _send_circadian(self, payload: dict[str, Any], transition: float) -> None:
-        # A queued send starts a loop iteration later, and by then the area
-        # may have left circadian or an alert may own it.
-        if not self.circadian_running or self._alert_active:
+    async def _send_circadian(
+        self, payload: dict[str, Any], transition: float, generation: int
+    ) -> None:
+        await self.async_circadian_call(
+            generation, "light.turn_on", transition=transition, **payload
+        )
+
+    async def async_circadian_call(self, generation: int, service: str, **kwargs: Any) -> None:
+        """Send a light command for the adjuster of `generation`, or for the
+        kelvin router reconciling under it.
+
+        The check runs as the queued command starts, which can be a loop
+        iteration after it was queued. By then the adjuster may have stopped
+        or restarted (a reload), or an alert may own the area.
+        """
+        if (
+            generation != self._circadian_generation
+            or not self.circadian_running
+            or self._alert_active
+        ):
             return
-        self._circadian_commanded_at[payload["entity_id"]] = time.monotonic()
-        await self._call_service("light.turn_on", transition=int(transition), **payload)
+        if service == "light.turn_on":
+            self._circadian_commanded_at[kwargs["entity_id"]] = time.monotonic()
+        await self._call_service(service, **kwargs)
+
+    @property
+    def circadian_generation(self) -> int:
+        return self._circadian_generation
 
     # ── Brightness/dimming helpers (D2, D3) ────────────────────────────
 
@@ -2715,8 +2806,8 @@ class AreaLightingController:
         """
         from .area_state import LeaderReason
 
-        # A notification queued before a reload rewired this follower.
-        if leader is not self.leader:
+        # A notification queued before a reload rewired or removed this follower.
+        if self._closed or leader is not self.leader:
             return
 
         _LOGGER.debug(
@@ -2794,6 +2885,8 @@ class AreaLightingController:
         if persist:
             self._schedule_save({**self.state_dict(), "timer_deadlines": {}})
         self._closed = True
+        self.leader = None
+        self.followers = []
         self._motion_timer.close()
         self._motion_night_timer.close()
         self._occupancy_timer.close()

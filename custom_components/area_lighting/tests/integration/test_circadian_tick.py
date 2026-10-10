@@ -138,6 +138,22 @@ async def test_tick_uses_configured_transition(
 
 
 @pytest.mark.integration
+async def test_tick_keeps_a_fractional_transition(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, pin_circadian
+) -> None:
+    network_room_config[DOMAIN]["circadian"] = {"transition": 2.5}
+    await pin_circadian(50, 4000, tick=False)
+    await _setup(hass, network_room_config)
+    ctrl = await _circadian(hass, "network_room")
+    await _echo_on(hass, ctrl, *NETWORK_LIGHTS)
+    service_calls.clear()
+
+    await pin_circadian(50, 4000)
+
+    assert {data["transition"] for data in _turn_ons(service_calls).values()} == {2.5}
+
+
+@pytest.mark.integration
 async def test_tick_skips_shed_lights(
     hass: HomeAssistant, helper_entities, service_calls, pin_circadian
 ) -> None:

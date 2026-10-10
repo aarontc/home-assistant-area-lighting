@@ -169,6 +169,7 @@ class CircadianKelvinRouter:
                 # driving lights here would fight the incoming scene.
                 return
             ctrl = self._controller()
+            generation = ctrl.circadian_generation if ctrl is not None else 0
             colortemp = ctrl.circadian_kelvin() if ctrl is not None else None
             prev_index = self._current_index
             new_index = select_route(self._config.routes, colortemp, prev_index)
@@ -270,26 +271,36 @@ class CircadianKelvinRouter:
                 len(on_calls_to_issue),
             )
 
-            tasks: list = [
-                self._hass.services.async_call(
-                    "light",
-                    "turn_off",
-                    {
-                        "entity_id": entity_id,
-                        "transition": int(self._config.crossfade_seconds),
-                    },
-                    blocking=True,
+            crossfade = int(self._config.crossfade_seconds)
+            if ctrl is None:
+                await asyncio.gather(
+                    *(
+                        self._hass.services.async_call(
+                            "light",
+                            "turn_off",
+                            {"entity_id": entity_id, "transition": crossfade},
+                            blocking=True,
+                        )
+                        for entity_id in off_calls_to_issue
+                    )
                 )
-                for entity_id in off_calls_to_issue
-            ]
-            if ctrl is not None:
-                # The controller sends a grouped light its group's values.
-                tasks.extend(
-                    ctrl.async_turn_on_route_light(entity_id, self._config.crossfade_seconds)
+                return
+            # The controller drops a command that starts after an alert took
+            # the area or the adjuster stopped, and sends a grouped light its
+            # group's values. An alert that ends makes the router forget its
+            # route, so a change it interrupted is made again.
+            await asyncio.gather(
+                *(
+                    ctrl.async_circadian_call(
+                        generation, "light.turn_off", entity_id=entity_id, transition=crossfade
+                    )
+                    for entity_id in off_calls_to_issue
+                ),
+                *(
+                    ctrl.async_turn_on_route_light(entity_id, crossfade, generation)
                     for entity_id in on_calls_to_issue
-                )
-            if tasks:
-                await asyncio.gather(*tasks)
+                ),
+            )
 
     def _cluster_members_under_dr(self, ctrl: Any) -> dict[str, list[str]]:
         """Cluster entity id -> member ids, non-empty only under demand

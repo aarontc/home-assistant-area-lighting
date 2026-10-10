@@ -23,6 +23,7 @@ import custom_components.area_lighting as area_lighting
 from custom_components.area_lighting import alert
 from custom_components.area_lighting.alert import execute_alert
 from custom_components.area_lighting.area_state import ActivationSource, LeaderReason
+from custom_components.area_lighting.circadian_clock import CircadianValues
 from custom_components.area_lighting.const import DOMAIN
 from custom_components.area_lighting.controller import AreaLightingController
 from custom_components.area_lighting.diagnostics import AreaLightingDiagnosticSensor
@@ -466,6 +467,111 @@ async def test_reload_during_alert_resumes_circadian_after_the_alert(
     )
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("new_area", "motion_active", "occupancy_active"),
+    [
+        (_area(), False, False),
+        (
+            _area(
+                motion_light_motion_sensor_ids=[MOTION],
+                occupancy_light_sensor_ids=["binary_sensor.den_occupancy_2"],
+            ),
+            True,
+            False,
+        ),
+    ],
+    ids=["sensors_removed", "occupancy_replaced_by_one_that_is_on"],
+)
+async def test_alert_does_not_restore_timers_a_reload_made_stale(
+    hass: HomeAssistant,
+    helper_entities,
+    monkeypatch,
+    new_area: dict,
+    motion_active: bool,
+    occupancy_active: bool,
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+    hass.states.async_set("binary_sensor.den_occupancy_2", "on")
+
+    async def steps(*_args) -> None:
+        await _reload(hass, _config(new_area))
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+
+    assert ctrl._motion_timer.is_active is motion_active
+    assert ctrl._occupancy_timer.is_active is occupancy_active
+
+
+@pytest.mark.integration
+async def test_alert_keeps_a_countdown_started_during_it(
+    hass: HomeAssistant, helper_entities, monkeypatch
+) -> None:
+    ctrl = await _evening_with_timers(hass)
+    saved = ctrl._occupancy_timer.deadline_utc
+    hass.states.async_set("binary_sensor.den_occupancy_2", "on")
+    fresh = []
+
+    async def steps(*_args) -> None:
+        await _reload(
+            hass,
+            _config(
+                _area(
+                    motion_light_motion_sensor_ids=[MOTION],
+                    occupancy_light_sensor_ids=["binary_sensor.den_occupancy_2"],
+                )
+            ),
+        )
+        assert not ctrl._occupancy_timer.is_active
+        hass.states.async_set("binary_sensor.den_occupancy_2", "off")
+        await hass.async_block_till_done()
+        fresh.append(ctrl._occupancy_timer.deadline_utc)
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+
+    assert fresh[0] is not None
+    assert fresh[0] != saved
+    assert ctrl._occupancy_timer.deadline_utc == fresh[0]
+
+
+@pytest.mark.integration
+async def test_reload_during_a_tick_applies_the_new_clock_values(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    ctrl._circadian_commanded_at.clear()
+    syncing, release = asyncio.Event(), asyncio.Event()
+    sync = ctrl._sync_kelvin_router
+
+    async def paused_sync() -> None:
+        ctrl._sync_kelvin_router = sync
+        syncing.set()
+        await release.wait()
+
+    ctrl._sync_kelvin_router = paused_sync
+    old_tick = asyncio.ensure_future(ctrl._circadian_tick(CircadianValues(50, 4000)))
+    await asyncio.wait_for(syncing.wait(), 5)
+    await pin_circadian(60, 4500, tick=False)
+    service_calls.clear()
+
+    await _reload(hass, _config(_area(), circadian={"min_colortemp": 2000}))
+    release.set()
+    await old_tick
+    await hass.async_block_till_done()
+
+    turn_ons = [c.data for c in service_calls if c.service == "turn_on"]
+    assert {data["entity_id"] for data in turn_ons} == {LIGHT_1, LIGHT_2}
+    assert {data["color_temp_kelvin"] for data in turn_ons} == {4500}
+
+
 def _leader_config(follower_leader: str | None) -> dict:
     follower = _area("closet")
     if follower_leader is not None:
@@ -487,6 +593,73 @@ async def test_leader_notification_queued_before_rewiring_is_ignored(
 
     assert closet.leader is ctrls["hall"]
     assert closet.current_scene == "circadian"
+
+
+@pytest.mark.integration
+async def test_leader_notification_queued_before_removal_is_ignored(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrls = await _setup(hass, _leader_config("bath"))
+    bath, closet = ctrls["bath"], ctrls["closet"]
+    await closet.lighting_circadian()
+    queued = closet.handle_leader_change(bath, "evening", LeaderReason.SCENE_ACTIVATED)
+
+    await _reload(hass, _config(_area("bath"), _area("hall")))
+    service_calls.clear()
+    await queued
+
+    assert closet.leader is None
+    assert closet.followers == []
+    assert closet.current_scene == "circadian"
+    assert not service_calls
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("slug", "reason"),
+    [("evening", LeaderReason.SCENE_ACTIVATED), (None, LeaderReason.OFF)],
+    ids=["scene", "off"],
+)
+async def test_follower_closed_while_its_scene_commands_are_queued_sends_none(
+    hass: HomeAssistant, helper_entities, service_calls, slug: str | None, reason: LeaderReason
+) -> None:
+    cfg = _leader_config("bath")
+    cfg[DOMAIN]["areas"][2]["follow_leader_deactivation"] = True
+    ctrls = await _setup(hass, cfg)
+    bath, closet = ctrls["bath"], ctrls["closet"]
+    await closet.lighting_circadian()
+    await hass.async_block_till_done()
+    service_calls.clear()
+    listener_calls = []
+    closet.add_state_listener(lambda: listener_calls.append(closet.current_scene))
+    following = asyncio.ensure_future(closet.handle_leader_change(bath, slug, reason))
+    await asyncio.sleep(0)
+
+    closet.shutdown()
+    await following
+
+    assert closet.current_scene == "circadian"
+    assert not service_calls
+    assert listener_calls == []
+
+
+@pytest.mark.integration
+async def test_tick_sends_queued_before_an_adjuster_restart_are_dropped(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    ctrl._circadian_commanded_at.clear()
+    service_calls.clear()
+    tick = asyncio.ensure_future(ctrl._circadian_tick(CircadianValues(50, 4000)))
+    await asyncio.sleep(0)
+
+    ctrl._stop_circadian()
+    ctrl._start_circadian()
+    await tick
+
+    assert not service_calls
 
 
 @pytest.mark.integration

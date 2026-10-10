@@ -340,8 +340,9 @@ no alert is active and the controller is open. Then, in order:
    The router takes the first route with a light that is on as its current
    route, or, when no route light is on, the route the clock's kelvin selects.
    It records the current shed set as its last one. A router that is already
-   active, as after an alert without a reload, keeps its route. A plain route
-   sync here
+   active keeps its route. An alert's end deactivates the router first,
+   because route commands that finished during the alert can leave its route
+   out of step with the lights the alert restored. A plain route sync here
    would see a fresh router with no index and turn on every active-route light
    that is off (`circadian_kelvin_router.py:250-283`), against
    `circadian_lighting`'s rule that only lights already on are adjusted

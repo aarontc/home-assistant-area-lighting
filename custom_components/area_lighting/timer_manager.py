@@ -35,6 +35,9 @@ class TimerHandle:
         self._duration = duration_seconds
         self._deadline_utc: datetime | None = None
         self._closed = False
+        # Bumped by every cancel, so by every start and restore too. A saved
+        # deadline is safe to restore while the epoch it was saved with holds.
+        self.epoch = 0
 
     def start(self, duration: float | None = None) -> None:
         """Start (or restart) the timer.
@@ -56,6 +59,7 @@ class TimerHandle:
 
     def cancel(self) -> None:
         """Cancel the timer if running."""
+        self.epoch += 1
         if self._cancel is not None:
             _LOGGER.debug("Timer %s: cancelled", self._name)
             self._cancel.cancel()
