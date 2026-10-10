@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 
 import voluptuous as vol
@@ -195,6 +197,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             async_validate_lutron_remotes,
         )
 
+        # Removing a listen_once listener that already fired logs an error.
+        hass.data[DOMAIN]["unsub_started"] = None
+        hass.data[DOMAIN]["startup_task"] = asyncio.current_task()
         try:
             await _register_scene_entities(hass, area_config, scene_storage)
         except Exception:
@@ -233,13 +238,34 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         except Exception:
             _LOGGER.exception("Failed to reconcile startup state")
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
+    hass.data[DOMAIN]["unsub_started"] = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STARTED, _on_started
+    )
 
     # Set up event handlers
     unsubs = await async_setup_event_handlers(hass)
     hass.data[DOMAIN]["unsubs"] = unsubs
 
     return True
+
+
+async def async_teardown(hass: HomeAssistant) -> None:
+    """Stop everything async_setup started. Safe to call more than once."""
+    data = hass.data.get(DOMAIN)
+    if data is None:
+        return
+    if (unsub_started := data.get("unsub_started")) is not None:
+        data["unsub_started"] = None
+        unsub_started()
+    if (startup_task := data.pop("startup_task", None)) is not None:
+        startup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await startup_task
+    for unsub in data["unsubs"]:
+        unsub()
+    data["unsubs"].clear()
+    for ctrl in data["controllers"].values():
+        ctrl.shutdown()
 
 
 async def _register_scene_entities(

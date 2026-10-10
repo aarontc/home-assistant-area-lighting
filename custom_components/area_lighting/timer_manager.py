@@ -34,6 +34,7 @@ class TimerHandle:
         self._callback = callback
         self._duration = duration_seconds
         self._deadline_utc: datetime | None = None
+        self._closed = False
 
     def start(self, duration: float | None = None) -> None:
         """Start (or restart) the timer.
@@ -41,6 +42,9 @@ class TimerHandle:
         Args:
             duration: Override the construction-time duration for this start.
         """
+        if self._closed:
+            _LOGGER.debug("Timer %s: closed, not starting", self._name)
+            return
         self.cancel()
         effective = duration if duration is not None else self._duration
         _LOGGER.debug("Timer %s: starting (%ss)", self._name, effective)
@@ -58,6 +62,11 @@ class TimerHandle:
             self._cancel = None
         self._deadline_utc = None
 
+    def close(self) -> None:
+        """Cancel the timer and refuse every later start, restore and fire."""
+        self.cancel()
+        self._closed = True
+
     def restore(self, deadline_utc: datetime) -> None:
         """Re-arm the timer to fire at the given absolute UTC deadline.
 
@@ -70,6 +79,9 @@ class TimerHandle:
         their owning integrations. Accepted tradeoff per D13; revisit if
         observed to cause issues in production.
         """
+        if self._closed:
+            _LOGGER.debug("Timer %s: closed, not restoring", self._name)
+            return
         self.cancel()
         now = dt_util.utcnow()
         remaining = (deadline_utc - now).total_seconds()
@@ -100,6 +112,9 @@ class TimerHandle:
         return self._deadline_utc
 
     async def _fire(self) -> None:
+        # Cancelling cannot retract a _fire() task the loop already queued.
+        if self._closed:
+            return
         self._cancel = None
         self._deadline_utc = None
         _LOGGER.debug("Timer %s: fired", self._name)

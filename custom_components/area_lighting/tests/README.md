@@ -56,6 +56,6 @@ uv python install 3.14
   arguments themselves, mock with `LIGHT_TURN_ON_SCHEMA` as
   `integration/test_scene_color_attributes.py` does.
 - The harness fails any test that leaves an event-loop timer running. The
-  autouse `shutdown_controllers` fixture cancels the controllers' timers;
-  a test that fires a scheduled callback by hand must cancel its handle
-  first.
+  autouse `shutdown_controllers` fixture runs `async_teardown`, which
+  cancels the controllers' timers; a test that fires a scheduled callback
+  by hand must cancel its handle first.

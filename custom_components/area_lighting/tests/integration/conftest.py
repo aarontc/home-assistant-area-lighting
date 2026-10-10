@@ -15,7 +15,7 @@ from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
-from custom_components.area_lighting.const import DOMAIN
+from custom_components.area_lighting import async_teardown
 
 
 @pytest.fixture(autouse=True)
@@ -26,15 +26,14 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture(autouse=True)
 async def shutdown_controllers(hass: HomeAssistant):
-    """Cancel controller timers before the harness checks for lingering ones.
+    """Tear area_lighting down before the harness checks for lingering timers.
 
     Controllers schedule motion, occupancy and self-heal timers straight
     on the event loop, and nothing cancels them when HA stops. The
     harness fails any test that leaves a loop timer behind.
     """
     yield
-    for ctrl in hass.data.get(DOMAIN, {}).get("controllers", {}).values():
-        ctrl.shutdown()
+    await async_teardown(hass)
 
 
 @pytest.fixture

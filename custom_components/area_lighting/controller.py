@@ -80,6 +80,8 @@ class AreaLightingController:
         self._occupancy_timeout_enabled: bool = True
         self._alert_active: bool = False
         self._state_was_persisted: bool = False
+        # Set by shutdown(). A closed controller saves nothing and arms nothing.
+        self._closed: bool = False
         # Fadeout durations, split (T19):
         # - manual_fadeout_seconds: used by lighting_off (remote off
         #   button, off-scene activation)
@@ -411,6 +413,8 @@ class AreaLightingController:
 
     def _schedule_save(self) -> None:
         """Schedule a state save."""
+        if self._closed:
+            return
         storage = self.hass.data.get(DOMAIN, {}).get("state_storage")
         if storage is None:
             return
@@ -646,7 +650,7 @@ class AreaLightingController:
 
     async def _sync_kelvin_router(self) -> None:
         """Tell the kelvin router about the current scene. No-op if absent."""
-        if self._kelvin_router is None:
+        if self._closed or self._kelvin_router is None:
             return
         await self._kelvin_router.sync_to_state(self._state.scene_slug)
 
@@ -2024,7 +2028,7 @@ class AreaLightingController:
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
             self._heal_selfcheck_handle = None
-        if not self._scene_self_heal or not self._active_scene_targets:
+        if self._closed or not self._scene_self_heal or not self._active_scene_targets:
             return
         delay = (transition or 0.0) + MANUAL_DETECTION_GRACE_SECONDS + 1.0
         self._heal_selfcheck_handle = self.hass.loop.call_later(
@@ -2056,7 +2060,7 @@ class AreaLightingController:
         """Fire the scheduled check: re-assert any on-target bulb that
         diverged from its scene target during the fade."""
         self._heal_selfcheck_handle = None
-        if self._state.is_off or self._state.is_manual:
+        if self._closed or self._state.is_off or self._state.is_manual:
             return
         if (reason := self._heal_suppressed()) is not None:
             _LOGGER.debug(
@@ -2510,10 +2514,17 @@ class AreaLightingController:
 
     # ── Cleanup ────────────────────────────────────────────────────────
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def shutdown(self) -> None:
-        self._motion_timer.cancel()
-        self._motion_night_timer.cancel()
-        self._occupancy_timer.cancel()
+        self._closed = True
+        self._motion_timer.close()
+        self._motion_night_timer.close()
+        self._occupancy_timer.close()
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
             self._heal_selfcheck_handle = None
+        if self._kelvin_router is not None:
+            self._kelvin_router.deactivate()

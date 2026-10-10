@@ -103,6 +103,35 @@ async def test_restore_past_deadline_fires_immediately():
     assert fired.is_set()
 
 
+@pytest.mark.asyncio
+async def test_close_cancels_and_blocks_restart():
+    hass = _FakeHass()
+    handle = TimerHandle(hass, "t", 60.0, _noop)
+    handle.start()
+    handle.close()
+    assert not handle.is_active
+    assert handle.deadline_utc is None
+    handle.start()
+    handle.restore(datetime.now(UTC) + timedelta(seconds=45))
+    assert not handle.is_active
+    assert handle.deadline_utc is None
+
+
+@pytest.mark.asyncio
+async def test_close_drops_a_fire_already_queued():
+    fired = asyncio.Event()
+
+    async def cb() -> None:
+        fired.set()
+
+    hass = _FakeHass()
+    handle = TimerHandle(hass, "t", 60.0, cb)
+    handle.restore(datetime.now(UTC) - timedelta(seconds=5))
+    handle.close()
+    await hass.drain()
+    assert not fired.is_set()
+
+
 def test_parse_duration_hhmmss():
     assert parse_duration_to_seconds("00:08:00") == 480
     assert parse_duration_to_seconds("00:05:00") == 300
