@@ -667,7 +667,8 @@ class AreaLightingController:
         self._state_listeners.append(callback)
 
     def remove_state_listener(self, callback) -> None:
-        self._state_listeners = [c for c in self._state_listeners if c is not callback]
+        # Bound methods are equal, not identical, across attribute accesses.
+        self._state_listeners = [c for c in self._state_listeners if c != callback]
 
     def _notify_state_change(self) -> None:
         self._log_state_snapshot_if_changed()

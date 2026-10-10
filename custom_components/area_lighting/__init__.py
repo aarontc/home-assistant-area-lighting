@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Sequence
 
 import voluptuous as vol
 from homeassistant.config import async_hass_config_yaml
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.typing import ConfigType
 
 from .binary_sensor import AreaOccupiedBinarySensor
@@ -54,6 +56,8 @@ _LOGGER = logging.getLogger(__name__)
 # Registry option marking an entry the hidden default has been applied to.
 HIDDEN_DEFAULT_APPLIED = "hidden_default_applied"
 ENTITY_DOMAINS = ("binary_sensor", "number", "scene", "select", "sensor", "switch")
+# Key in hass.data[DOMAIN]["entities"] for the entities no area owns.
+GLOBAL_ENTITIES = "__global__"
 
 CONFIG_SCHEMA = vol.Schema(
     {
@@ -131,6 +135,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         "state_storage": state_storage,
         "global": global_toggles,
         "circadian_clock": clock,
+        # Every entity added, by area id, for reload and teardown to find.
+        "entities": {},
     }
     clock.async_start()
 
@@ -288,6 +294,10 @@ async def async_teardown(hass: HomeAssistant) -> None:
         unsub()
     data["unsubs"].clear()
     data["circadian_clock"].async_stop()
+    for entities in data["entities"].values():
+        for entity in entities:
+            await entity.async_remove()
+    data["entities"].clear()
     for ctrl in data["controllers"].values():
         ctrl.shutdown()
 
@@ -341,6 +351,7 @@ async def _register_scene_entities(
         return
 
     await component.async_add_entities(entities)
+    _record_entities(hass, entities)
     _LOGGER.info("Registered %d scene entities", len(entities))
 
     # Assign each scene to its HA area (creating the area if needed).
@@ -403,18 +414,21 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
 
     if switch_component is not None and switches:
         await switch_component.async_add_entities(switches)
+        _record_entities(hass, switches)
         _LOGGER.info("Registered %d switch entities", len(switches))
     else:
         _LOGGER.warning("Switch component not loaded; skipping %d switches", len(switches))
 
     if select_component is not None and selects:
         await select_component.async_add_entities(selects)
+        _record_entities(hass, selects)
         _LOGGER.info("Registered %d select entities", len(selects))
     else:
         _LOGGER.warning("Select component not loaded; skipping %d selects", len(selects))
 
     if number_component is not None and numbers:
         await number_component.async_add_entities(numbers)
+        _record_entities(hass, numbers)
         _LOGGER.info("Registered %d number entities", len(numbers))
     else:
         _LOGGER.warning("Number component not loaded; skipping %d numbers", len(numbers))
@@ -426,6 +440,7 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
     bs_component = hass.data.get(BINARY_SENSOR_COMPONENT)
     if bs_component is not None and binary_sensors:
         await bs_component.async_add_entities(binary_sensors)
+        _record_entities(hass, binary_sensors)
         _LOGGER.info("Registered %d binary_sensor entities", len(binary_sensors))
     else:
         _LOGGER.warning(
@@ -534,7 +549,23 @@ async def _register_sensors(hass: HomeAssistant) -> None:
         _LOGGER.error("Sensor component not loaded; cannot register sensors")
         return
 
-    await component.async_add_entities(
-        [AreaLightingDiagnosticSensor(hass), AreaLightingCircadianSensor(hass)]
-    )
+    sensors = [AreaLightingDiagnosticSensor(hass), AreaLightingCircadianSensor(hass)]
+    await component.async_add_entities(sensors)
+    _record_entities(hass, sensors)
     _LOGGER.info("Registered diagnostic and circadian sensors")
+
+
+def _record_entities(hass: HomeAssistant, entities: Sequence[Entity]) -> None:
+    """Record the entities a component added in hass.data, by area id."""
+    record: dict[str, list[Entity]] = hass.data[DOMAIN]["entities"]
+    for entity in entities:
+        # A failed add leaves the entity without a platform.
+        if entity.platform is None:
+            continue
+        if isinstance(entity, AreaLightingScene | BehavioralScene):
+            key = entity._area.id
+        elif (ctrl := getattr(entity, "_controller", None)) is not None:
+            key = ctrl.area.id
+        else:
+            key = GLOBAL_ENTITIES
+        record.setdefault(key, []).append(entity)

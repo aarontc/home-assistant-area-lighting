@@ -84,11 +84,12 @@ class AreaLightingSwitch(SwitchEntity):
     ) -> None:
         self._controller = controller
         self._attr_key = attr
+        self._name_suffix = name_suffix
         area = controller.area
-        self._attr_name = f"{area.name} {name_suffix}"
         self._attr_unique_id = f"area_lighting_{area.id}_{attr}"
         self._attr_icon = icon
         self.entity_id = f"switch.{area.id}_{attr}"
+        self.refresh_from_config()
 
     @property
     def is_on(self) -> bool:
@@ -119,6 +120,11 @@ class AreaLightingSwitch(SwitchEntity):
             await self._controller.async_set_occupancy_timeout_enabled(False)
         else:
             setattr(self._controller, self._attr_key, False)
+
+    def refresh_from_config(self) -> None:
+        self._attr_name = f"{self._controller.area.name} {self._name_suffix}"
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         self._controller.add_state_listener(self._on_controller_change)

@@ -39,11 +39,17 @@ class AreaLastSceneSelect(SelectEntity):
     def __init__(self, controller: AreaLightingController) -> None:
         self._controller = controller
         area = controller.area
-        self._attr_name = f"{area.name} Last Scene"
         self._attr_unique_id = f"area_lighting_{area.id}_last_scene"
-        self._attr_options = area.last_scene_options
         self._attr_icon = "mdi:palette"
         self.entity_id = f"select.{area.id}_last_scene"
+        self.refresh_from_config()
+
+    def refresh_from_config(self) -> None:
+        area = self._controller.area
+        self._attr_name = f"{area.name} Last Scene"
+        self._attr_options = area.last_scene_options
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     @property
     def current_option(self) -> str | None:

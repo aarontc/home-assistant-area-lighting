@@ -40,15 +40,22 @@ async def async_setup_platform(
 class _BaseAreaNumber(NumberEntity):
     """Shared base for area_lighting number entities bound to a controller.
 
-    Subclasses define `_attr_name`, `entity_id`, display range/step, and
+    Subclasses define `_name_suffix`, `entity_id`, display range/step, and
     implement `native_value` / `async_set_native_value` to read/write
     the underlying controller property.
     """
 
     _attr_entity_registry_visible_default = False
+    _name_suffix: str = ""
 
     def __init__(self, controller: AreaLightingController) -> None:
         self._controller = controller
+        self.refresh_from_config()
+
+    def refresh_from_config(self) -> None:
+        self._attr_name = f"{self._controller.area.name} {self._name_suffix}"
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         self._controller.add_state_listener(self._on_controller_change)
@@ -90,13 +97,13 @@ class AreaManualFadeoutNumber(_BaseFadeoutSeconds):
     """Fade duration for manual off (remote off button / off scene)."""
 
     _controller_attr = "manual_fadeout_seconds"
+    _name_suffix = "Manual Fadeout Seconds"
     # Manual = user-initiated (remote button / off scene).
     _attr_icon = "mdi:remote"
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Manual Fadeout Seconds"
         self._attr_unique_id = f"area_lighting_{area.id}_manual_fadeout_seconds"
         self.entity_id = f"number.{area.id}_manual_fadeout_seconds"
 
@@ -105,13 +112,13 @@ class AreaMotionFadeoutNumber(_BaseFadeoutSeconds):
     """Fade duration for motion + occupancy timer expiry."""
 
     _controller_attr = "motion_fadeout_seconds"
+    _name_suffix = "Motion Fadeout Seconds"
     # Motion pause = "motion just ended and we're fading out".
     _attr_icon = "mdi:motion-pause-outline"
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Motion Fadeout Seconds"
         self._attr_unique_id = f"area_lighting_{area.id}_motion_fadeout_seconds"
         self.entity_id = f"number.{area.id}_motion_fadeout_seconds"
 
@@ -122,7 +129,7 @@ class _BaseTimeoutMinutes(_BaseAreaNumber):
     Stores seconds under the hood; presents minutes to the UI.
     """
 
-    # Subclasses must set: _attr_name, _attr_unique_id, entity_id, _attr_icon
+    # Subclasses must set: _name_suffix, _attr_unique_id, entity_id, _attr_icon
     _attr_native_min_value = 1.0
     _attr_native_max_value = 180.0
     _attr_native_step = 1.0
@@ -152,11 +159,11 @@ class AreaMotionTimeoutNumber(_BaseTimeoutMinutes):
     """Motion-off timeout in minutes (normal mode)."""
 
     _controller_attr = "motion_off_duration_seconds"
+    _name_suffix = "Motion Timeout"
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Motion Timeout"
         self._attr_unique_id = f"area_lighting_{area.id}_motion_timeout_minutes"
         # Full hourglass = countdown until motion-off fires.
         self._attr_icon = "mdi:timer-sand"
@@ -167,11 +174,11 @@ class AreaMotionNightTimeoutNumber(_BaseTimeoutMinutes):
     """Motion-off timeout in minutes (night mode)."""
 
     _controller_attr = "motion_night_off_duration_seconds"
+    _name_suffix = "Motion Night Timeout"
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Motion Night Timeout"
         self._attr_unique_id = f"area_lighting_{area.id}_motion_night_timeout_minutes"
         # Emptied hourglass = shorter night variant of the normal timeout.
         self._attr_icon = "mdi:timer-sand-empty"
@@ -182,12 +189,12 @@ class AreaOccupancyTimeoutNumber(_BaseTimeoutMinutes):
     """Occupancy timeout in minutes (normal mode)."""
 
     _controller_attr = "occupancy_off_duration_seconds"
+    _name_suffix = "Occupancy Timeout"
     _attr_native_max_value = 720.0  # up to 12 hours
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Occupancy Timeout"
         self._attr_unique_id = f"area_lighting_{area.id}_occupancy_timeout_minutes"
         # Account + clock = person-timer, the best semantic match.
         self._attr_icon = "mdi:account-clock"
@@ -198,12 +205,12 @@ class AreaOccupancyNightTimeoutNumber(_BaseTimeoutMinutes):
     """Occupancy timeout in minutes (night mode)."""
 
     _controller_attr = "occupancy_night_off_duration_seconds"
+    _name_suffix = "Occupancy Night Timeout"
     _attr_native_max_value = 720.0
 
     def __init__(self, controller: AreaLightingController) -> None:
         super().__init__(controller)
         area = controller.area
-        self._attr_name = f"{area.name} Occupancy Night Timeout"
         self._attr_unique_id = f"area_lighting_{area.id}_occupancy_night_timeout_minutes"
         # Outline variant = night/lighter version of AreaOccupancyTimeoutNumber.
         self._attr_icon = "mdi:account-clock-outline"

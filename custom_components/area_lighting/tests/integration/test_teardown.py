@@ -7,10 +7,12 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
 from custom_components.area_lighting import async_teardown
+from custom_components.area_lighting.diagnostics import AreaLightingDiagnosticSensor
 
 MOTION_SENSOR = "binary_sensor.network_room_motion_sensor_motion"
 
@@ -224,3 +226,26 @@ async def test_closed_controller_schedules_no_self_heal_check(
     ctrl._schedule_post_settle_selfcheck(0.0)
 
     assert ctrl._heal_selfcheck_handle is None
+
+
+@pytest.mark.integration
+async def test_teardown_removes_entities_and_the_diagnostics_interval(
+    hass: HomeAssistant, helper_entities, network_room_config
+) -> None:
+    await _setup(hass, network_room_config)
+    data = hass.data["area_lighting"]
+    ctrl = data["controllers"]["network_room"]
+    sensor = next(
+        e for e in data["entities"]["__global__"] if isinstance(e, AreaLightingDiagnosticSensor)
+    )
+    assert sensor._unsub_refresh is not None
+    assert ctrl._state_listeners
+
+    await async_teardown(hass)
+    await hass.async_block_till_done()
+
+    assert hass.is_running
+    assert sensor._unsub_refresh is None
+    assert ctrl._state_listeners == []
+    assert data["entities"] == {}
+    assert hass.states.get("select.network_room_last_scene").state == STATE_UNAVAILABLE

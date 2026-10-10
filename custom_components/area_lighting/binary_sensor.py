@@ -29,9 +29,14 @@ class AreaOccupiedBinarySensor(BinarySensorEntity):
     def __init__(self, controller: AreaLightingController) -> None:
         self._controller = controller
         area = controller.area
-        self._attr_name = f"{area.name} Occupied"
         self._attr_unique_id = f"area_lighting_{area.id}_occupied"
         self.entity_id = f"binary_sensor.{area.id}_occupied"
+        self.refresh_from_config()
+
+    def refresh_from_config(self) -> None:
+        self._attr_name = f"{self._controller.area.name} Occupied"
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     @property
     def is_on(self) -> bool:
