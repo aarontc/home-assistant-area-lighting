@@ -157,8 +157,12 @@ readable companion that highlights user-facing changes.
   `select.<area>_last_scene` writes no state change. A motion or occupancy
   countdown stops when the area loses those sensors or a newly configured one
   is already on. An empty `occupancy_light_sensor_ids` list no longer starts
-  an occupancy countdown. Adding or removing an area or a scene still needs a
-  restart.
+  an occupancy countdown. A reload also adds and removes areas and scenes,
+  and treats a changed area id as one removal and one addition. A removed or
+  disabled area saves its state without its timers, and its entities become
+  unavailable but keep their registry entries. An area added back restores
+  that state. The global switches now register even when no area is
+  enabled, so they exist when a reload enables the first one.
   A reload that fails validation now raises an error to the caller and
   changes nothing.
 

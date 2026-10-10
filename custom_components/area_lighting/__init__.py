@@ -183,7 +183,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         # A reload may have run before Home Assistant finished starting.
         config = hass.data[DOMAIN]["config"]
         try:
-            await _register_scene_entities(hass, config, scene_storage)
+            await _register_scene_entities(hass, config.enabled_areas)
         except Exception:
             _LOGGER.exception("Failed to register scene entities")
         try:
@@ -191,7 +191,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         except Exception:
             _LOGGER.exception("Failed to register sensors")
         try:
-            await _register_helper_entities(hass)
+            await _register_helper_entities(
+                hass, list(hass.data[DOMAIN]["controllers"].values()), global_toggles
+            )
         except Exception:
             _LOGGER.exception("Failed to register helper entities")
         try:
@@ -280,14 +282,12 @@ async def _async_reload(hass: HomeAssistant) -> None:
 
     new_config = await _async_read_config(hass)
     data = hass.data[DOMAIN]
+    # Let a running _on_started finish adding entities, so none is added twice.
+    if (startup_task := data.get("startup_task")) is not None:
+        await asyncio.wait({startup_task})
     controllers: dict[str, AreaLightingController] = data["controllers"]
     new_areas = {area.id: area for area in new_config.enabled_areas}
-    if new_areas.keys() != controllers.keys() or any(
-        area.scene_slugs != controllers[area_id].area.scene_slugs
-        for area_id, area in new_areas.items()
-    ):
-        _LOGGER.error("area_lighting reload: adding or removing areas or scenes needs a restart")
-        raise HomeAssistantError("adding or removing areas or scenes needs a restart")
+    kept = [ctrl for area_id, ctrl in controllers.items() if area_id in new_areas]
 
     # Nothing from here to the new listeners may await, or a sensor that
     # changes in between goes unheard.
@@ -298,14 +298,37 @@ async def _async_reload(hass: HomeAssistant) -> None:
     data["circadian_clock"] = clock
     clock.async_start()
 
-    for area_id, ctrl in controllers.items():
-        ctrl.apply_config(new_areas[area_id], new_config)
+    for area_id in controllers.keys() - new_areas.keys():
+        controllers.pop(area_id).shutdown(persist=True)
+    for ctrl in kept:
+        ctrl.apply_config(new_areas[ctrl.area.id], new_config)
+    added = [
+        AreaLightingController(hass, area, new_config)
+        for area in new_config.enabled_areas
+        if area.id not in controllers
+    ]
+    for ctrl in added:
+        ctrl.load_persisted_state(data["state_storage"].get_area_state(ctrl.area.id))
+        controllers[ctrl.area.id] = ctrl
     _wire_leaders(controllers)
     data["config"] = new_config
     data["unsubs"] = await async_setup_event_handlers(hass, new_config)
+
+    await _remove_stale_entities(hass)
     _refresh_entities(hass)
-    for ctrl in controllers.values():
+    # Before Home Assistant has started, _on_started adds every entity and
+    # starts the added areas.
+    started = data["unsub_started"] is None
+    if started:
+        await _register_scene_entities(hass, new_config.enabled_areas)
+        await _register_helper_entities(hass, added)
+    for ctrl in kept:
         await ctrl.async_resume_circadian()
+    if started:
+        for ctrl in added:
+            await ctrl.restore_timers()
+            ctrl.reconcile_startup_state()
+            await ctrl.async_resume_circadian()
     # Tick once the areas have their new config, so no light gets the old
     # group values. The tick skips the lights that resuming areas just sent.
     await clock.async_tick()
@@ -317,6 +340,31 @@ async def _async_reload(hass: HomeAssistant) -> None:
         len(new_config.enabled_areas),
         len(new_config.alert_patterns),
     )
+
+
+async def _remove_stale_entities(hass: HomeAssistant) -> None:
+    """Remove the entities of areas and scenes the config no longer has.
+
+    Their registry entries stay, so an area or scene added back keeps the
+    user's customizations.
+    """
+    controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
+    record: dict[str, list[Entity]] = hass.data[DOMAIN]["entities"]
+    for key in list(record):
+        if key == GLOBAL_ENTITIES:
+            continue
+        if key not in controllers:
+            stale = record.pop(key)
+        else:
+            slugs = controllers[key].area.scene_slugs
+            stale = [
+                e
+                for e in record[key]
+                if isinstance(e, AreaLightingScene) and e._scene_cfg.slug not in slugs
+            ]
+            record[key] = [e for e in record[key] if e not in stale]
+        for entity in stale:
+            await entity.async_remove()
 
 
 def _refresh_entities(hass: HomeAssistant) -> None:
@@ -368,12 +416,9 @@ async def async_teardown(hass: HomeAssistant) -> None:
         ctrl.shutdown()
 
 
-async def _register_scene_entities(
-    hass: HomeAssistant,
-    area_config,
-    scene_storage: SceneStorage,
-) -> None:
-    """Register scene entities directly with HA's scene EntityComponent.
+async def _register_scene_entities(hass: HomeAssistant, areas: list[AreaConfig]) -> None:
+    """Register the scene entities of `areas` that are not registered yet,
+    directly with HA's scene EntityComponent.
 
     Also assigns each scene to its HA area in the entity registry.
     """
@@ -389,10 +434,9 @@ async def _register_scene_entities(
     area_reg = ar.async_get(hass)
     entity_reg = er.async_get(hass)
 
+    scene_storage: SceneStorage = hass.data[DOMAIN]["scene_storage"]
     entities: list = []
-    for area in area_config.enabled_areas:
-        {s.slug for s in area.scenes}
-
+    for area in areas:
         # Visual scenes from config
         for scene_cfg in area.scenes:
             if scene_cfg.slug in HIDDEN_SCENES:
@@ -408,6 +452,14 @@ async def _register_scene_entities(
             name = _behavioral_scene_name(area, slug)
             entities.append(BehavioralScene(hass, area, slug, name, method))
 
+    # Helpers share the scenes' unique-id pattern, so compare scenes only.
+    registered = {
+        e.unique_id
+        for recorded in hass.data[DOMAIN]["entities"].values()
+        for e in recorded
+        if isinstance(e, AreaLightingScene | BehavioralScene)
+    }
+    entities = [e for e in entities if e.unique_id not in registered]
     if not entities:
         return
 
@@ -430,8 +482,13 @@ async def _register_scene_entities(
             _LOGGER.debug("Assigned %s to area %s", entity.entity_id, ha_area.name)
 
 
-async def _register_helper_entities(hass: HomeAssistant) -> None:
-    """Register switch/select/number helper entities for each area."""
+async def _register_helper_entities(
+    hass: HomeAssistant,
+    controllers: list[AreaLightingController],
+    toggles: GlobalToggles | None = None,
+) -> None:
+    """Register switch/select/number helper entities for each controller,
+    and the global switches when `toggles` is given."""
     from homeassistant.components.number import (  # type: ignore[attr-defined]
         DATA_COMPONENT as NUMBER_COMPONENT,
     )
@@ -440,10 +497,7 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
     )
     from homeassistant.components.switch import DATA_COMPONENT as SWITCH_COMPONENT
 
-    controllers: dict[str, AreaLightingController] = hass.data.get(DOMAIN, {}).get(
-        "controllers", {}
-    )
-    if not controllers:
+    if not controllers and toggles is None:
         return
 
     switch_component = hass.data.get(SWITCH_COMPONENT)
@@ -455,7 +509,7 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
     numbers: list = []
     binary_sensors: list = []
 
-    for ctrl in controllers.values():
+    for ctrl in controllers:
         # Switches: motion_light_enabled, ambience_enabled, night_mode, motion_override_ambient
         for attr, name_suffix, icon, _default in SWITCH_DEFS:
             switches.append(AreaLightingSwitch(ctrl, attr, name_suffix, icon))
@@ -468,7 +522,6 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
         numbers.append(AreaOccupancyNightTimeoutNumber(ctrl))
         binary_sensors.append(AreaOccupiedBinarySensor(ctrl))
 
-    toggles = hass.data.get(DOMAIN, {}).get("global")
     if toggles is not None:
         for flag, name, icon, uid, eid in GLOBAL_SWITCH_DEFS:
             switches.append(AreaLightingGlobalSwitch(toggles, flag, name, icon, uid, eid))
@@ -477,21 +530,21 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
         await switch_component.async_add_entities(switches)
         _record_entities(hass, switches)
         _LOGGER.info("Registered %d switch entities", len(switches))
-    else:
+    elif switches:
         _LOGGER.warning("Switch component not loaded; skipping %d switches", len(switches))
 
     if select_component is not None and selects:
         await select_component.async_add_entities(selects)
         _record_entities(hass, selects)
         _LOGGER.info("Registered %d select entities", len(selects))
-    else:
+    elif selects:
         _LOGGER.warning("Select component not loaded; skipping %d selects", len(selects))
 
     if number_component is not None and numbers:
         await number_component.async_add_entities(numbers)
         _record_entities(hass, numbers)
         _LOGGER.info("Registered %d number entities", len(numbers))
-    else:
+    elif numbers:
         _LOGGER.warning("Number component not loaded; skipping %d numbers", len(numbers))
 
     from homeassistant.components.binary_sensor import (
@@ -503,7 +556,7 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
         await bs_component.async_add_entities(binary_sensors)
         _record_entities(hass, binary_sensors)
         _LOGGER.info("Registered %d binary_sensor entities", len(binary_sensors))
-    else:
+    elif binary_sensors:
         _LOGGER.warning(
             "Binary sensor component not loaded; skipping %d binary sensors",
             len(binary_sensors),
@@ -519,7 +572,7 @@ async def _register_helper_entities(hass: HomeAssistant) -> None:
 
 async def _assign_entities_to_ha_areas(
     hass: HomeAssistant,
-    controllers: dict[str, AreaLightingController],
+    controllers: list[AreaLightingController],
     switches: list,
     selects: list,
     numbers: list,
@@ -540,7 +593,7 @@ async def _assign_entities_to_ha_areas(
     area_reg = ar.async_get(hass)
     entity_reg = er.async_get(hass)
 
-    for ctrl in controllers.values():
+    for ctrl in controllers:
         area = ctrl.area
         ha_area = area_reg.async_get_area_by_name(area.name)
         if ha_area is None:

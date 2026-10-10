@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -11,16 +12,20 @@ import pytest
 from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+import custom_components.area_lighting as area_lighting
 from custom_components.area_lighting import alert
 from custom_components.area_lighting.alert import execute_alert
 from custom_components.area_lighting.area_state import ActivationSource, LeaderReason
 from custom_components.area_lighting.const import DOMAIN
 from custom_components.area_lighting.controller import AreaLightingController
+from custom_components.area_lighting.diagnostics import AreaLightingDiagnosticSensor
 from custom_components.area_lighting.models import AlertPattern, AlertStep, CircadianConfig
 
 AREA = "den"
@@ -608,14 +613,272 @@ async def test_reload_reruns_external_entity_validation(
     assert issues.async_get_issue(DOMAIN, "missing_external_entities") is None
 
 
+def _lights_off(hass: HomeAssistant, area_id: str) -> None:
+    for i in (1, 2):
+        hass.states.async_set(f"light.{area_id}_{i}", "off", {})
+
+
+def _removed(hass: HomeAssistant, entity_id: str) -> bool:
+    """Home Assistant restores a removed entity that keeps its registry entry
+    as unavailable."""
+    state = hass.states.get(entity_id)
+    return state is not None and state.state == "unavailable" and state.attributes["restored"]
+
+
+def _diagnostics(hass: HomeAssistant) -> AreaLightingDiagnosticSensor:
+    return next(
+        e
+        for e in hass.data[DOMAIN]["entities"][area_lighting.GLOBAL_ENTITIES]
+        if isinstance(e, AreaLightingDiagnosticSensor)
+    )
+
+
+def _ha_area_name(hass: HomeAssistant, entity_id: str) -> str | None:
+    entry = er.async_get(hass).async_get(entity_id)
+    area = ar.async_get(hass).async_get_area(entry.area_id) if entry and entry.area_id else None
+    return area.name if area else None
+
+
 @pytest.mark.integration
-async def test_reload_refuses_area_set_change(hass: HomeAssistant, helper_entities) -> None:
-    ctrl = (await _setup(hass, _config()))[AREA]
-    fewer_scenes = _area(scenes=[{"id": "circadian", "name": "Circadian"}])
+async def test_reload_adds_an_area_with_its_entities(hass: HomeAssistant, helper_entities) -> None:
+    await _setup(hass, _config())
+    _lights_off(hass, "hall")
 
-    for cfg in (_config(_area(), _area("hall")), _config(fewer_scenes)):
-        with pytest.raises(HomeAssistantError, match="needs a restart"):
-            await _reload(hass, cfg)
+    await _reload(hass, _config(_area(), _area("hall")))
 
-    assert hass.data[DOMAIN]["controllers"] == {AREA: ctrl}
-    assert len(ctrl.area.scenes) == 4
+    hall = hass.data[DOMAIN]["controllers"]["hall"]
+    for entity_id in (
+        "scene.hall_daylight",
+        "scene.hall_circadian",
+        "select.hall_last_scene",
+        "switch.hall_night_mode",
+        "number.hall_motion_timeout_minutes",
+        "binary_sensor.hall_occupied",
+    ):
+        assert hass.states.get(entity_id) is not None, entity_id
+        assert _ha_area_name(hass, entity_id) == "Hall", entity_id
+    assert hass.data[DOMAIN]["entities"]["hall"]
+    await hall.lighting_circadian()
+    await hass.async_block_till_done()
+    assert hass.states.get("select.hall_last_scene").state == "circadian"
+    assert hall in _diagnostics(hass)._controllers
+
+
+@pytest.mark.integration
+async def test_reload_removes_an_area_and_keeps_registry_entries(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    _lights_off(hass, "hall")
+    ctrls = await _setup(hass, _config(_area(), _area("hall")))
+    hall = ctrls["hall"]
+
+    await _reload(hass, _config())
+
+    assert "hall" not in hass.data[DOMAIN]["controllers"]
+    assert "hall" not in hass.data[DOMAIN]["entities"]
+    assert hall.closed
+    assert hall._state_listeners == []
+    assert hall not in _diagnostics(hass)._controllers
+    registry = er.async_get(hass)
+    for entity_id in ("scene.hall_daylight", "select.hall_last_scene", "switch.hall_night_mode"):
+        assert _removed(hass, entity_id), entity_id
+        assert registry.async_get(entity_id) is not None, entity_id
+
+
+@pytest.mark.integration
+async def test_reload_treats_a_changed_area_id_as_remove_and_add(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    den = (await _setup(hass, _config()))[AREA]
+    _lights_off(hass, "study")
+
+    await _reload(hass, _config(_area("study")))
+
+    assert set(hass.data[DOMAIN]["controllers"]) == {"study"}
+    assert den.closed
+    assert _removed(hass, "select.den_last_scene")
+    assert hass.states.get("select.study_last_scene").state == "off"
+    assert hass.states.get("scene.study_daylight") is not None
+
+
+@pytest.mark.integration
+async def test_reload_adds_and_removes_scene_entities(hass: HomeAssistant, helper_entities) -> None:
+    await _setup(hass, _config())
+    entities = hass.data[DOMAIN]["entities"][AREA]
+    daylight = next(e for e in entities if e.entity_id == "scene.den_daylight")
+    scenes = [
+        {"id": "circadian", "name": "Circadian"},
+        {"id": "daylight", "name": "Daylight"},
+        {"id": "movie", "name": "Movie"},
+        {"id": "off", "name": "Off"},
+    ]
+
+    await _reload(hass, _config(_area(scenes=scenes)))
+
+    entities = hass.data[DOMAIN]["entities"][AREA]
+    assert _removed(hass, "scene.den_evening")
+    assert er.async_get(hass).async_get("scene.den_evening") is not None
+    assert hass.states.get("scene.den_movie") is not None
+    assert daylight in entities
+    assert [e.entity_id for e in entities].count("scene.den_movie") == 1
+    assert "scene.den_evening" not in [e.entity_id for e in entities]
+    options = hass.states.get("select.den_last_scene").attributes["options"]
+    assert "movie" in options
+    assert "evening" not in options
+
+
+async def _evening_with_timers_beside_hall(hass: HomeAssistant) -> AreaLightingController:
+    hass.states.async_set(MOTION, "off")
+    hass.states.async_set(OCCUPANCY, "off")
+    _lights_off(hass, "hall")
+    ctrl = (await _setup(hass, _config(_sensor_area(), _area("hall"))))[AREA]
+    await ctrl._activate_scene("evening", ActivationSource.MOTION)
+    ctrl._motion_timer.start()
+    await hass.async_block_till_done()
+    assert ctrl._motion_timer.is_active
+    assert ctrl._occupancy_timer.is_active
+    return ctrl
+
+
+@pytest.mark.integration
+async def test_removed_area_controller_is_closed(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrl = await _evening_with_timers_beside_hall(hass)
+
+    await _reload(hass, _config(_area("hall")))
+    storage = hass.data[DOMAIN]["state_storage"]
+    service_calls.clear()
+    with patch.object(storage, "async_save_area_state", AsyncMock()) as save:
+        ctrl._notify_state_change()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(hours=2))
+        await hass.async_block_till_done()
+
+    assert ctrl.closed
+    assert not ctrl._motion_timer.is_active
+    assert not ctrl._occupancy_timer.is_active
+    assert not service_calls
+    save.assert_not_called()
+
+
+@pytest.mark.integration
+async def test_removed_area_state_is_saved_without_timer_deadlines(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    ctrl = await _evening_with_timers_beside_hall(hass)
+    ctrl.night_mode = True
+    await hass.async_block_till_done()
+
+    await _reload(hass, _config(_area("hall")))
+
+    saved = hass.data[DOMAIN]["state_storage"].get_area_state(AREA)
+    assert saved["timer_deadlines"] == {}
+    assert saved["area_state"]["scene_slug"] == "evening"
+    assert saved["night_mode"] is True
+
+
+@pytest.mark.integration
+async def test_readded_area_restores_persisted_state(hass: HomeAssistant, helper_entities) -> None:
+    old = await _evening_with_timers_beside_hall(hass)
+    old.night_mode = True
+    await hass.async_block_till_done()
+
+    await _reload(hass, _config(_area("hall")))
+    await _reload(hass, _config(_sensor_area(), _area("hall")))
+
+    ctrl = hass.data[DOMAIN]["controllers"][AREA]
+    assert ctrl is not old
+    assert ctrl.current_scene == "evening"
+    assert ctrl.night_mode
+    assert not ctrl._motion_timer.is_active
+    assert ctrl._active_scene_targets.keys() == {LIGHT_1, LIGHT_2}
+    assert hass.states.get("select.den_last_scene").state == "evening"
+    assert hass.states.get("switch.den_night_mode").state == "on"
+
+
+@pytest.mark.integration
+async def test_reload_disabling_an_area_removes_it(hass: HomeAssistant, helper_entities) -> None:
+    _lights_off(hass, "hall")
+    hall = (await _setup(hass, _config(_area(), _area("hall"))))["hall"]
+
+    await _reload(hass, _config(_area(), _area("hall", enabled=False)))
+
+    assert set(hass.data[DOMAIN]["controllers"]) == {AREA}
+    assert hall.closed
+    assert _removed(hass, "select.hall_last_scene")
+
+
+@pytest.mark.integration
+async def test_reload_before_start_adds_area_entities_once(
+    hass: HomeAssistant, helper_entities, caplog: pytest.LogCaptureFixture
+) -> None:
+    hass.states.async_set(LIGHT_1, "off", {})
+    hass.states.async_set(LIGHT_2, "off", {})
+    _lights_off(hass, "hall")
+    assert await async_setup_component(hass, DOMAIN, _config())
+    await hass.async_block_till_done()
+
+    await _reload(hass, _config(_area(), _area("hall")))
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+
+    entity_ids = [e.entity_id for e in hass.data[DOMAIN]["entities"]["hall"]]
+    assert "select.hall_last_scene" in entity_ids
+    assert len(entity_ids) == len(set(entity_ids))
+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.integration
+async def test_reload_during_startup_adds_area_entities_once(
+    hass: HomeAssistant, helper_entities, caplog: pytest.LogCaptureFixture
+) -> None:
+    hass.states.async_set(LIGHT_1, "off", {})
+    hass.states.async_set(LIGHT_2, "off", {})
+    _lights_off(hass, "hall")
+    assert await async_setup_component(hass, DOMAIN, _config())
+    await hass.async_block_till_done()
+    entered, release = asyncio.Event(), asyncio.Event()
+    register_sensors = area_lighting._register_sensors
+
+    async def stalled_register_sensors(hass: HomeAssistant) -> None:
+        entered.set()
+        await release.wait()
+        await register_sensors(hass)
+
+    with patch.object(area_lighting, "_register_sensors", stalled_register_sensors):
+        hass.bus.async_fire("homeassistant_started")
+        await entered.wait()
+        reload = asyncio.ensure_future(_reload(hass, _config(_area(), _area("hall"))))
+        await asyncio.sleep(0)
+        release.set()
+        await reload
+
+    assert "select.hall_last_scene" in [e.entity_id for e in hass.data[DOMAIN]["entities"]["hall"]]
+    assert [r.message for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+@pytest.mark.integration
+async def test_reload_adds_a_scene_sharing_a_helper_unique_id(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    await _setup(hass, _config())
+    scenes = [*_area()["scenes"], {"id": "night_mode", "name": "Night Mode"}]
+
+    await _reload(hass, _config(_area(scenes=scenes)))
+
+    assert hass.states.get("scene.den_night_mode") is not None
+    assert hass.states.get("switch.den_night_mode") is not None
+
+
+@pytest.mark.integration
+async def test_reload_enabling_the_first_area_keeps_global_switches(
+    hass: HomeAssistant, helper_entities, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _setup(hass, _config(_area(enabled=False)))
+    assert hass.states.get("switch.area_lighting_motion_lights_enabled") is not None
+    assert "not loaded" not in caplog.text
+
+    await _reload(hass, _config())
+
+    assert hass.states.get("select.den_last_scene") is not None
+    assert hass.states.get("switch.area_lighting_motion_lights_enabled") is not None

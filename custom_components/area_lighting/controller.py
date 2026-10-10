@@ -470,14 +470,16 @@ class AreaLightingController:
             "motion_sensors": self._motion_sensor_states(),
         }
 
-    def _schedule_save(self) -> None:
-        """Schedule a state save."""
+    def _schedule_save(self, state: dict | None = None) -> None:
+        """Schedule a save of `state`, by default the current state."""
         if self._closed:
             return
         storage = self.hass.data.get(DOMAIN, {}).get("state_storage")
         if storage is None:
             return
-        self.hass.async_create_task(storage.async_save_area_state(self.area.id, self.state_dict()))
+        self.hass.async_create_task(
+            storage.async_save_area_state(self.area.id, state or self.state_dict())
+        )
 
     # ── Backwards-compat properties for entity platforms ───────────────
 
@@ -2786,7 +2788,11 @@ class AreaLightingController:
     def closed(self) -> bool:
         return self._closed
 
-    def shutdown(self) -> None:
+    def shutdown(self, *, persist: bool = False) -> None:
+        """Close the controller. With `persist`, first save its state without
+        timer deadlines, so an area added back later fires no stale timer."""
+        if persist:
+            self._schedule_save({**self.state_dict(), "timer_deadlines": {}})
         self._closed = True
         self._motion_timer.close()
         self._motion_night_timer.close()
