@@ -19,8 +19,12 @@ class CircadianSwitchConfig:
     name: str
     area_id: str
     area_name: str
-    max_brightness: int | None = None
-    min_brightness: int | None = None
+    max_brightness: int = 100
+    min_brightness: int = 1
+    sleep_entity: str | None = None
+    sleep_state: list[str] = field(default_factory=list)
+    sleep_brightness: int = 1
+    sleep_colortemp: int = 1000
 
     @property
     def short_name(self) -> str:

@@ -83,10 +83,8 @@ def _build_circadian_switches_block(config: AreaLightingConfig) -> str:
         for cs in area.circadian_switches:
             lines.append(f"  - name: {cs.full_name}")
             lines.append("    platform: circadian_lighting")
-            if cs.max_brightness is not None:
-                lines.append(f"    max_brightness: {cs.max_brightness}")
-            if cs.min_brightness is not None:
-                lines.append(f"    min_brightness: {cs.min_brightness}")
+            lines.append(f"    max_brightness: {cs.max_brightness}")
+            lines.append(f"    min_brightness: {cs.min_brightness}")
             # Group lights by circadian_type, matching the templater
             by_type: dict[str, list[str]] = {}
             for light in area.all_lights:

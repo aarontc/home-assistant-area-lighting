@@ -109,6 +109,13 @@ readable companion that highlights user-facing changes.
   (300 seconds between updates) and `transition` (60 seconds). Lights do not
   follow it yet.
 
+- **Sleep options on circadian groups.** An entry under `circadian_switches`
+  accepts `sleep_entity`, `sleep_state` (one state or a list, required when
+  `sleep_entity` is set), `sleep_brightness` (percent, default 1) and
+  `sleep_colortemp` (kelvin, default 1000). `min_brightness` and
+  `max_brightness` now default to 1 and 100, as in circadian_lighting.
+  Nothing reads the sleep options yet.
+
 ### Changed
 
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**

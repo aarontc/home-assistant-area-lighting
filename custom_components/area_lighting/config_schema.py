@@ -38,12 +38,26 @@ from .models import (
 )
 from .state_storage import GLOBAL_STATE_KEY
 
-CIRCADIAN_SWITCH_SCHEMA = vol.Schema(
-    {
-        vol.Required("name"): cv.string,
-        vol.Optional("max_brightness"): vol.All(int, vol.Range(min=1, max=100)),
-        vol.Optional("min_brightness"): vol.All(int, vol.Range(min=1, max=100)),
-    }
+
+def _validate_sleep_state_present(value: dict) -> dict:
+    if "sleep_entity" in value and "sleep_state" not in value:
+        raise vol.Invalid("sleep_state is required when sleep_entity is set")
+    return value
+
+
+CIRCADIAN_SWITCH_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("name"): cv.string,
+            vol.Optional("max_brightness"): vol.All(int, vol.Range(min=1, max=100)),
+            vol.Optional("min_brightness"): vol.All(int, vol.Range(min=1, max=100)),
+            vol.Optional("sleep_entity"): cv.entity_id,
+            vol.Optional("sleep_state"): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional("sleep_brightness"): vol.All(int, vol.Range(min=1, max=100)),
+            vol.Optional("sleep_colortemp"): vol.All(int, vol.Range(min=1000, max=10000)),
+        }
+    ),
+    _validate_sleep_state_present,
 )
 
 
@@ -365,13 +379,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
         area_name = area_raw["name"]
 
         circadian_switches = [
-            CircadianSwitchConfig(
-                name=cs["name"],
-                area_id=area_id,
-                area_name=area_name,
-                max_brightness=cs.get("max_brightness"),
-                min_brightness=cs.get("min_brightness"),
-            )
+            CircadianSwitchConfig(area_id=area_id, area_name=area_name, **cs)
             for cs in area_raw.get("circadian_switches", [])
         ]
 
