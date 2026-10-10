@@ -106,17 +106,29 @@ readable companion that highlights user-facing changes.
   `sensor.area_lighting_circadian` (state in percent, attribute `colortemp`
   in kelvin, hidden by default). The optional top-level `circadian:` block
   sets `min_colortemp` (default 2500), `max_colortemp` (5500), `interval`
-  (300 seconds between updates) and `transition` (60 seconds). Lights do not
-  follow it yet.
+  (300 seconds between updates) and `transition` (60 seconds).
 
 - **Sleep options on circadian groups.** An entry under `circadian_switches`
   accepts `sleep_entity`, `sleep_state` (one state or a list, required when
   `sleep_entity` is set), `sleep_brightness` (percent, default 1) and
   `sleep_colortemp` (kelvin, default 1000). `min_brightness` and
   `max_brightness` now default to 1 and 100, as in circadian_lighting.
-  Nothing reads the sleep options yet.
+  While the state of `sleep_entity` is one of `sleep_state`, the group's
+  lights get `sleep_brightness` and `sleep_colortemp`.
 
 ### Changed
+
+- **Circadian lights are driven by area_lighting itself.** While an area is
+  in `circadian`, every `interval` seconds its grouped lights that are on get
+  the clock's values with the configured `transition`, and entering circadian
+  sends every grouped light outside a route the values with a 1-second
+  transition. area_lighting no longer turns the circadian_lighting switches
+  on or off. Brightness is `round(percent * 2.55)`, `rgb` lights get
+  `rgb_color` as well as brightness, and bulbs shed for demand response,
+  route lights outside the active route and areas an alert owns are skipped.
+  Leaving circadian from the `last_scene` select stops the updates, and
+  choosing `circadian` there or activating `scene.<area>_circadian` from
+  outside starts them.
 
 - **BREAKING: Area ids `global`, `area_lighting` and `all` are now reserved.**
   The first two collide with global master switch unique ids and entity

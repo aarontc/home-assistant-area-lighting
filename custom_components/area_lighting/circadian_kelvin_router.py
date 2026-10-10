@@ -139,11 +139,10 @@ class CircadianKelvinRouter:
     def deactivate(self) -> None:
         """Deregister the source listener and reset routing state.
 
-        Called at the top of the controller's _disable_circadian_switches
-        (every leave-circadian or dim-suspend path) and by sync_to_state
-        for any non-circadian scene, so the switch-off cannot fire the
-        listener and enqueue a reconcile against the outgoing circadian
-        scene.
+        Called at the top of the controller's _stop_circadian (every
+        leave-circadian or dim-suspend path) and by sync_to_state for any
+        non-circadian scene, so no reconcile runs against the outgoing
+        circadian scene.
         """
         if self._unsub is not None:
             self._unsub()

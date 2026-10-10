@@ -5,17 +5,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
+from . import circadian
 from .area_state import (
     ActivationSource,
     AreaState,
 )
+from .circadian_clock import CircadianValues
 from .circadian_kelvin_router import (
     CircadianKelvinRouter,
     read_source_colortemp,
@@ -25,7 +28,9 @@ from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
     BRIGHTNESS_STEP_DEFAULT,
+    CIRCADIAN_COMMAND_ECHO_SECONDS,
     CIRCADIAN_DAYLIGHT_ENABLED_ENTITY,
+    CIRCADIAN_INITIAL_TRANSITION_SECONDS,
     DOMAIN,
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
@@ -36,10 +41,17 @@ from .const import (
     SCENE_HEAL_ATTEMPT_WINDOW_SECONDS,
     SCENE_HEAL_MAX_ATTEMPTS,
     SCENE_OFF_INTERNAL,
+    SIGNAL_CIRCADIAN_TICK,
 )
 from .demand_response import apply_demand_response, demand_response_shed_ids
 from .light_targets import light_turn_on_data
-from .models import AreaConfig, AreaLightingConfig, LightConfig, SceneConfig
+from .models import (
+    AreaConfig,
+    AreaLightingConfig,
+    CircadianKelvinRoutesConfig,
+    LightConfig,
+    SceneConfig,
+)
 from .scene_machine import (
     ActionType,
     SceneAction,
@@ -174,6 +186,12 @@ class AreaLightingController:
         # leaders without followers keep `followers == []`.
         self.leader: AreaLightingController | None = None
         self.followers: list[AreaLightingController] = []
+
+        # Circadian adjuster: connected to the clock's tick while the area is
+        # in circadian. Commanded-at times are monotonic, per light entity id.
+        self._unsub_circadian_tick: Callable[[], None] | None = None
+        self._circadian_tick_running: bool = False
+        self._circadian_commanded_at: dict[str, float] = {}
 
         self._kelvin_router: CircadianKelvinRouter | None = None
         if area.circadian_kelvin_routes is not None:
@@ -387,6 +405,7 @@ class AreaLightingController:
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
+            "circadian_running": self.circadian_running,
             "demand_response_active": self._demand_response_active(),
             "demand_response_shed": sorted(self._dr_shed_ids),
             "scene_self_heal_enabled": self._scene_self_heal,
@@ -446,20 +465,22 @@ class AreaLightingController:
 
     @current_scene.setter
     def current_scene(self, value: str) -> None:
-        """Allow the select entity to manually set the scene."""
-        if self._state.is_circadian and value != "circadian" and self._kelvin_router is not None:
-            # This state-only path bypasses _activate_scene (and with it
-            # _disable_circadian_switches): stop the kelvin router here so
-            # a later source update cannot dispatch the stale route.
-            self._kelvin_router.deactivate()
-        if value == "off":
-            self._state.transition_to_off(ActivationSource.USER)
-        elif value == "manual":
-            self._state.transition_to_manual()
-        elif value == "circadian":
+        """Allow the select entity to manually set the scene.
+
+        State-only: no light is commanded. Entering circadian starts the
+        adjuster, so the lights follow at the next tick.
+        """
+        if value == "circadian":
             self._state.transition_to_circadian(ActivationSource.USER)
+            self._start_circadian()
         else:
-            self._state.transition_to_scene(value, ActivationSource.USER)
+            self._stop_circadian()
+            if value == "off":
+                self._state.transition_to_off(ActivationSource.USER)
+            elif value == "manual":
+                self._state.transition_to_manual()
+            else:
+                self._state.transition_to_scene(value, ActivationSource.USER)
         self._notify_state_change()
 
     def current_on_scene_slug(self) -> str | None:
@@ -506,6 +527,11 @@ class AreaLightingController:
     @property
     def circadian_active(self) -> bool:
         return self._state.is_circadian
+
+    @property
+    def circadian_running(self) -> bool:
+        """Whether the circadian adjuster is connected to the clock's tick."""
+        return self._unsub_circadian_tick is not None
 
     @property
     def scene_self_heal_enabled(self) -> bool:
@@ -779,8 +805,8 @@ class AreaLightingController:
         """Activate a scene by slug, transitioning state with the given source.
 
         Behavioral scenes (off_internal, circadian) are handled directly.
-        Any transition OUT of a circadian state disables the circadian
-        switches first so they don't fight the new scene's light settings.
+        Any transition OUT of a circadian state stops the circadian
+        adjuster first so it doesn't fight the new scene's light settings.
 
         Demand response needs no coordination here: the shed filter is
         folded into target resolution (_effective_scene_targets /
@@ -814,7 +840,7 @@ class AreaLightingController:
         my_activation = self._activation_seq
 
         if scene_slug == SCENE_OFF_INTERNAL:
-            await self._disable_circadian_switches()
+            self._stop_circadian()
             await self._turn_off_all_lights(transition)
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
@@ -836,9 +862,9 @@ class AreaLightingController:
                 )
             return
 
-        # Visual scene → disable circadian first so the switches stop
+        # Visual scene → stop the circadian adjuster first so its ticks stop
         # overriding the scene's color/brightness, then apply + transition.
-        await self._disable_circadian_switches()
+        self._stop_circadian()
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
@@ -882,6 +908,14 @@ class AreaLightingController:
             return None
         return read_source_colortemp(self.hass, routes.source)
 
+    def _active_route_index(self, routes: CircadianKelvinRoutesConfig) -> int:
+        """The router's active route, or before its first reconcile the route
+        it will select."""
+        current_idx = self._kelvin_router.current_index if self._kelvin_router is not None else None
+        if current_idx is not None:
+            return current_idx
+        return select_route(routes.routes, self._route_source_colortemp(), None)
+
     def _circadian_on_ids(self) -> list[str]:
         """Individual lights (config order) that circadian activation turns on.
 
@@ -904,12 +938,7 @@ class AreaLightingController:
         routes = self.area.circadian_kelvin_routes
         if routes is None:
             return [light.id for light in self.area.lights if light.circadian_switch]
-        current_idx = self._kelvin_router.current_index if self._kelvin_router is not None else None
-        if current_idx is not None:
-            index = current_idx
-        else:
-            index = select_route(routes.routes, self._route_source_colortemp(), None)
-        active = self._expand_cluster_ids(routes.routes[index].lights)
+        active = self._expand_cluster_ids(routes.routes[self._active_route_index(routes)].lights)
         route_lights = self._expand_cluster_ids(routes.all_route_lights)
         return [
             light.id
@@ -941,8 +970,9 @@ class AreaLightingController:
         self._enforce_occupancy_timer()
         self._notify_state_change()
 
-        await self._enable_circadian_switches()
+        self._start_circadian()
 
+        values = self._circadian_values()
         tasks: list = []
         for light in self.area.all_lights:
             if (
@@ -961,35 +991,39 @@ class AreaLightingController:
                 # handled by the kelvin router, which reads dr_shed_ids).
                 tasks.append(self._call_service("light.turn_off", entity_id=light.id))
                 continue
-            data = self._circadian_turn_on_data(light)
-            if data is None:
+            payload = self._circadian_payload(light, values) if values is not None else None
+            if payload is None:
                 continue
-            tasks.append(self._call_service("light.turn_on", **data))
+            tasks.append(self._send_circadian(payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS))
         if tasks:
             await asyncio.gather(*tasks)
         await self._sync_kelvin_router()
 
-    def _circadian_turn_on_data(self, light: LightConfig) -> dict[str, Any] | None:
-        """light.turn_on payload for one circadian-switch light, or None when
-        the light has no (available) circadian switch."""
-        if not light.circadian_switch:
-            return None
-        cs = self.area.circadian_switch_for_light(light)
-        if not cs:
-            return None
-        switch_state = self.hass.states.get(cs.entity_id)
-        if not switch_state:
-            return None
-        brightness_pct = switch_state.attributes.get("brightness")
-        colortemp_state = self.hass.states.get("sensor.circadian_values")
-        colortemp = colortemp_state.attributes.get("colortemp") if colortemp_state else None
+    def _circadian_values(self) -> CircadianValues | None:
+        clock = self.hass.data.get(DOMAIN, {}).get("circadian_clock")
+        return clock.values() if clock is not None else None
 
-        data: dict[str, Any] = {"entity_id": light.id}
-        if brightness_pct is not None:
-            data["brightness"] = int(float(brightness_pct) * 2.55)
-        if colortemp is not None and light.circadian_type == "ct":
-            data["color_temp_kelvin"] = int(colortemp)
-        return data
+    def _circadian_payload(
+        self, light: LightConfig, values: CircadianValues
+    ) -> dict[str, Any] | None:
+        """light.turn_on data for one grouped light, or None when the light
+        has no group or no circadian_type."""
+        group = self.area.circadian_switch_for_light(light)
+        if group is None or light.circadian_type is None:
+            return None
+        sleep_state = self.hass.states.get(group.sleep_entity) if group.sleep_entity else None
+        if sleep_state is not None and sleep_state.state in group.sleep_state:
+            kelvin: float = group.sleep_colortemp
+            brightness_pct: float = group.sleep_brightness
+        else:
+            kelvin = values.kelvin
+            brightness_pct = circadian.brightness_pct(
+                values.percent, group.min_brightness, group.max_brightness
+            )
+        return {
+            "entity_id": light.id,
+            **circadian.turn_on_payload(light.circadian_type, kelvin, brightness_pct),
+        }
 
     async def recompute_and_apply_circadian_dr(self) -> None:
         """Refresh the circadian demand-response shed set for the CURRENT
@@ -1017,6 +1051,7 @@ class AreaLightingController:
         # Cluster route entities expand to members: a flipped member of a
         # routed zone is the router's to drive, not this flip loop's.
         route_lights = self._expand_cluster_ids(routes.all_route_lights) if routes else set()
+        values = self._circadian_values()
         tasks: list = []
         for light in self.area.lights:
             if light.id not in flipped or light.id in route_lights:
@@ -1026,10 +1061,12 @@ class AreaLightingController:
             if light.id in new_shed:
                 if is_on:
                     tasks.append(self._call_service("light.turn_off", entity_id=light.id))
-            elif not is_on:
-                data = self._circadian_turn_on_data(light)
-                if data is not None:
-                    tasks.append(self._call_service("light.turn_on", **data))
+            elif not is_on and values is not None:
+                payload = self._circadian_payload(light, values)
+                if payload is not None:
+                    tasks.append(
+                        self._send_circadian(payload, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+                    )
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -1434,32 +1471,104 @@ class AreaLightingController:
 
     # ── Circadian helpers ──────────────────────────────────────────────
 
-    async def _enable_circadian_switches(self) -> None:
-        if self.area.circadian_switches:
-            await asyncio.gather(
-                *[
-                    self._call_service("switch.turn_on", entity_id=cs.entity_id)
-                    for cs in self.area.circadian_switches
-                ]
-            )
+    def _start_circadian(self) -> None:
+        """Connect the adjuster to the clock's tick. Idempotent."""
+        if self._closed or self._unsub_circadian_tick is not None:
+            return
+        self._unsub_circadian_tick = async_dispatcher_connect(
+            self.hass, SIGNAL_CIRCADIAN_TICK, self._circadian_tick
+        )
 
-    async def _disable_circadian_switches(self) -> None:
-        # Every caller is leaving circadian or suspending it (dim), and the
-        # switches being turned off include the kelvin router's source:
-        # deregister the router FIRST so the switch-off cannot fire its
-        # listener and enqueue a stale reconcile (colortemp=None -> fallback
-        # route) that drives route lights against the incoming state.
-        # Idempotent; _sync_kelvin_router re-registers the router whenever
-        # the area (re)enters circadian.
+    def _stop_circadian(self) -> None:
+        """Disconnect the adjuster. Idempotent.
+
+        Every caller is leaving circadian or suspending it (dim), so the
+        kelvin router is deactivated first: a reconcile it has queued must
+        not drive route lights against the incoming state. _sync_kelvin_router
+        re-registers the router whenever the area (re)enters circadian.
+        """
         if self._kelvin_router is not None:
             self._kelvin_router.deactivate()
-        if self.area.circadian_switches:
-            await asyncio.gather(
-                *[
-                    self._call_service("switch.turn_off", entity_id=cs.entity_id)
-                    for cs in self.area.circadian_switches
-                ]
-            )
+        if self._unsub_circadian_tick is not None:
+            self._unsub_circadian_tick()
+            self._unsub_circadian_tick = None
+
+    async def _circadian_tick(self, values: CircadianValues) -> None:
+        """Bring every adjustable light that is on to the clock's values."""
+        if not self.circadian_running or self._alert_active:
+            return
+        if self._circadian_tick_running:
+            _LOGGER.debug("Area %s: previous circadian tick still running, skipping", self.area.id)
+            return
+        self._circadian_tick_running = True
+        try:
+            await self._sync_kelvin_router()
+            if not self.circadian_running or self._alert_active:
+                # The area left circadian, or an alert took it, while the
+                # router was reconciling.
+                return
+            now = time.monotonic()
+            sends = {}
+            for light in self.area.all_lights:
+                if not self._circadian_adjustable(light):
+                    continue
+                state = self.hass.states.get(light.id)
+                if state is None or state.state != STATE_ON:
+                    continue
+                commanded_at = self._circadian_commanded_at.get(light.id)
+                if commanded_at is not None and now - commanded_at < CIRCADIAN_COMMAND_ECHO_SECONDS:
+                    continue
+                payload = self._circadian_payload(light, values)
+                if payload is not None:
+                    sends[light.id] = self._send_circadian(
+                        payload, self._global_config.circadian.transition
+                    )
+            # Wait for every send before releasing the guard, so one failure
+            # cannot let the next tick overlap the sends still in flight.
+            results = await asyncio.gather(*sends.values(), return_exceptions=True)
+            for entity_id, result in zip(sends, results, strict=True):
+                if isinstance(result, Exception):
+                    _LOGGER.warning(
+                        "Area %s: circadian update of %s failed: %s",
+                        self.area.id,
+                        entity_id,
+                        result,
+                    )
+        finally:
+            self._circadian_tick_running = False
+
+    def _circadian_adjustable(self, light: LightConfig) -> bool:
+        """Whether the adjuster may send this light circadian values.
+
+        False for a light without a group or type, a bulb shed for demand
+        response, a cluster while demand response is active (its turn_on
+        would relight shed members through the aggregate), and a route light
+        outside the router's active route (an outgoing bulb still reports on
+        mid-crossfade).
+        """
+        if not light.circadian_switch or not light.circadian_type:
+            return False
+        if light.id in self._dr_shed_ids:
+            return False
+        if light.is_cluster and self._demand_response_active():
+            return False
+        routes = self.area.circadian_kelvin_routes
+        if routes is None:
+            return True
+        ids = self._expand_cluster_ids([light.id])
+        if not ids & self._expand_cluster_ids(routes.all_route_lights):
+            return True
+        return ids <= self._expand_cluster_ids(
+            routes.routes[self._active_route_index(routes)].lights
+        )
+
+    async def _send_circadian(self, payload: dict[str, Any], transition: float) -> None:
+        # A queued send starts a loop iteration later, and by then the area
+        # may have left circadian or an alert may own it.
+        if not self.circadian_running or self._alert_active:
+            return
+        self._circadian_commanded_at[payload["entity_id"]] = time.monotonic()
+        await self._call_service("light.turn_on", transition=int(transition), **payload)
 
     # ── Brightness/dimming helpers (D2, D3) ────────────────────────────
 
@@ -1718,7 +1827,7 @@ class AreaLightingController:
             self._state.scene_slug,
             self._motion_fade_seconds(),
         )
-        await self._disable_circadian_switches()
+        self._stop_circadian()
 
         action = determine_off_fade_action(
             current_scene=self._state.scene_slug,
@@ -1879,7 +1988,7 @@ class AreaLightingController:
             return
 
         if self._state.is_circadian:
-            await self._disable_circadian_switches()
+            self._stop_circadian()
 
         # Mark dimmed BEFORE stepping. The step's own state echoes can be
         # classified while this coroutine is still awaiting the service calls,
@@ -1918,7 +2027,7 @@ class AreaLightingController:
         # drive route lights with no user action behind it, and circadian
         # would re-push brightness over the dim just asked for.
         if self._state.is_circadian:
-            await self._disable_circadian_switches()
+            self._stop_circadian()
         # Read the slug AFTER restoring: lighting_on picks the scene itself.
         # An empty set means the restored scene lights nothing here (an `off`
         # scene, or one whose bulbs are all excluded), and dim-up must still
@@ -1938,8 +2047,8 @@ class AreaLightingController:
     async def handle_scene_activated(self, scene_slug: str) -> None:
         """External scene.turn_on detected. Track which scene is now active.
 
-        Any transition away from circadian disables the circadian switches
-        so they don't keep fighting the externally-activated scene.
+        Any transition away from circadian stops the circadian adjuster
+        so it doesn't keep fighting the externally-activated scene.
         """
         _LOGGER.debug(
             "Area %s: handle_scene_activated scene=%s",
@@ -1953,13 +2062,14 @@ class AreaLightingController:
             self._active_scene_targets = {}
             self._state.transition_to_circadian(ActivationSource.USER)
             self._dr_shed_ids = self._compute_circadian_shed_ids()
+            self._start_circadian()
         elif scene_slug == "off":
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
-            await self._disable_circadian_switches()
+            self._stop_circadian()
             self._state.transition_to_off(ActivationSource.USER)
         else:
-            await self._disable_circadian_switches()
+            self._stop_circadian()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
             self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
@@ -1977,7 +2087,7 @@ class AreaLightingController:
         self._dr_shed_ids = frozenset()
         self._clear_scene_drift_issue()
         self._state.transition_to_off(ActivationSource.USER)
-        await self._disable_circadian_switches()
+        self._stop_circadian()
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
         self._occupancy_timer.cancel()
@@ -1990,8 +2100,8 @@ class AreaLightingController:
     async def handle_manual_light_change(self, force_when_dimmed: bool = False) -> None:
         """A light was manually adjusted outside the scene system.
 
-        Disables circadian switches so they don't immediately overwrite
-        the user's manual change with a circadian-calculated one.
+        Stops the circadian adjuster so it doesn't overwrite the user's
+        manual change with circadian values at the next tick.
 
         While the area is dimmed the latch is normally skipped: the
         raise/lower stepping itself diverges from scene targets, and this
@@ -2008,7 +2118,7 @@ class AreaLightingController:
             self._state.dimmed,
         )
         if force_when_dimmed or not self._state.dimmed:
-            await self._disable_circadian_switches()
+            self._stop_circadian()
             self._state.transition_to_manual()
             self._enforce_occupancy_timer()
             self._notify_state_change()
@@ -2427,10 +2537,6 @@ class AreaLightingController:
             ):
                 await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.HOLIDAY)
 
-    async def handle_circadian_enabled(self) -> None:
-        _LOGGER.debug("Area %s: handle_circadian_enabled", self.area.id)
-        await self._activate_circadian(ActivationSource.USER)
-
     async def handle_leader_change(
         self,
         new_slug: str | None,
@@ -2526,5 +2632,4 @@ class AreaLightingController:
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
             self._heal_selfcheck_handle = None
-        if self._kelvin_router is not None:
-            self._kelvin_router.deactivate()
+        self._stop_circadian()

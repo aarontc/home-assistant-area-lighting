@@ -207,27 +207,25 @@ async def test_raise_after_lights_all_off_restores_the_last_scene(
 
 
 @pytest.mark.integration
-async def test_lighting_raise_disables_circadian_switches(
+async def test_lighting_raise_stops_circadian_adjuster(
     hass: HomeAssistant,
     helper_entities,
     network_room_config,
+    service_calls,
+    pin_circadian,
 ) -> None:
-    """When raising from circadian, the circadian switches get disabled.
-
-    Spies on _disable_circadian_switches directly because the HA target
-    resolver rejects switch service calls against unregistered entity IDs
-    before they can be captured by async_mock_service.
-    """
-    from unittest.mock import AsyncMock
-
+    """Raising from circadian stops the adjuster, so no tick undoes the step."""
+    await pin_circadian(50, 4000, tick=False)
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    await ctrl.lighting_circadian()
     hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 150})
-    ctrl._state.transition_to_circadian(ActivationSource.USER)
-    spy = AsyncMock(wraps=ctrl._disable_circadian_switches)
-    ctrl._disable_circadian_switches = spy
+    assert ctrl.circadian_running
+
     await ctrl.lighting_raise()
-    assert spy.await_count >= 1
+
+    assert not ctrl.circadian_running
+    assert ctrl._state.dimmed
 
 
 @pytest.mark.integration

@@ -50,6 +50,10 @@ DEFAULT_CIRCADIAN_MIN_COLORTEMP = 2500
 DEFAULT_CIRCADIAN_MAX_COLORTEMP = 5500
 DEFAULT_CIRCADIAN_INTERVAL_SECONDS = 300
 DEFAULT_CIRCADIAN_TRANSITION_SECONDS = 60
+# Fade for a light brought into circadian (activation, demand-response relight).
+CIRCADIAN_INITIAL_TRANSITION_SECONDS = 1
+# A tick skips a light commanded this recently: its state is still settling.
+CIRCADIAN_COMMAND_ECHO_SECONDS = 5
 
 # Remote button slugs
 BUTTON_ON = "on"
