@@ -334,6 +334,21 @@ area_lighting from loading.
 
 ### Fixed
 
+- **A reload or restart that removes an area's current scene switches the
+  area to `manual`.** The area used to stay in the removed scene. The next
+  demand-response change or self-heal then sent a bare `light.turn_on` to its
+  lights and left its scene select reading `unknown`, and a holiday-owned
+  scene no longer turned off when holiday mode went back to `none`. The
+  lights now stay as they are, and the next `on` or motion picks a
+  configured scene. An alert running during the reload no longer restores
+  the removed scene when it ends. An area in `circadian` stays in it, since
+  every area has that mode whether or not it configures the scene.
+
+- **`scene.turn_on` tracking matches the integration's own scene entities.**
+  A call to a scene a reload removed no longer puts the area back into it,
+  and a renamed scene entity (`scene.den_daylight_2`) is tracked as
+  `daylight` instead of `daylight_2`.
+
 - **A holiday an area has no scene for no longer lights it.** Setting
   `input_select.holiday_mode` to `halloween` turned on every off area that
   defined only `christmas`, with a bare `light.turn_on`, and left its scene

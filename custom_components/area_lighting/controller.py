@@ -218,6 +218,7 @@ class AreaLightingController:
         expires. No light is turned on for it. The caller rewires the leader
         links this clears and registers the new listeners before it next
         awaits, so no sensor change goes unheard. It then resumes circadian.
+        An area in a scene the new config drops switches to manual.
         """
         self._stop_circadian()
         self.area = area
@@ -236,6 +237,7 @@ class AreaLightingController:
         occupancy_ids = area.occupancy_light_sensor_ids
         if not occupancy_ids or self._any_on(occupancy_ids):
             self._occupancy_timer.cancel()
+        self._leave_removed_scene()
         if self._state.is_scene:
             self._rebuild_scene_tracking()
         self._enforce_occupancy_timer()
@@ -380,12 +382,16 @@ class AreaLightingController:
         response they carry the shed filter with the shed set recomputed
         so diagnostics are accurate immediately after restart. Circadian
         tracks no scene targets (manual detection skips circadian areas),
-        so only its shed set is recomputed. No lights are driven here:
+        so only its shed set is recomputed. A persisted scene the config no
+        longer has switches the area to manual. No lights are driven here:
         physical state is preserved.
         """
         if not self._state_was_persisted:
             return
-        if self._state.is_scene:
+        if self._leave_removed_scene():
+            self._enforce_occupancy_timer()
+            self._notify_state_change()
+        elif self._state.is_scene:
             self._rebuild_scene_tracking()
         elif self._state.is_circadian and self._demand_response_active():
             self._dr_shed_ids = self._compute_circadian_shed_ids()
@@ -402,6 +408,27 @@ class AreaLightingController:
                 self._state.transition_to_manual()
                 self._notify_state_change()
                 return
+
+    def _leave_removed_scene(self) -> bool:
+        """Switch to manual if the area shows a scene its config no longer has.
+
+        The lights stay as they are. Tracking the missing slug would let a
+        demand-response re-drive or self-heal apply it through the skeleton
+        path. Bumping the activation sequence makes an in-flight re-drive of
+        the slug yield instead of committing it. Returns whether it switched.
+        """
+        if not self._state.is_scene or self._state.scene_slug in self.area.scene_slugs:
+            return False
+        _LOGGER.info(
+            "Area %s: scene %s is no longer configured, switching to manual",
+            self.area.id,
+            self._state.scene_slug,
+        )
+        self._activation_seq += 1
+        self._active_scene_targets = {}
+        self._dr_shed_ids = frozenset()
+        self._state.transition_to_manual()
+        return True
 
     def _rebuild_scene_tracking(self) -> None:
         """Rebuild the active scene's targets and shed set from the config."""

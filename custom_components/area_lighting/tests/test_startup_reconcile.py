@@ -29,6 +29,7 @@ def _make_controller(
     ctrl._state = state or AreaState()
     ctrl._state_was_persisted = persisted
     ctrl._notify_state_change = MagicMock()
+    ctrl._leave_removed_scene = MagicMock(return_value=False)
     ctrl.hass = MagicMock()
     ctrl.reconcile_startup_state = AreaLightingController.reconcile_startup_state.__get__(ctrl)
     return ctrl

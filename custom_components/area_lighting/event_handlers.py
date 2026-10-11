@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.components.scene import DATA_COMPONENT as SCENE_COMPONENT
 from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
@@ -32,6 +33,7 @@ from .const import (
 from .controller import AreaLightingController
 from .models import AreaLightingConfig
 from .motion_condition import evaluate_motion_condition
+from .scene import AreaLightingScene, BehavioralScene
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -389,28 +391,31 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
         entity_ids = [raw] if isinstance(raw, str) else list(raw)
 
         controllers = _controllers(hass)
+        # Look the ids up among the live scene entities instead of parsing
+        # them, so a renamed scene is still tracked and a scene a reload
+        # removed is not.
+        component = hass.data.get(SCENE_COMPONENT)
+        if component is None:
+            return
 
         for entity_id in entity_ids:
-            if not entity_id.startswith("scene."):
+            entity = component.get_entity(entity_id)
+            if isinstance(entity, AreaLightingScene):
+                scene_slug = entity._scene_cfg.slug
+            elif isinstance(entity, BehavioralScene):
+                scene_slug = entity._slug
+            else:
                 continue
-
-            # Parse area_id and scene_slug from entity_id
-            # Format: scene.{area_id}_{scene_slug}
-            short = entity_id.removeprefix("scene.")
-
-            for area_id, ctrl in controllers.items():
-                prefix = f"{area_id}_"
-                if short.startswith(prefix):
-                    scene_slug = short[len(prefix) :]
-                    if scene_slug:
-                        _LOGGER.debug(
-                            "Area %s: scene_activated entity=%s slug=%s",
-                            area_id,
-                            entity_id,
-                            scene_slug,
-                        )
-                        hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
-                    break
+            area_id = entity._area.id
+            if (ctrl := controllers.get(area_id)) is None:
+                continue
+            _LOGGER.debug(
+                "Area %s: scene_activated entity=%s slug=%s",
+                area_id,
+                entity_id,
+                scene_slug,
+            )
+            hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
 
     return _handler
 

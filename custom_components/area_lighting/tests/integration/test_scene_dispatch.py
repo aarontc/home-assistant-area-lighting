@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 
@@ -158,3 +159,54 @@ async def test_scene_turn_on_with_empty_entity_list_is_noop(
 
     network_spy.assert_not_awaited()
     craft_spy.assert_not_awaited()
+
+
+@pytest.mark.integration
+async def test_scene_turn_on_for_an_unconfigured_slug_is_ignored(
+    hass: HomeAssistant, helper_entities, two_area_config
+) -> None:
+    """A slug the area does not configure must not move its state machine."""
+    await _setup(hass, two_area_config)
+
+    network_ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    network_spy = AsyncMock(wraps=network_ctrl.handle_scene_activated)
+    network_ctrl.handle_scene_activated = network_spy
+
+    hass.bus.async_fire(
+        "call_service",
+        {
+            "domain": "scene",
+            "service": "turn_on",
+            "service_data": {"entity_id": "scene.network_room_evening"},
+        },
+    )
+    await hass.async_block_till_done()
+
+    network_spy.assert_not_awaited()
+
+
+@pytest.mark.integration
+async def test_scene_turn_on_for_a_renamed_scene_dispatches_its_slug(
+    hass: HomeAssistant, helper_entities, two_area_config
+) -> None:
+    await _setup(hass, two_area_config)
+    er.async_get(hass).async_update_entity(
+        "scene.network_room_daylight", new_entity_id="scene.network_room_daylight_2"
+    )
+    await hass.async_block_till_done()
+
+    network_ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    network_spy = AsyncMock(wraps=network_ctrl.handle_scene_activated)
+    network_ctrl.handle_scene_activated = network_spy
+
+    hass.bus.async_fire(
+        "call_service",
+        {
+            "domain": "scene",
+            "service": "turn_on",
+            "service_data": {"entity_id": "scene.network_room_daylight_2"},
+        },
+    )
+    await hass.async_block_till_done()
+
+    network_spy.assert_awaited_once_with("daylight")
