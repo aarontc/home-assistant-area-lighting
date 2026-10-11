@@ -844,7 +844,9 @@ Current code notes:
    timers fire immediately on startup
 3. On startup, if persisted state is OFF but any physical light is on,
    the area transitions to MANUAL so tracked state matches reality
-4. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
+4. On startup, an area whose persisted scene the config no longer has
+   transitions to MANUAL and its lights are left as they are
+5. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
 
 ## Reload
 
@@ -858,7 +860,7 @@ the service call raises the error and nothing changes.
 |---|---|
 | Lights, circadian groups, kelvin routes, sensors, remotes, `scene_self_heal` | Applied to the running area. Its scene, dimmed flag and timer deadlines are kept. |
 | Global `circadian:` block | Areas in circadian pick up the new values at the next update. |
-| Scene added or removed | Its scene entity is added or removed, and the `last_scene` select's options follow. |
+| Scene added or removed | Its scene entity is added or removed, and the `last_scene` select's options follow. An area showing a removed scene switches to `manual` and leaves its lights as they are. |
 | Scene contents | Used at the next activation. An area already in that scene compares manual changes against the new contents at once. |
 | Area name | Friendly names change. Entity ids do not, because they come from the area id. |
 | Area added | A new controller and entities, with the state it had if the id was used before. |
@@ -866,7 +868,7 @@ the service call raises the error and nothing changes.
 | Area id changed | One removal and one addition. |
 
 Areas that survive a reload keep their entities, and
-`select.<area>_last_scene` keeps its value, so a state trigger with `to:` on
+`select.<area>_last_scene` keeps its value unless its scene was removed, so a state trigger with `to:` on
 it does not fire. Adding or removing a scene changes the select's `options`
 attribute, and renaming the area changes its friendly name. Either one fires
 a state trigger on the select that has no `to:`, `from:` or `attribute:`.

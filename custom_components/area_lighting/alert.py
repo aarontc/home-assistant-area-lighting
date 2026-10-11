@@ -307,6 +307,9 @@ async def execute_alert(
 
         controller._state = AreaState.from_dict(saved_state)
         controller._active_scene_targets = saved_targets
+        # A reload during the alert may have removed the saved scene.
+        if controller._leave_removed_scene():
+            controller._enforce_occupancy_timer()
         controller._notify_state_change()
 
         await controller.async_end_alert()

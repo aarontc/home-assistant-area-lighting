@@ -741,6 +741,154 @@ async def test_reload_rebuilds_scene_targets_for_the_active_scene(
     assert "commanded_at" in ctrl._active_scene_targets[LIGHT_1]
 
 
+async def _assert_manual_through_demand_response(
+    hass: HomeAssistant, ctrl: AreaLightingController, service_calls
+) -> None:
+    assert ctrl.current_scene == "manual"
+    assert ctrl._active_scene_targets == {}
+    assert hass.states.get("select.den_last_scene").state == "manual"
+    service_calls.clear()
+    toggles = hass.data[DOMAIN]["global"]
+    for active in (True, False):
+        await toggles.async_set_demand_response_active(active)
+        await hass.async_block_till_done()
+
+    assert not [c for c in service_calls if c.domain == "light"]
+    assert ctrl.current_scene == "manual"
+    assert hass.states.get("select.den_last_scene").state == "manual"
+
+
+@pytest.mark.integration
+async def test_reload_removing_the_active_scene_switches_to_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    scenes = _area()["scenes"]
+    christmas = {"id": "christmas", "name": "Christmas"}
+    ctrl = (await _setup(hass, _config(_area(scenes=[*scenes, christmas]))))[AREA]
+    await ctrl._activate_scene("christmas", ActivationSource.HOLIDAY)
+    _set_on(hass, LIGHT_1, LIGHT_2)
+    await hass.async_block_till_done()
+
+    await _reload(hass, _config(_area(scenes=scenes)))
+
+    await _assert_manual_through_demand_response(hass, ctrl, service_calls)
+
+
+@pytest.mark.integration
+async def test_scene_call_for_a_removed_scene_is_not_tracked(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await ctrl._activate_scene("evening", ActivationSource.USER)
+    _set_on(hass, LIGHT_1, LIGHT_2)
+    await hass.async_block_till_done()
+    await _reload(
+        hass, _config(_area(scenes=[s for s in _area()["scenes"] if s["id"] != "evening"]))
+    )
+
+    hass.bus.async_fire(
+        "call_service",
+        {
+            "domain": "scene",
+            "service": "turn_on",
+            "service_data": {"entity_id": "scene.den_evening"},
+        },
+    )
+    await hass.async_block_till_done()
+
+    await _assert_manual_through_demand_response(hass, ctrl, service_calls)
+
+
+@pytest.mark.integration
+async def test_reload_removing_the_circadian_scene_keeps_circadian_running(
+    hass: HomeAssistant, helper_entities, pin_circadian
+) -> None:
+    """Circadian is a behavioral mode every area has, configured scene or not."""
+    await pin_circadian(50, 4000, tick=False)
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await _circadian_with_lights_on(hass, ctrl, LIGHT_1, LIGHT_2)
+    scenes = [s for s in _area()["scenes"] if s["id"] != "circadian"]
+
+    await _reload(hass, _config(_area(scenes=scenes)))
+
+    assert ctrl.current_scene == "circadian"
+    assert ctrl.circadian_running
+
+
+@pytest.mark.integration
+async def test_readded_area_whose_scene_was_removed_switches_to_manual(
+    hass: HomeAssistant, helper_entities, service_calls
+) -> None:
+    hass.states.async_set(MOTION, "off")
+    hass.states.async_set(OCCUPANCY, "off")
+    _lights_off(hass, "hall")
+    christmas = {"id": "christmas", "name": "Christmas"}
+    scenes = [*_area()["scenes"], christmas]
+    old = (await _setup(hass, _config(_sensor_area(scenes=scenes), _area("hall"))))[AREA]
+    await old._activate_scene("christmas", ActivationSource.HOLIDAY)
+    _set_on(hass, LIGHT_1, LIGHT_2)
+    await hass.async_block_till_done()
+    assert not old._occupancy_timer.is_active
+    await _reload(hass, _config(_area("hall")))
+
+    await _reload(hass, _config(_sensor_area(), _area("hall")))
+
+    ctrl = hass.data[DOMAIN]["controllers"][AREA]
+    assert ctrl._occupancy_timer.is_active
+    await _assert_manual_through_demand_response(hass, ctrl, service_calls)
+
+
+@pytest.mark.integration
+async def test_alert_does_not_restore_a_scene_a_reload_removed(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await ctrl._activate_scene("evening", ActivationSource.USER)
+    _set_on(hass, LIGHT_1, LIGHT_2)
+    await hass.async_block_till_done()
+    scenes = [s for s in _area()["scenes"] if s["id"] != "evening"]
+
+    async def steps(*_args) -> None:
+        await _reload(hass, _config(_area(scenes=scenes)))
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    await execute_alert(
+        hass, ctrl, AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    )
+    await hass.async_block_till_done()
+
+    await _assert_manual_through_demand_response(hass, ctrl, service_calls)
+
+
+@pytest.mark.integration
+async def test_demand_response_redrive_yields_to_a_reload_that_removes_its_scene(
+    hass: HomeAssistant, helper_entities, service_calls, monkeypatch
+) -> None:
+    ctrl = (await _setup(hass, _config()))[AREA]
+    await ctrl._activate_scene("evening", ActivationSource.USER)
+    _set_on(hass, LIGHT_1, LIGHT_2)
+    await hass.async_block_till_done()
+    scenes = [s for s in _area()["scenes"] if s["id"] != "evening"]
+    apply = ctrl._apply_scene_data
+
+    async def apply_then_reload(*args) -> None:
+        await apply(*args)
+        monkeypatch.setattr(ctrl, "_apply_scene_data", apply)
+        # _reload would wait for this task to finish, so call the service
+        # without it.
+        with patch(
+            "custom_components.area_lighting.async_hass_config_yaml",
+            AsyncMock(return_value=_config(_area(scenes=scenes))),
+        ):
+            await hass.services.async_call(DOMAIN, "reload", {}, blocking=True)
+
+    monkeypatch.setattr(ctrl, "_apply_scene_data", apply_then_reload)
+    await hass.data[DOMAIN]["global"].async_set_demand_response_active(True)
+    await hass.async_block_till_done()
+
+    await _assert_manual_through_demand_response(hass, ctrl, service_calls)
+
+
 @pytest.mark.integration
 async def test_invalid_reload_raises_and_keeps_the_running_config(
     hass: HomeAssistant, helper_entities
