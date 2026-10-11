@@ -216,6 +216,35 @@ Current code notes:
 3. `circadian -> daylight/evening`, `daylight <-> evening`, `night -> evening`, and `holiday -> circadian` are implemented
 4. The current code also allows `night_mode` to affect default `on` selection more broadly than this README describes
 
+**Per-remote sequence** via `buttons.on`:
+
+A remote can put its own scenes at the start of the cycle. List them under
+`buttons.on`, and quote the key, because YAML reads a bare `on` as `true`:
+
+```yaml
+lutron_remotes:
+  - id: abc123
+    name: Entry Remote
+    buttons:
+      "on": [study]
+```
+
+From `off`, `manual`, `ambient`, `night` or any other scene that is neither
+listed nor part of the rotation below, `on` activates the holiday scene when
+one is active and the area defines it, and otherwise the first listed scene.
+From the holiday scene it activates the first listed scene, and each listed
+scene leads to the next. After the last one comes the usual rotation:
+`circadian`, then the inverted sun position, then `daylight` and `evening`
+alternating. Once in that rotation, `on` stays in it. With `[study]`,
+Christmas active and daylight lights enabled, presses run `christmas → study
+→ circadian → evening → daylight → evening …`.
+
+Night mode does not change the start of the sequence, and neither does a
+leader the area follows. A dimmed scene is still restored first, and motion
+and other remotes keep the default cycle. Listed slugs must be scenes the area
+defines, with no repeats. `off`, `circadian`, `daylight`, `evening` and the
+holiday scenes are rejected, because the cycle already places them.
+
 #### `raise`
 
 Status: `Implemented`

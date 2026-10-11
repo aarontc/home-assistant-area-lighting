@@ -334,7 +334,7 @@ lutron_remotes:
 | `id`                 | string                                       | **yes**  | —       | The remote's Home Assistant device id (32 hex characters), the `device_id` in `lutron_caseta_button_event`. Find it in the URL of the remote's page under Settings → Devices & services → Devices. A missing device raises a startup warning. |
 | `name`               | string                                       | **yes**  | —       | Human label for logs/UI. |
 | `additional_actions` | dict                                         | no       | `{}`    | Free-form map of extra button→action hooks consumed by `event_handlers.py`. Not validated by this schema. |
-| `buttons`            | dict                                         | no       | `{}`    | Per-button overrides (currently only `favorite`). |
+| `buttons`            | dict                                         | no       | `{}`    | Per-button overrides: `favorite` and `"on"`. |
 
 #### `buttons.favorite` override
 
@@ -355,6 +355,17 @@ Three forms are accepted; one is chosen per remote:
    ```
 
 Bare slugs are validated at parse time against the owning area's `scenes` list; unknown slugs raise `vol.Invalid`. If `buttons.favorite` is unset, the default holiday/night cycling logic in `scene_machine.py` applies.
+
+#### `buttons."on"` sequence
+
+A scene slug or list of scene slugs that the `on` button walks through before the usual `circadian` → sun position rotation. An active holiday scene still comes first. Quote the key: YAML reads a bare `on` as `true`, and validation rejects it with a message saying so.
+
+```yaml
+buttons:
+  "on": [study]   # holiday (when active) → study → circadian → sun position
+```
+
+Each slug must be a scene the area defines, with no repeats. `off`, `circadian`, `daylight`, `evening`, `christmas` and `halloween` are rejected, because the cycle already places them. Night mode and a leader the area follows do not change where the sequence starts. Motion, dimmed restores and other remotes keep the default `on` behavior. The README's `on` section describes the full cycle.
 
 ### Motion lighting
 

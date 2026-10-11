@@ -148,6 +148,16 @@ area_lighting from loading.
 
 ### Added
 
+- **Per-remote `on` sequence.** A remote's `buttons."on"` lists scenes the
+  `on` button activates before the usual circadian and sun-position rotation.
+  An active holiday scene still comes first, so `"on": [study]` gives
+  `christmas → study → circadian → evening → daylight` during Christmas
+  while daylight lights are enabled, and starts at `study` otherwise, whatever night mode or a leader says. Motion,
+  dimmed restores and other remotes keep the default cycle. The list cannot
+  name `off`, `circadian`, `daylight`, `evening` or a holiday scene, which
+  the cycle already places. YAML reads a bare `on` as `true`, so the key must
+  be quoted, and validation says so when it is not.
+
 - **Global master switches** — the integration now creates two switches of
   its own: `switch.area_lighting_motion_lights_enabled` (motion turns lights
   on) and `switch.area_lighting_occupancy_timeout_enabled` (the occupancy

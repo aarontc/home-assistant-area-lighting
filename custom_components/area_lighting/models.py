@@ -103,6 +103,7 @@ class LutronRemoteConfig:
     additional_actions: dict[str, list[dict]] = field(default_factory=dict)
     buttons: dict[str, str] = field(default_factory=dict)
     favorite_cycle: list[str] = field(default_factory=list)
+    on_sequence: list[str] = field(default_factory=list)
 
 
 @dataclass

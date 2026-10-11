@@ -905,6 +905,8 @@ def _make_remote_handler(hass: HomeAssistant, config: AreaLightingConfig):
             if button_slug == "favorite":
                 cycle = remote.favorite_cycle or None
                 hass.async_create_task(ctrl.lighting_favorite(favorite_cycle=cycle))
+            elif button_slug == "on" and remote.on_sequence:
+                hass.async_create_task(ctrl.lighting_on(on_sequence=remote.on_sequence))
             else:
                 method = {
                     "on": ctrl.lighting_on,

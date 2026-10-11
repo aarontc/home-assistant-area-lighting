@@ -19,7 +19,12 @@ from .const import (
     DEFAULT_CIRCADIAN_MAX_COLORTEMP,
     DEFAULT_CIRCADIAN_MIN_COLORTEMP,
     DEFAULT_CIRCADIAN_TRANSITION_SECONDS,
+    HOLIDAY_SCENES,
+    SCENE_CIRCADIAN,
+    SCENE_DAYLIGHT,
+    SCENE_EVENING,
     SCENE_LIGHT_ON_ATTRIBUTES,
+    SCENE_OFF,
 )
 from .models import (
     AlertPattern,
@@ -242,11 +247,26 @@ MOTION_LIGHT_CONDITION_SCHEMA = vol.All(
     _validate_motion_light_condition,
 )
 
+
+# Scenes the on button already places itself, plus off.
+_ON_SEQUENCE_RESERVED = frozenset(
+    {SCENE_OFF, SCENE_CIRCADIAN, SCENE_DAYLIGHT, SCENE_EVENING, *HOLIDAY_SCENES}
+)
+
+
+def _validate_button_keys(value: object) -> object:
+    """Reject an unquoted ``on`` key, which YAML reads as a boolean."""
+    if isinstance(value, dict) and any(isinstance(k, bool) for k in value):
+        raise vol.Invalid('YAML reads on: as a boolean; quote the key, for example "on": [study]')
+    return value
+
+
 LUTRON_BUTTON_OVERRIDES_SCHEMA = vol.Schema(
     {
         vol.Optional("favorite"): vol.Any(
             _validate_quoted_string, vol.All(cv.ensure_list, [_validate_quoted_string])
         ),
+        vol.Optional("on"): vol.All(cv.ensure_list, [_validate_quoted_string], vol.Length(min=1)),
     }
 )
 
@@ -255,7 +275,9 @@ LUTRON_REMOTE_SCHEMA = vol.Schema(
         vol.Required("id"): cv.string,
         vol.Required("name"): cv.string,
         vol.Optional("additional_actions", default={}): dict,
-        vol.Optional("buttons", default={}): LUTRON_BUTTON_OVERRIDES_SCHEMA,
+        vol.Optional("buttons", default={}): vol.All(
+            _validate_button_keys, LUTRON_BUTTON_OVERRIDES_SCHEMA
+        ),
     }
 )
 
@@ -486,6 +508,28 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                         )
                 favorite_cycle = targets
 
+            on_raw = buttons.get("on", [])
+            on_sequence: list[str] = [on_raw] if isinstance(on_raw, str) else list(on_raw)
+            for slug in on_sequence:
+                if slug in _ON_SEQUENCE_RESERVED:
+                    raise vol.Invalid(
+                        f"remote '{r['name']}' in area '{area_id}': "
+                        f"buttons.on cannot list '{slug}'; the on button "
+                        f"already places holiday, circadian, daylight and "
+                        f"evening scenes"
+                    )
+                if slug not in scene_slugs:
+                    raise vol.Invalid(
+                        f"remote '{r['name']}' in area '{area_id}': "
+                        f"buttons.on references scene slug '{slug}' "
+                        f"which is not defined on this area"
+                    )
+            if len(set(on_sequence)) != len(on_sequence):
+                raise vol.Invalid(
+                    f"remote '{r['name']}' in area '{area_id}': "
+                    f"buttons.on lists a scene more than once"
+                )
+
             remotes.append(
                 LutronRemoteConfig(
                     id=r["id"],
@@ -493,6 +537,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                     additional_actions=r.get("additional_actions", {}),
                     buttons=buttons,
                     favorite_cycle=favorite_cycle,
+                    on_sequence=on_sequence,
                 )
             )
 
