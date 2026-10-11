@@ -62,51 +62,11 @@ def _controllers(hass: HomeAssistant) -> dict[str, AreaLightingController]:
     return hass.data[DOMAIN]["controllers"]  # type: ignore[no-any-return]
 
 
-def _config(hass: HomeAssistant) -> AreaLightingConfig:
-    return hass.data[DOMAIN]["config"]  # type: ignore[no-any-return]
-
-
 _REPAIRS_ISSUE_ID = "missing_external_entities"
 _LUTRON_REPAIRS_ISSUE_ID = "lutron_remotes_missing"
 
 
-def _build_circadian_switches_block(config: AreaLightingConfig) -> str:
-    """Generate the switch: block for all circadian_lighting switches
-    referenced by the enabled areas.
-
-    Matches the shape templater's helpers/circadian_switches.erb.yaml
-    produced: one switch entry per CircadianSwitchConfig, with lights
-    grouped by circadian_type into lights_ct / lights_brightness / lights_rgb.
-    """
-    lines: list[str] = ["switch:"]
-    for area in config.enabled_areas:
-        for cs in area.circadian_switches:
-            lines.append(f"  - name: {cs.full_name}")
-            lines.append("    platform: circadian_lighting")
-            if cs.max_brightness is not None:
-                lines.append(f"    max_brightness: {cs.max_brightness}")
-            if cs.min_brightness is not None:
-                lines.append(f"    min_brightness: {cs.min_brightness}")
-            # Group lights by circadian_type, matching the templater
-            by_type: dict[str, list[str]] = {}
-            for light in area.all_lights:
-                if light.circadian_switch != cs.short_name:
-                    continue
-                if not light.circadian_type:
-                    continue
-                by_type.setdefault(light.circadian_type, []).append(light.id)
-            for ctype in ("ct", "brightness", "rgb"):
-                if ctype in by_type:
-                    lines.append(f"    lights_{ctype}:")
-                    lines.extend(f"      - {light_id}" for light_id in by_type[ctype])
-    return "\n".join(lines) if len(lines) > 1 else ""
-
-
-def _build_bootstrap_yaml(
-    missing: set[str],
-    zones: set[str],
-    config: AreaLightingConfig,
-) -> str:
+def _build_bootstrap_yaml(missing: set[str], zones: set[str]) -> str:
     """Generate a copy-pasteable YAML block for whichever helpers are missing."""
     input_select_lines: list[str] = []
     if "input_select.holiday_mode" in missing:
@@ -144,29 +104,6 @@ def _build_bootstrap_yaml(
     if input_boolean_lines:
         blocks.append("input_boolean:\n" + "\n".join(input_boolean_lines))
 
-    # circadian_lighting top-level config (for the HACS integration itself)
-    # — always include if sensor.circadian_values is missing.
-    if "sensor.circadian_values" in missing:
-        blocks.append(
-            "# Requires the circadian_lighting HACS integration:\n"
-            "# https://github.com/basnijholt/circadian_lighting\n"
-            "circadian_lighting:\n"
-            "  interval: 60\n"
-            "  min_colortemp: 2700\n"
-            "  max_colortemp: 5600"
-        )
-
-    # switch: block — include if ANY circadian switch is missing OR if
-    # sensor.circadian_values is missing (because without the top-level
-    # integration, no switches can exist either).
-    circadian_switch_missing = any(
-        entity.startswith("switch.circadian_lighting_") for entity in missing
-    )
-    if circadian_switch_missing or "sensor.circadian_values" in missing:
-        switch_block = _build_circadian_switches_block(config)
-        if switch_block:
-            blocks.append(switch_block)
-
     return "\n\n".join(blocks) if blocks else "# (no YAML-creatable helpers missing)"
 
 
@@ -191,10 +128,6 @@ async def async_validate_external_entities(
             "input_boolean.lighting_circadian_daylight_lights_enabled",
             "circadian sun-position proxy (input_boolean)",
         ),
-        (
-            "sensor.circadian_values",
-            "circadian_lighting integration sensor",
-        ),
     ]
 
     seen_zones: set[str] = set()
@@ -207,24 +140,17 @@ async def async_validate_external_entities(
                     f"ambient zone toggle for zone '{area.ambient_lighting_zone}'",
                 )
             )
-        for cs in area.circadian_switches:
-            required.append(
-                (
-                    cs.entity_id,
-                    f"circadian switch for {area.name}/{cs.name}",
-                )
-            )
-            # Verify the lights this switch is supposed to control actually
-            # exist in HA. area_lighting config drives the switch → lights
-            # mapping; if a light is renamed or missing, the circadian_lighting
-            # integration silently ignores it, which is a very confusing failure.
+        # A renamed or missing grouped light would silently get no
+        # circadian updates, so report it.
+        for group in area.circadian_groups:
             for light in area.all_lights:
-                if light.circadian_switch != cs.short_name:
+                if light.circadian_group != group.name:
                     continue
                 required.append(
                     (
                         light.id,
-                        f"light assigned to {cs.full_name} ({light.circadian_type or 'no type'})",
+                        f"light assigned to circadian group {area.name}/{group.name}"
+                        f" ({light.circadian_type or 'no type'})",
                     )
                 )
 
@@ -241,7 +167,7 @@ async def async_validate_external_entities(
 
     if missing:
         missing_set = set(missing)
-        bootstrap_yaml = _build_bootstrap_yaml(missing_set, seen_zones, config)
+        bootstrap_yaml = _build_bootstrap_yaml(missing_set, seen_zones)
         missing_list_text = "\n".join(missing_lines)
 
         _LOGGER.error(
@@ -333,10 +259,9 @@ async def async_validate_lutron_remotes(
     return missing
 
 
-async def async_setup_event_handlers(hass: HomeAssistant) -> list:
-    """Register all event listeners. Returns list of unsub callbacks."""
+async def async_setup_event_handlers(hass: HomeAssistant, config: AreaLightingConfig) -> list:
+    """Register all event listeners for `config`. Returns list of unsub callbacks."""
     unsubs: list = []
-    config = _config(hass)
     controllers = _controllers(hass)
 
     # ── Scene activation tracking (replaces global_last_scene_updater) ──
@@ -586,7 +511,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             return
 
         # While the area is circadian, light updates are driven by the
-        # circadian switches, so detection is normally skipped entirely.
+        # circadian adjuster, so detection is normally skipped entirely.
         # Exception: a demand-response-shed bulb is NOT circadian-driven
         # (it was forced off), so an on-report for it (all events past
         # the STATE_ON gate above are on-reports) is a genuine manual

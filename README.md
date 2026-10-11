@@ -65,7 +65,7 @@ Status labels used below:
 The system is designed to:
 
 1. Provide predictable 5-button remote behavior in every area
-2. Expose a virtual circadian scene that delegates light updates to `circadian_lighting`
+2. Expose a virtual circadian scene that sets the lights' brightness and color temperature from the sun
 3. Support ambient lighting periods, including holiday-aware ambience
 4. Support motion-triggered lighting and occupancy-based shutoff
 5. Detect when something outside `area_lighting` changed the lights and fall back to `manual`
@@ -574,8 +574,8 @@ In other words, scene tracking is broader than button-cycle membership.
 
 Status: `Implemented`
 
-If one or more individual lights are changed outside `area_lighting`, and the change did not come from
-`circadian_lighting` while the area is in `circadian`, the area enters `manual`.
+If one or more individual lights are changed outside `area_lighting`, the area enters `manual`.
+The exception is an area in `circadian`, described below.
 
 Manual changes include visible attribute changes such as:
 
@@ -591,7 +591,13 @@ Current code notes:
 1. External per-light changes can move the area into `manual`, which is implemented
 2. The current heuristic is still simple and incomplete
 3. A real scene-change grace period is not implemented yet
-4. Circadian-originated light updates are not yet filtered with the full nuance described here
+4. While the area is in `circadian`, manual detection is skipped. A change to a light goes
+   undetected, and the next circadian update overwrites it. The one exception is a bulb shed for
+   demand response: turning it back on by hand latches the area `manual`. The skip dates from before
+   area_lighting sent the circadian updates itself. Now that it does, it could tell its own updates
+   from a user's. Section 7 of the
+   [design spec](docs/superpowers/specs/2026-10-10-internalize-circadian-design.md#7-manual-change-detection-during-circadian)
+   records what that would take.
 
 #### Scene self-healing
 
@@ -650,7 +656,7 @@ If all lights in an area become off:
 Current code notes:
 
 1. Transitioning to `off` and clearing dimmed context is implemented
-2. Circadian switches are disabled when all lights go off
+2. Circadian adjustment stops when all lights go off
 3. Motion, motion-night, and occupancy timers are cancelled (`controller.py:1271-1273`)
 
 ### 5. Alerts
@@ -840,6 +846,34 @@ Current code notes:
    the area transitions to MANUAL so tracked state matches reality
 4. Replaying or reconciling events that occurred while Home Assistant was offline is still pending
 
+## Reload
+
+Status: `Implemented`
+
+`area_lighting.reload` re-reads the YAML and applies it to the running areas
+without a restart. It validates the new config first. If validation fails,
+the service call raises the error and nothing changes.
+
+| Change | Result |
+|---|---|
+| Lights, circadian groups, kelvin routes, sensors, remotes, `scene_self_heal` | Applied to the running area. Its scene, dimmed flag and timer deadlines are kept. |
+| Global `circadian:` block | Areas in circadian pick up the new values at the next update. |
+| Scene added or removed | Its scene entity is added or removed, and the `last_scene` select's options follow. |
+| Scene contents | Used at the next activation. An area already in that scene compares manual changes against the new contents at once. |
+| Area name | Friendly names change. Entity ids do not, because they come from the area id. |
+| Area added | A new controller and entities, with the state it had if the id was used before. |
+| Area removed or `enabled: false` | Its entities become unavailable but keep their registry entries, so adding the area back keeps your entity customizations. Its state is saved without timers. |
+| Area id changed | One removal and one addition. |
+
+Areas that survive a reload keep their entities, and
+`select.<area>_last_scene` keeps its value, so a state trigger with `to:` on
+it does not fire. Adding or removing a scene changes the select's `options`
+attribute, and renaming the area changes its friendly name. Either one fires
+a state trigger on the select that has no `to:`, `from:` or `attribute:`.
+A motion or occupancy countdown stops when the area loses those sensors, or
+when a newly configured sensor is already on. A reload turns no lights on
+for a sensor that is on.
+
 ## Rules summary
 
 Status: `Implemented`
@@ -861,7 +895,7 @@ An area configuration generally needs to define:
 
 1. The area identity and light group
 2. The scene slugs available for that area
-3. The lights and any circadian switch bindings
+3. The lights and their circadian groups
 4. Optional holiday scenes
 5. Optional ambient scene and ambient zone membership
 6. Optional motion and occupancy sensors
@@ -879,7 +913,8 @@ as these behavioral guarantees remain true.
 
 Each area gets its scenes, five switches, six timeout and fadeout numbers, a
 `last_scene` select and an `occupied` binary sensor. All of them register
-hidden, as does `sensor.area_lighting_diagnostics`, so the dashboards Home
+hidden, as do `sensor.area_lighting_diagnostics` and
+`sensor.area_lighting_circadian`, so the dashboards Home
 Assistant generates by itself (the default Overview, the legacy Overview and
 the Areas dashboard) leave them out. The three global master switches below
 stay visible. Hidden entities still work in automations, scripts, remotes and
@@ -925,6 +960,69 @@ must target `switch.area_lighting_motion_lights_enabled` instead. On
 upgrade, motion lighting is re-enabled by default because the owned switch
 defaults to on.
 
+## Circadian lighting
+
+Status: `Implemented`
+
+`circadian` is a virtual scene with no fixed light states. While an area is
+in it, area_lighting sets the brightness and color temperature of the area's
+grouped lights from the position of the sun, and keeps updating them. It
+needs no other integration. Keys and defaults are in
+[`CONFIGURATION.md`](CONFIGURATION.md) under "Circadian" and
+"`circadian_groups`".
+
+**The curve.** A percent runs from -100 at solar midnight through 0 at
+sunrise and sunset to +100 at solar noon. Sun times come from Home
+Assistant's location and elevation. By day the color temperature rises with
+the percent from `min_colortemp` to `max_colortemp`, and at night it stays at
+`min_colortemp`. `sensor.area_lighting_circadian` reports the percent as its
+state and the color temperature in kelvin as its `colortemp` attribute. Like
+the per-area entities, it is hidden by default.
+
+**Groups and types.** A light follows the curve when it names a
+`circadian_group` declared in its area and a `circadian_type`. The group
+sets the brightness bounds: `max_brightness` from sunrise to sunset, then
+down towards `min_brightness` at solar midnight and back up by sunrise. The
+type decides what is sent: `ct` sends brightness and `color_temp_kelvin`,
+`rgb` sends brightness and `rgb_color`, and `brightness` sends brightness
+only. Lights without a group are left as they are.
+
+**Sleep.** A group with a `sleep_entity` uses `sleep_brightness` and
+`sleep_colortemp` instead of the curve while that entity's state is one of
+`sleep_state`, for example dim, warm stairs while the theater is in `movie`.
+A missing entity counts as awake. When the entity's state changes, the
+group's lights that are on get the new values with a 1-second transition.
+
+**Updates.** Entering circadian sends every grouped light outside a kelvin
+route the current values with a 1-second transition, which also turns on
+the ones that were off. After that, every `interval` seconds (default 300)
+the grouped lights that are on get the current values, fading over
+`transition` seconds (default 60). Lights that are off stay off. A grouped
+light that comes on (from off, `unavailable` or `unknown`) gets the current
+values with a 1-second transition. A brightness percentage `b` is sent as
+`brightness: round(b * 2.55)`, between 1 and 255.
+
+**Leaving circadian.** Updates stop when the area leaves `circadian` for
+any reason: another scene, off, raise or lower, all lights turning off, a
+manual change, or choosing another scene in `select.<area>_last_scene`.
+Choosing `circadian` in that select starts them again, and the lights follow
+at the next update.
+
+**Routes.** In an area with `circadian_kelvin_routes`, the route follows the
+circadian color temperature at each update. A route light with a group turns
+on with its group's values, and a route light without a group is only
+switched on and off.
+
+**Demand response and alerts.** Updates skip bulbs shed for demand response,
+and skip `light_clusters` entities while demand response is active. While an
+alert owns an area, the area gets no updates. When the alert ends, the
+area's lights that are on get the current values, including a sleep change
+made during the alert.
+
+**Restarts.** An area that was in `circadian` when Home Assistant stopped
+resumes at startup. Its lights that are on get the current values with the
+configured `transition`, and lights that are off stay off.
+
 ## Demand response
 
 When `switch.area_lighting_demand_response_active` is on (default off, persisted),
@@ -951,7 +1049,7 @@ load during a utility demand-response event:
   user's override alone.
 - While shedding, `light_clusters` entities (Hue Zones) are never driven on
   in any path: they are ignored as direct scene targets, skipped by circadian
-  activation (even when a cluster carries a `circadian_switch`), excluded
+  activation and updates (even when a cluster has a `circadian_group`), excluded
   from brightness raise / lower stepping, and a kelvin route whose light is a
   cluster entity is expanded to its member bulbs. The individual members are
   driven instead, so a zone command cannot relight shed bulbs. Kept members
@@ -969,7 +1067,7 @@ load during a utility demand-response event:
   recompute only re-drives lights whose shed status actually changed, and
   every path that leaves circadian (scene changes, off fades, manual changes,
   the area's scene select entity) or suspends it (dimming) stops route
-  reconciliation before the circadian switches turn off, so the outgoing
+  reconciliation along with the circadian updates, so the outgoing
   circadian setup never fights the next state.
 - Raise / lower from a fully-dark area converges to the all-lights shed: the
   kept bulbs come up at the minimum step and the shed tail is turned off,
@@ -983,7 +1081,10 @@ Drive the switch from any utility integration or automation with
 ## Required external entities
 
 `area_lighting` does not create any of these — they must exist in your Home
-Assistant instance before the integration loads. On startup, the integration
+Assistant instance before the integration loads. The integration creates its
+own entities (the global master switches, `sensor.area_lighting_diagnostics`,
+`sensor.area_lighting_circadian` and each area's scenes, switches, numbers,
+select and binary sensor). On startup, the integration
 logs a single error listing any that are missing; it then continues to load
 in degraded mode (circadian cycling may behave oddly if globals are missing,
 holiday detection is disabled, etc.).
@@ -995,7 +1096,6 @@ holiday detection is disabled, etc.).
 | `input_select.holiday_mode` | input_select | Active holiday | `none`, `christmas`, `halloween` |
 | `input_select.ambient_scene` | input_select | Ambient flavor toggle | `ambient`, `holiday` |
 | `input_boolean.lighting_circadian_daylight_lights_enabled` | input_boolean | Sun-position proxy used by `circadian` cycling | on / off |
-| `sensor.circadian_values` | sensor | From `circadian_lighting` integration | must expose `colortemp` attribute |
 
 ### Per ambient zone
 
@@ -1009,14 +1109,13 @@ For every distinct value of `ambient_lighting_zone` referenced by any enabled ar
 
 | Entity | Type | Purpose |
 |---|---|---|
-| `switch.circadian_lighting_{area_name}_{switch_name}_circadian` | switch | One per circadian switch defined for the area |
+| Every light with a `circadian_group` | light | Reported as missing if it does not exist, since it would get no circadian updates |
 | `light.{area_id}_lights` (optional) | light group | If present, used for fast all-off detection. If absent, the integration aggregates the area's individual lights instead. |
 
 ### Required integrations
 
 | Integration | Source | Why |
 |---|---|---|
-| `circadian_lighting` | HACS | Provides `sensor.circadian_values` and per-area circadian switches |
 | `lutron_caseta` | HA core | Provides `lutron_caseta_button_event` (only if Pico remotes are used) |
 
 ### Example bootstrap
@@ -1085,7 +1184,7 @@ work:
 The component has two test layers:
 
 - **Pure unit tests** — no HA dependency, fast. Cover `scene_machine`,
-  `area_state`, `timer_manager`, `motion_condition` (and its schema),
+  `area_state`, `timer_manager`, `circadian`, `motion_condition` (and its schema),
   `cluster_dispatch`, `leader_follower_controller` (and its schema),
   and `translations`. Located directly under
   `custom_components/area_lighting/tests/`.

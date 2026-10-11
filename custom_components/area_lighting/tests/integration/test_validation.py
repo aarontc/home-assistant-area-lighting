@@ -59,12 +59,6 @@ async def test_validator_missing_holiday_mode_logs_error(
             }
         },
     )
-    hass.states.async_set("sensor.circadian_values", "0", {"colortemp": 3500})
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
     await hass.async_block_till_done()
 
     caplog.set_level(logging.ERROR)
@@ -86,12 +80,6 @@ async def test_validator_multiple_missing_single_error_line(
     hass: HomeAssistant, network_room_config, caplog
 ) -> None:
     """Multiple missing entities → single log error listing all of them."""
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
-    await hass.async_block_till_done()
     caplog.set_level(logging.ERROR)
     assert await _setup_minimal(hass, network_room_config)
     await hass.async_block_till_done()
@@ -108,7 +96,7 @@ async def test_validator_multiple_missing_single_error_line(
     assert "holiday_mode" in msg
     assert "ambient_scene" in msg
     assert "lighting_circadian_daylight_lights_enabled" in msg
-    assert "sensor.circadian_values" in msg
+    assert "sensor.circadian_values" not in msg
 
 
 # ── Repairs issue + YAML bootstrap block (bug 2) ────────────────────────
@@ -121,13 +109,6 @@ async def test_validator_creates_repairs_issue_when_entities_missing(
     """A missing-entity state must raise an HA repairs issue (not just a log)."""
     from homeassistant.helpers import issue_registry as ir
 
-    # Only set up the circadian switch, nothing else
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
-    await hass.async_block_till_done()
     assert await _setup_minimal(hass, network_room_config)
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")
@@ -146,17 +127,11 @@ async def test_validator_issue_includes_yaml_bootstrap(
 ) -> None:
     """The issue's translation placeholders must include a YAML bootstrap
     block the user can copy into configuration.yaml to create the missing
-    input_select / input_boolean / sensor entities.
+    input_select / input_boolean helpers.
     """
     from homeassistant.helpers import issue_registry as ir
 
     # No helpers at all — every required entity is missing.
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
-    await hass.async_block_till_done()
     assert await _setup_minimal(hass, network_room_config)
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")
@@ -179,7 +154,8 @@ async def test_validator_issue_includes_yaml_bootstrap(
     # And a list of the missing entities, so the user knows what's wrong
     missing_list = placeholders.get("missing_list", "")
     assert "input_select.holiday_mode" in missing_list
-    assert "sensor.circadian_values" in missing_list
+    assert "sensor.circadian_values" not in missing_list
+    assert "circadian_lighting" not in bootstrap
 
 
 @pytest.mark.integration
@@ -200,74 +176,30 @@ async def test_validator_issue_cleared_when_entities_present(
     assert issue is None
 
 
-# ── Circadian_lighting bootstrap YAML + switch-light mapping verification ──
-
-
 @pytest.mark.integration
-async def test_bootstrap_yaml_includes_circadian_lighting_top_level(
-    hass: HomeAssistant, network_room_config
+async def test_validator_does_not_require_circadian_lighting_entities(
+    hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
-    """The bootstrap YAML must include the `circadian_lighting:` top-level
-    block (configures the HACS integration itself — interval, min/max
-    colortemp) when sensor.circadian_values is missing."""
+    """Neither sensor.circadian_values nor the circadian_lighting switches
+    need to exist."""
     from homeassistant.helpers import issue_registry as ir
 
-    # Nothing set up — everything is missing
-    await hass.async_block_till_done()
+    assert hass.states.get("sensor.circadian_values") is None
+    assert hass.states.async_entity_ids("switch") == []
     assert await _setup_minimal(hass, network_room_config)
     await hass.async_block_till_done()
     hass.bus.async_fire("homeassistant_started")
     await hass.async_block_till_done()
 
     registry = ir.async_get(hass)
-    issue = registry.async_get_issue("area_lighting", "missing_external_entities")
-    assert issue is not None
-    bootstrap = (issue.translation_placeholders or {}).get("bootstrap_yaml", "")
-    # The top-level circadian_lighting: block must be present
-    assert "circadian_lighting:" in bootstrap
-    assert "min_colortemp:" in bootstrap
-    assert "max_colortemp:" in bootstrap
-    assert "interval:" in bootstrap
+    assert registry.async_get_issue("area_lighting", "missing_external_entities") is None
 
 
 @pytest.mark.integration
-async def test_bootstrap_yaml_includes_circadian_switches_block(
-    hass: HomeAssistant, network_room_config
-) -> None:
-    """The bootstrap YAML must include a `switch:` block listing each
-    circadian_lighting switch needed by the configured areas, with the
-    lights grouped by `circadian_type` ('lights_ct', 'lights_brightness',
-    or 'lights_rgb')."""
-    from homeassistant.helpers import issue_registry as ir
-
-    await hass.async_block_till_done()
-    assert await _setup_minimal(hass, network_room_config)
-    await hass.async_block_till_done()
-    hass.bus.async_fire("homeassistant_started")
-    await hass.async_block_till_done()
-
-    registry = ir.async_get(hass)
-    issue = registry.async_get_issue("area_lighting", "missing_external_entities")
-    assert issue is not None
-    bootstrap = (issue.translation_placeholders or {}).get("bootstrap_yaml", "")
-    # The switch: top-level block must appear
-    assert "switch:" in bootstrap
-    # For the network_room area, the switch should be named "Network Room Overhead Circadian"
-    assert "Network Room Overhead Circadian" in bootstrap
-    assert "platform: circadian_lighting" in bootstrap
-    assert "lights_ct:" in bootstrap
-    assert "light.network_room_overhead_1" in bootstrap
-    assert "light.network_room_overhead_2" in bootstrap
-    # Per-switch brightness ranges from the config
-    assert "max_brightness: 100" in bootstrap
-    assert "min_brightness: 65" in bootstrap
-
-
-@pytest.mark.integration
-async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
+async def test_validator_flags_light_referenced_by_circadian_group_but_missing(
     hass: HomeAssistant, helper_entities, caplog
 ) -> None:
-    """If a light assigned to a circadian switch doesn't exist as an
+    """If a light assigned to a circadian group doesn't exist as an
     HA entity, the validator must flag it as missing."""
     import logging
 
@@ -278,13 +210,13 @@ async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
                     "id": "test_area",
                     "name": "Test Area",
                     "event_handlers": True,
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Main", "max_brightness": 100, "min_brightness": 50}
                     ],
                     "lights": [
                         {
                             "id": "light.nonexistent_light",
-                            "circadian_switch": "Main",
+                            "circadian_group": "Main",
                             "circadian_type": "ct",
                             "roles": ["color"],
                         }
@@ -294,15 +226,6 @@ async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
             ]
         }
     }
-    # The circadian switch entity itself is "present" via async_set, but
-    # the light it's supposed to control doesn't exist.
-    hass.states.async_set(
-        "switch.circadian_lighting_test_area_main_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
-    await hass.async_block_till_done()
-
     caplog.set_level(logging.ERROR)
     assert await async_setup_component(hass, "area_lighting", cfg)
     await hass.async_block_till_done()
@@ -311,4 +234,7 @@ async def test_validator_flags_light_referenced_by_circadian_switch_but_missing(
 
     # An error must be logged about the missing light
     error_messages = [rec.message for rec in caplog.records if rec.levelno >= logging.ERROR]
-    assert any("light.nonexistent_light" in m for m in error_messages)
+    assert any(
+        "light.nonexistent_light  (light assigned to circadian group Test Area/Main (ct))" in m
+        for m in error_messages
+    )

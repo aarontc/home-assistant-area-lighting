@@ -79,14 +79,19 @@ class AreaLightingScene(Scene):
         storage: SceneStorage,
     ) -> None:
         self.hass = hass
-        self._area = area
-        self._scene_cfg = scene_cfg
         self._storage = storage
-        self._attr_name = f"{area.name} {scene_cfg.name}"
         self._attr_unique_id = f"area_lighting_{area.id}_{scene_cfg.slug}"
-        self._attr_icon = scene_cfg.icon or _scene_icon(scene_cfg.slug)
         # Explicit entity_id to match the pattern used by the controller
         self.entity_id = f"scene.{area.id}_{scene_cfg.slug}"
+        self.refresh_from_config(area, scene_cfg)
+
+    def refresh_from_config(self, area: AreaConfig, scene_cfg: SceneConfig) -> None:
+        self._area = area
+        self._scene_cfg = scene_cfg
+        self._attr_name = f"{area.name} {scene_cfg.name}"
+        self._attr_icon = scene_cfg.icon or _scene_icon(scene_cfg.slug)
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -279,13 +284,18 @@ class BehavioralScene(Scene):
         controller_method: str,
     ) -> None:
         self.hass = hass
-        self._area = area
         self._slug = slug
         self._controller_method = controller_method
-        self._attr_name = f"{area.name} {name}"
         self._attr_unique_id = f"area_lighting_{area.id}_{slug}"
         self._attr_icon = _scene_icon(slug)
         self.entity_id = f"scene.{area.id}_{slug}"
+        self.refresh_from_config(area, name)
+
+    def refresh_from_config(self, area: AreaConfig, name: str) -> None:
+        self._area = area
+        self._attr_name = f"{area.name} {name}"
+        if self.platform is not None:
+            self.async_write_ha_state()
 
     async def async_activate(self, **kwargs: Any) -> None:
         """Call the controller method for this behavioral scene."""

@@ -16,11 +16,11 @@ def _minimum_area_dict(**overrides):
     base = {
         "id": "kitchen",
         "name": "Kitchen",
-        "circadian_switches": [{"name": "Kitchen"}],
+        "circadian_groups": [{"name": "Kitchen"}],
         "lights": [
-            {"id": "light.kitchen_fluorescent", "circadian_switch": "Kitchen"},
-            {"id": "light.kitchen_strip_1", "circadian_switch": "Kitchen"},
-            {"id": "light.kitchen_strip_2", "circadian_switch": "Kitchen"},
+            {"id": "light.kitchen_fluorescent", "circadian_group": "Kitchen"},
+            {"id": "light.kitchen_strip_1", "circadian_group": "Kitchen"},
+            {"id": "light.kitchen_strip_2", "circadian_group": "Kitchen"},
         ],
         "scenes": [{"id": "circadian", "name": "Circadian"}],
     }
@@ -54,10 +54,9 @@ def test_minimum_valid_routes_parses():
     ]
 
 
-def test_explicit_source_and_crossfade_round_trip():
+def test_crossfade_round_trips():
     area = _minimum_area_dict(
         circadian_kelvin_routes={
-            "source": "sensor.circadian_values",
             "crossfade_seconds": 5.0,
             "routes": [
                 {
@@ -71,7 +70,6 @@ def test_explicit_source_and_crossfade_round_trip():
     validated = AREA_SCHEMA(area)
     config = parse_config({"areas": [validated]})
     routes = config.areas[0].circadian_kelvin_routes
-    assert routes.source == "sensor.circadian_values"
     assert routes.crossfade_seconds == 5.0
 
 
@@ -240,28 +238,13 @@ def test_validator_rejects_light_in_two_routes():
         validate_circadian_kelvin_routes(config)
 
 
-def test_parse_defaults_source_to_only_circadian_switch():
-    config = _parsed_config(
-        circadian_kelvin_routes={
-            "routes": [
-                {
-                    "kelvin_range": [4500, 5500],
-                    "lights": ["light.kitchen_fluorescent"],
-                },
-                {"lights": ["light.kitchen_strip_1"]},
-            ]
-        }
-    )
-    assert (
-        config.areas[0].circadian_kelvin_routes.source
-        == "switch.circadian_lighting_kitchen_kitchen_circadian"
-    )
-    validate_circadian_kelvin_routes(config)  # validator should no-op
-
-
-def test_validator_requires_explicit_source_when_two_switches():
+def test_validator_accepts_routes_without_source_and_two_groups():
     area = _minimum_area_dict(
-        circadian_switches=[{"name": "A"}, {"name": "B"}],
+        circadian_groups=[{"name": "A"}, {"name": "B"}],
+        lights=[
+            {"id": "light.kitchen_fluorescent", "circadian_group": "A"},
+            {"id": "light.kitchen_strip_1", "circadian_group": "B"},
+        ],
         circadian_kelvin_routes={
             "routes": [
                 {
@@ -272,32 +255,5 @@ def test_validator_requires_explicit_source_when_two_switches():
             ]
         },
     )
-    validated = AREA_SCHEMA(area)
-    config = parse_config({"areas": [validated]})
-    with pytest.raises(vol.Invalid, match="must specify 'source'"):
-        validate_circadian_kelvin_routes(config)
-
-
-def test_validator_requires_explicit_source_when_no_switches():
-    area = {
-        "id": "kitchen",
-        "name": "Kitchen",
-        "lights": [
-            {"id": "light.kitchen_fluorescent"},
-            {"id": "light.kitchen_strip_1"},
-        ],
-        "scenes": [{"id": "circadian", "name": "Circadian"}],
-        "circadian_kelvin_routes": {
-            "routes": [
-                {
-                    "kelvin_range": [4500, 5500],
-                    "lights": ["light.kitchen_fluorescent"],
-                },
-                {"lights": ["light.kitchen_strip_1"]},
-            ]
-        },
-    }
-    validated = AREA_SCHEMA(area)
-    config = parse_config({"areas": [validated]})
-    with pytest.raises(vol.Invalid, match="must specify 'source'"):
-        validate_circadian_kelvin_routes(config)
+    config = parse_config({"areas": [AREA_SCHEMA(area)]})
+    validate_circadian_kelvin_routes(config)  # does not raise

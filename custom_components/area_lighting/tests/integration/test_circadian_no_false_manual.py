@@ -1,11 +1,11 @@
 """Circadian lighting updates must NOT transition the area to manual.
 
-While the area is in circadian state, the circadian_lighting HACS
-integration fires periodic light.turn_on calls to adjust brightness
-and color temperature. Each call produces a state_changed event.
-The manual detection handler was wrongly interpreting those as
-manual overrides and transitioning the area to manual — which then
-disables the circadian switches and breaks the whole circadian cycle.
+While the area is in circadian state, the circadian clock fires
+periodic light.turn_on calls to adjust brightness and color
+temperature. Each call produces a state_changed event. The manual
+detection handler was wrongly interpreting those as manual overrides
+and transitioning the area to manual, which stops the circadian
+updates.
 
 Fix: skip manual detection entirely while ctrl._state.is_circadian.
 """
@@ -32,7 +32,7 @@ async def _setup(hass: HomeAssistant, cfg: dict) -> None:
 async def test_brightness_change_in_circadian_does_not_mark_manual(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
-    """Simulates a circadian_lighting brightness tick while in circadian."""
+    """Simulates a circadian brightness tick while in circadian."""
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     ctrl._state.transition_to_circadian(ActivationSource.USER)

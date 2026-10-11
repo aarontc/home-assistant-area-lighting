@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.loader import async_get_integration
 from homeassistant.setup import async_setup_component
 
 
@@ -23,3 +24,10 @@ async def test_occupied_sensor_registers_without_binary_sensor_preloaded(
     await hass.async_block_till_done()
 
     assert hass.states.get("binary_sensor.network_room_occupied") is not None
+
+
+@pytest.mark.integration
+async def test_manifest_does_not_load_after_circadian_lighting(hass: HomeAssistant) -> None:
+    integration = await async_get_integration(hass, "area_lighting")
+
+    assert "circadian_lighting" not in integration.after_dependencies

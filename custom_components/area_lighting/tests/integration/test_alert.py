@@ -6,7 +6,12 @@ import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting import alert
+from custom_components.area_lighting.alert import execute_alert
 from custom_components.area_lighting.area_state import ActivationSource
+from custom_components.area_lighting.models import AlertPattern, AlertStep
+
+NETWORK_LIGHTS = ("light.network_room_overhead_1", "light.network_room_overhead_2")
 
 
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:
@@ -139,19 +144,19 @@ def _config_with_alert_patterns() -> dict:
                     "name": "Network Room",
                     "event_handlers": True,
                     "ambient_lighting_zone": "upstairs",
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Overhead", "max_brightness": 100, "min_brightness": 65},
                     ],
                     "lights": [
                         {
                             "id": "light.network_room_overhead_1",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },
                         {
                             "id": "light.network_room_overhead_2",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },
@@ -282,3 +287,63 @@ async def test_alert_preserves_timer_deadline(hass: HomeAssistant, helper_entiti
 
     assert ctrl._occupancy_timer.is_active
     assert ctrl._occupancy_timer.deadline_utc == deadline_before
+
+
+async def _run_alert(hass: HomeAssistant, ctrl, monkeypatch, during=None) -> None:
+    """Run an alert whose steps send nothing, calling `during` while it owns the area."""
+
+    async def steps(*_args) -> None:
+        if during is not None:
+            during()
+
+    monkeypatch.setattr(alert, "_execute_steps", steps)
+    pattern = AlertPattern(steps=[AlertStep(target="all", state="on")], restore=False)
+    await execute_alert(hass, ctrl, pattern)
+    await hass.async_block_till_done()
+
+
+@pytest.mark.integration
+async def test_alert_end_resumes_a_stopped_circadian_adjuster(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    await _setup(hass, _config_with_alert_patterns())
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    await ctrl.lighting_circadian()
+    for entity_id in NETWORK_LIGHTS:
+        hass.states.async_set(entity_id, "on", {"brightness": 255})
+    await hass.async_block_till_done()
+
+    # A reload stops the adjuster while the alert owns the area.
+    await _run_alert(hass, ctrl, monkeypatch, during=ctrl._stop_circadian)
+
+    assert ctrl.circadian_running
+    ctrl._circadian_commanded_at.clear()
+    service_calls.clear()
+    await pin_circadian(60, 4500)
+    turn_ons = {
+        c.data["entity_id"]: c.data["color_temp_kelvin"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_on"
+    }
+    assert turn_ons == dict.fromkeys(NETWORK_LIGHTS, 4500)
+
+
+@pytest.mark.integration
+async def test_alert_end_leaves_non_circadian_area_alone(
+    hass: HomeAssistant, helper_entities, service_calls, pin_circadian, monkeypatch
+) -> None:
+    await pin_circadian(50, 4000, tick=False)
+    await _setup(hass, _config_with_alert_patterns())
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    await ctrl._activate_scene("daylight", ActivationSource.USER)
+    for entity_id in NETWORK_LIGHTS:
+        hass.states.async_set(entity_id, "on", {"brightness": 255})
+    await hass.async_block_till_done()
+    service_calls.clear()
+
+    await _run_alert(hass, ctrl, monkeypatch)
+
+    assert not ctrl.circadian_running
+    assert ctrl.current_scene == "daylight"
+    assert [c for c in service_calls if c.domain == "light"] == []

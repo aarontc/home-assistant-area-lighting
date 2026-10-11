@@ -74,7 +74,7 @@ async def test_service_call_log_has_area_prefix(
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
 
-    # Activate circadian, which fans out light.turn_on / switch.turn_on calls.
+    # Activate circadian, which fans out light.turn_on calls.
     await ctrl.lighting_circadian(ActivationSource.USER)
     await hass.async_block_till_done()
 

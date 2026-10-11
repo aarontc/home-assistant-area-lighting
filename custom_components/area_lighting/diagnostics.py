@@ -41,6 +41,8 @@ class AreaLightingDiagnosticSensor(SensorEntity):
         self._attr_unique_id = "area_lighting_diagnostics"
         self.entity_id = "sensor.area_lighting_diagnostics"
         self._unsub_refresh: Callable[[], None] | None = None
+        # The controllers this sensor's listener is attached to.
+        self._controllers: list[AreaLightingController] = []
 
     def _build_state_text(self) -> str:
         controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
@@ -76,13 +78,20 @@ class AreaLightingDiagnosticSensor(SensorEntity):
             "per_area": per_area,
         }
 
+    def sync_controller_listeners(self) -> None:
+        """Listen to exactly the controllers in hass.data."""
+        current = list(self.hass.data[DOMAIN]["controllers"].values())
+        for ctrl in self._controllers:
+            if ctrl not in current:
+                ctrl.remove_state_listener(self._on_controller_change)
+        for ctrl in current:
+            if ctrl not in self._controllers:
+                ctrl.add_state_listener(self._on_controller_change)
+        self._controllers = current
+
     async def async_added_to_hass(self) -> None:
         """Register listeners on every controller so the sensor refreshes."""
-        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
-            "controllers", {}
-        )
-        for ctrl in controllers.values():
-            ctrl.add_state_listener(self._on_controller_change)
+        self.sync_controller_listeners()
 
         # Periodic refresh so countdown values (motion/occupancy timer
         # remaining_seconds) visibly tick in the UI without waiting for
@@ -96,11 +105,9 @@ class AreaLightingDiagnosticSensor(SensorEntity):
         )
 
     async def async_will_remove_from_hass(self) -> None:
-        controllers: dict[str, AreaLightingController] = self.hass.data.get(DOMAIN, {}).get(
-            "controllers", {}
-        )
-        for ctrl in controllers.values():
+        for ctrl in self._controllers:
             ctrl.remove_state_listener(self._on_controller_change)
+        self._controllers = []
 
         if self._unsub_refresh is not None:
             self._unsub_refresh()

@@ -44,6 +44,19 @@ CIRCADIAN_CT = "ct"
 CIRCADIAN_BRIGHTNESS = "brightness"
 CIRCADIAN_RGB = "rgb"
 
+# Built-in circadian clock. The defaults are circadian_lighting's.
+SIGNAL_CIRCADIAN_TICK = "area_lighting_circadian_tick"
+DEFAULT_CIRCADIAN_MIN_COLORTEMP = 2500
+DEFAULT_CIRCADIAN_MAX_COLORTEMP = 5500
+DEFAULT_CIRCADIAN_INTERVAL_SECONDS = 300
+DEFAULT_CIRCADIAN_TRANSITION_SECONDS = 60
+# Fade for a light brought into circadian (activation, demand-response relight).
+CIRCADIAN_INITIAL_TRANSITION_SECONDS = 1
+# A tick skips a light commanded this recently: its state is still settling.
+CIRCADIAN_COMMAND_ECHO_SECONDS = 5
+# Longest an alert's end waits for a circadian tick still sending commands.
+CIRCADIAN_SETTLE_SECONDS = 30
+
 # Remote button slugs
 BUTTON_ON = "on"
 BUTTON_OFF = "off"

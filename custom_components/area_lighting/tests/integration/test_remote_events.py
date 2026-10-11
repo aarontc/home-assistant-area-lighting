@@ -27,13 +27,13 @@ def network_room_config_with_remote() -> dict:
                     "name": "Network Room",
                     "event_handlers": True,
                     "ambient_lighting_zone": "upstairs",
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Overhead", "max_brightness": 100, "min_brightness": 65}
                     ],
                     "lights": [
                         {
                             "id": "light.network_room_overhead_1",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },

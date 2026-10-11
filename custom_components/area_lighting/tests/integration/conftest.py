@@ -1,8 +1,8 @@
 """Integration-layer fixtures for area_lighting tests.
 
 These fixtures pre-populate the external entities that area_lighting reads
-(holiday_mode, ambient_scene, ambient zone booleans, circadian sensor/switch)
-so individual tests don't have to recreate them.
+(holiday_mode, ambient_scene, ambient zone booleans, the lights of the
+default area) so individual tests don't have to recreate them.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
+from custom_components.area_lighting import async_teardown
+from custom_components.area_lighting.circadian_clock import CircadianClock, CircadianValues
 from custom_components.area_lighting.const import DOMAIN
 
 
@@ -26,15 +28,33 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture(autouse=True)
 async def shutdown_controllers(hass: HomeAssistant):
-    """Cancel controller timers before the harness checks for lingering ones.
+    """Tear area_lighting down before the harness checks for lingering timers.
 
     Controllers schedule motion, occupancy and self-heal timers straight
     on the event loop, and nothing cancels them when HA stops. The
     harness fails any test that leaves a loop timer behind.
     """
     yield
-    for ctrl in hass.data.get(DOMAIN, {}).get("controllers", {}).values():
-        ctrl.shutdown()
+    await async_teardown(hass)
+
+
+@pytest.fixture
+def pin_circadian(hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch):
+    """Fix the clock's circadian values, and by default run a tick with them.
+
+    `await pin_circadian(percent, kelvin)` makes every CircadianClock
+    return those values, then ticks the running clock. Pass `tick=False`
+    to set the values before setup or without notifying anything.
+    """
+
+    async def pin(percent: float, kelvin: float, *, tick: bool = True) -> None:
+        values = CircadianValues(percent, kelvin)
+        monkeypatch.setattr(CircadianClock, "values", lambda _self, _now=None: values)
+        if tick:
+            await hass.data[DOMAIN]["circadian_clock"].async_tick()
+            await hass.async_block_till_done()
+
+    return pin
 
 
 @pytest.fixture
@@ -84,16 +104,8 @@ async def helper_entities(hass: HomeAssistant) -> None:
             }
         },
     )
-    # Stub the circadian_lighting sensor that the controller reads for colortemp
-    hass.states.async_set("sensor.circadian_values", "0", {"colortemp": 3500})
-    # Stub circadian switch for the network_room fixture area
-    hass.states.async_set(
-        "switch.circadian_lighting_network_room_overhead_circadian",
-        "off",
-        {"brightness": 75.0, "colortemp": 3500},
-    )
     # Stub the lights the network_room_config references so the validator's
-    # light-assigned-to-circadian-switch check is satisfied in tests that
+    # light-assigned-to-circadian-group check is satisfied in tests that
     # use the default fixture.
     hass.states.async_set("light.network_room_overhead_1", "off", {})
     hass.states.async_set("light.network_room_overhead_2", "off", {})
@@ -114,8 +126,6 @@ class _AggregatedCalls:
         self._sources = [
             async_mock_service(hass, "light", "turn_on"),
             async_mock_service(hass, "light", "turn_off"),
-            async_mock_service(hass, "switch", "turn_on"),
-            async_mock_service(hass, "switch", "turn_off"),
         ]
 
     def __iter__(self):
@@ -135,8 +145,8 @@ class _AggregatedCalls:
 
 @pytest.fixture
 def service_calls(hass: HomeAssistant) -> _AggregatedCalls:
-    """Mock light.turn_on/turn_off and switch.turn_on/turn_off so tests
-    can assert on captured service calls. Returns an aggregated iterable
+    """Mock light.turn_on and light.turn_off so tests can assert on
+    captured service calls. Returns an aggregated iterable
     of ServiceCall objects with .domain, .service, and .data attributes.
     """
     return _AggregatedCalls(hass)
@@ -153,19 +163,19 @@ def network_room_config() -> dict:
                     "name": "Network Room",
                     "event_handlers": True,
                     "ambient_lighting_zone": "upstairs",
-                    "circadian_switches": [
+                    "circadian_groups": [
                         {"name": "Overhead", "max_brightness": 100, "min_brightness": 65},
                     ],
                     "lights": [
                         {
                             "id": "light.network_room_overhead_1",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },
                         {
                             "id": "light.network_room_overhead_2",
-                            "circadian_switch": "Overhead",
+                            "circadian_group": "Overhead",
                             "circadian_type": "ct",
                             "roles": ["color", "dimming", "night", "white"],
                         },

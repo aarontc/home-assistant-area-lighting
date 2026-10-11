@@ -173,25 +173,33 @@ def follower_ctrl(monkeypatch):
 
 async def test_handle_leader_scene_activated_follower_on_mirrors(follower_ctrl):
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
-    await follower_ctrl.handle_leader_change("evening", LeaderReason.SCENE_ACTIVATED)
+    await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "evening", LeaderReason.SCENE_ACTIVATED
+    )
     assert ("activate_scene", "evening", ActivationSource.LEADER) in follower_ctrl._calls
 
 
 async def test_handle_leader_scene_activated_follower_off_noop(follower_ctrl):
     follower_ctrl._state.transition_to_off(ActivationSource.USER)
-    await follower_ctrl.handle_leader_change("evening", LeaderReason.SCENE_ACTIVATED)
+    await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "evening", LeaderReason.SCENE_ACTIVATED
+    )
     assert follower_ctrl._calls == []
 
 
 async def test_handle_leader_scene_activated_follower_ambient_noop(follower_ctrl):
     follower_ctrl._state.transition_to_scene("ambient", ActivationSource.AMBIENCE)
-    await follower_ctrl.handle_leader_change("evening", LeaderReason.SCENE_ACTIVATED)
+    await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "evening", LeaderReason.SCENE_ACTIVATED
+    )
     assert follower_ctrl._calls == []
 
 
 async def test_handle_leader_scene_activated_follower_manual_noop(follower_ctrl):
     follower_ctrl._state.transition_to_manual()
-    await follower_ctrl.handle_leader_change("evening", LeaderReason.SCENE_ACTIVATED)
+    await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "evening", LeaderReason.SCENE_ACTIVATED
+    )
     assert follower_ctrl._calls == []
 
 
@@ -200,7 +208,9 @@ async def test_handle_leader_scene_not_on_follower_logs_warning(follower_ctrl, c
     import logging
 
     caplog.set_level(logging.WARNING)
-    await follower_ctrl.handle_leader_change("christmas", LeaderReason.SCENE_ACTIVATED)
+    await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "christmas", LeaderReason.SCENE_ACTIVATED
+    )
     assert follower_ctrl._calls == []
     assert any("leader bath activated scene christmas" in rec.message for rec in caplog.records)
 
@@ -208,7 +218,7 @@ async def test_handle_leader_scene_not_on_follower_logs_warning(follower_ctrl, c
 async def test_handle_leader_off_default_is_noop(follower_ctrl):
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
     # follow_leader_deactivation defaults to False
-    await follower_ctrl.handle_leader_change(None, LeaderReason.OFF)
+    await follower_ctrl.handle_leader_change(follower_ctrl.leader, None, LeaderReason.OFF)
     assert follower_ctrl._calls == []
 
 
@@ -217,25 +227,25 @@ async def test_handle_leader_off_with_follow_deactivation_turns_off(follower_ctr
 
     follower_ctrl.area.follow_leader_deactivation = True
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
-    await follower_ctrl.handle_leader_change(None, LeaderReason.OFF)
+    await follower_ctrl.handle_leader_change(follower_ctrl.leader, None, LeaderReason.OFF)
     assert ("activate_scene", SCENE_OFF_INTERNAL, ActivationSource.LEADER) in follower_ctrl._calls
 
 
 async def test_handle_leader_ambient_default_is_noop(follower_ctrl):
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
-    await follower_ctrl.handle_leader_change(None, LeaderReason.AMBIENT)
+    await follower_ctrl.handle_leader_change(follower_ctrl.leader, None, LeaderReason.AMBIENT)
     assert follower_ctrl._calls == []
 
 
 async def test_handle_leader_ambient_with_follow_deactivation_activates_ambient(follower_ctrl):
     follower_ctrl.area.follow_leader_deactivation = True
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
-    await follower_ctrl.handle_leader_change(None, LeaderReason.AMBIENT)
+    await follower_ctrl.handle_leader_change(follower_ctrl.leader, None, LeaderReason.AMBIENT)
     assert ("activate_scene", "ambient", ActivationSource.LEADER) in follower_ctrl._calls
 
 
 async def test_handle_leader_manual_always_noop(follower_ctrl):
     follower_ctrl.area.follow_leader_deactivation = True
     follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
-    await follower_ctrl.handle_leader_change(None, LeaderReason.MANUAL)
+    await follower_ctrl.handle_leader_change(follower_ctrl.leader, None, LeaderReason.MANUAL)
     assert follower_ctrl._calls == []

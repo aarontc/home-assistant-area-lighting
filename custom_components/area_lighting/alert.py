@@ -260,7 +260,8 @@ async def execute_alert(
         (c.id, c.members) for c in controller.area.light_clusters
     ]
 
-    timer_deadlines: dict[str, Any] = {}
+    # name -> (deadline, epoch after the pause)
+    timer_deadlines: dict[str, tuple[Any, int]] = {}
     timers = {
         "_motion_timer": controller._motion_timer,
         "_motion_night_timer": controller._motion_night_timer,
@@ -276,9 +277,10 @@ async def execute_alert(
         captured = capture_light_states(individual_light_ids, hass.states.get)
 
         for name, timer in timers.items():
-            if timer.is_active and timer.deadline_utc is not None:
-                timer_deadlines[name] = timer.deadline_utc
+            deadline = timer.deadline_utc if timer.is_active else None
             timer.cancel()
+            if deadline is not None:
+                timer_deadlines[name] = (deadline, timer.epoch)
 
         _LOGGER.debug(
             "Area %s: alert started, %d lights captured, %d timers paused",
@@ -297,26 +299,15 @@ async def execute_alert(
             await restore_light_states(captured, _call)
 
     finally:
-        for name, deadline in timer_deadlines.items():
-            timers[name].restore(deadline)
+        # A timer that a sensor or a reload started or cancelled during the
+        # alert keeps that newer decision.
+        for name, (deadline, epoch) in timer_deadlines.items():
+            if timers[name].epoch == epoch:
+                timers[name].restore(deadline)
 
         controller._state = AreaState.from_dict(saved_state)
         controller._active_scene_targets = saved_targets
         controller._notify_state_change()
 
-        controller._alert_active = False
-        if controller.demand_response_active or controller.dr_shed_ids:
-            # A demand-response edge deferred to this alert
-            # (reactivate_for_demand_response skips alert-owning areas)
-            # may have arrived mid-alert OR just before the alert
-            # started, so a changed-during-alert comparison would miss
-            # the pre-alert flip. Instead, re-drive the area through its
-            # normal activation path whenever the flag is active (the
-            # shed must be re-asserted over the alert's restore, and a
-            # restore-less pattern can leave shed bulbs on) or a stale
-            # shed set is still tracked (the flag went off, so those
-            # bulbs must be relit). Only an inactive flag with nothing
-            # shed skips the re-drive: the snapshot restore already
-            # produced the correct state.
-            await controller.reactivate_for_demand_response()
+        await controller.async_end_alert()
         _LOGGER.debug("Area %s: alert finished", controller.area.id)
