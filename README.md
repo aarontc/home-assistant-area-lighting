@@ -417,7 +417,7 @@ Current code notes:
 2. Ambience ownership tracking is implemented through activation source
 3. Ambience deactivation only turns lights off when ambience originally activated them, which is implemented
 4. The README describes future in-component ambient-zone scheduling logic; that is still pending
-5. Holiday mode changes currently have extra side effects outside ambience alone: enabling holiday can turn on currently-off supported areas, and disabling holiday can turn off holiday-owned states entered via the holiday-change path
+5. Holiday mode changes currently have extra side effects outside ambience alone: enabling holiday can turn on currently-off areas that define that holiday's scene, and disabling holiday can turn off holiday-owned states entered via the holiday-change path
 
 ### Ambient flow
 

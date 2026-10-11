@@ -758,7 +758,11 @@ class AreaLightingController:
         return state.state if state else "unknown"
 
     def _get_holiday_mode(self) -> str:
-        return self._get_state(HOLIDAY_MODE_ENTITY)
+        return self._area_holiday(self._get_state(HOLIDAY_MODE_ENTITY))
+
+    def _area_holiday(self, mode: str) -> str:
+        """The holiday as this area sees it: one it has no scene for is none."""
+        return mode if mode in self.area.scene_slugs else HOLIDAY_MODE_NONE
 
     def _is_ambient_zone_enabled(self) -> bool:
         if not self.area.ambient_lighting_zone:
@@ -2767,6 +2771,7 @@ class AreaLightingController:
             self._state.scene_slug,
             self._state.source.value,
         )
+        mode = self._area_holiday(mode)
         if mode != HOLIDAY_MODE_NONE:
             # Activate the new holiday scene if:
             # - lights are off, OR

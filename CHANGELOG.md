@@ -334,6 +334,14 @@ area_lighting from loading.
 
 ### Fixed
 
+- **A holiday an area has no scene for no longer lights it.** Setting
+  `input_select.holiday_mode` to `halloween` turned on every off area that
+  defined only `christmas`, with a bare `light.turn_on`, and left its scene
+  select reading `unknown`. Holiday mode changes, the `holiday` ambient
+  scene, the off fallback and the favorite button now treat a holiday the
+  area does not define as `none`. An area showing a holiday-owned
+  `christmas` turns off when holiday mode moves to `halloween`.
+
 - **`sensor.area_lighting_circadian` exists from the moment the integration
   loads.** 3.0.0 added it only after Home Assistant had started. Automations
   attach their triggers before that, so a `numeric_state` trigger on it logged

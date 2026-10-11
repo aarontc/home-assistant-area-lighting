@@ -24,6 +24,9 @@ async def test_holiday_change_christmas_to_halloween(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
     """Switching holiday mode while showing holiday-sourced holiday scene."""
+    network_room_config["area_lighting"]["areas"][0]["scenes"].append(
+        {"id": "halloween", "name": "Halloween"}
+    )
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
     hass.states.async_set("input_select.holiday_mode", "christmas")

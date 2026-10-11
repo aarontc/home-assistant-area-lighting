@@ -310,7 +310,7 @@ A handful of scene slugs have special semantics in the integration. Every enable
 | `night`                | Only if using night mode. | Selected automatically when night mode is active; targeted by lights with the `night` role. |
 | `ambient`              | Only if using ambient zones. | Activated by `ambient_lighting_zone` gating. |
 | `daylight` + `evening` | Only as an alternative to `circadian`. Must declare **both together**. | The scene-machine uses them as a sun-position-driven fallback when `circadian` is not declared (`scene_machine.py:71-72`). |
-| `christmas`, `halloween` | Only if using holiday mode. | Selected when `input_select.holiday_mode` is set to the matching value. |
+| `christmas`, `halloween` | Only if using holiday mode. | Selected when `input_select.holiday_mode` is set to the matching value. An area without the matching scene treats that holiday as `none`. |
 | `off_internal`, `manual` | **Do not declare.** | Internal state slugs the controller uses to track non-user-activated states. Declaring them is ignored at best, confusing at worst. |
 
 The default-scene resolver cascade (from `scene_machine.py`) is: `night` (if night mode) → `circadian` → `daylight`+`evening` (sun-position) → first generic scene alphabetically → no-op. So an area without any of these still loads, it just doesn't have an obvious "home" scene.
