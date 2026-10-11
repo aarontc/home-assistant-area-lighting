@@ -60,6 +60,7 @@ from .scene_machine import (
     determine_off_action,
     determine_off_fade_action,
     determine_on_action,
+    determine_on_sequence_action,
     resolve_sun_position,
     resolve_sun_position_inverted,
 )
@@ -1997,20 +1998,28 @@ class AreaLightingController:
     async def lighting_on(
         self,
         source: ActivationSource = ActivationSource.USER,
+        on_sequence: list[str] | None = None,
     ) -> None:
-        """Handle 'on' action with scene cycling logic."""
+        """Handle 'on' action with scene cycling logic.
+
+        When *on_sequence* is provided (a remote's ``buttons.on``), it
+        replaces the night and circadian start of the default cycle; see
+        ``determine_on_sequence_action``.
+        """
         _LOGGER.debug(
-            "Area %s: lighting_on source=%s current_scene=%s dimmed=%s",
+            "Area %s: lighting_on source=%s current_scene=%s dimmed=%s sequence=%s",
             self.area.id,
             source.value,
             self._state.scene_slug,
             self._state.dimmed,
+            on_sequence,
         )
 
         # Scenario A: if we're transitioning from off/ambient → on and
         # have a leader with a concrete on-scene we also define, mirror
-        # the leader instead of running our own cycle logic.
-        if self._state.is_off or self._state.is_ambient_like:
+        # the leader instead of running our own cycle logic. A remote's
+        # own on sequence takes precedence over the leader.
+        if not on_sequence and (self._state.is_off or self._state.is_ambient_like):
             hint = self._resolve_leader_on_slug()
             if hint is not None:
                 _LOGGER.debug(
@@ -2024,15 +2033,23 @@ class AreaLightingController:
 
         from_motion = source == ActivationSource.MOTION
 
-        action = determine_on_action(
-            current_scene=self._state.scene_slug,
-            scene_slugs=self.area.scene_slugs,
-            dimmed=self._state.dimmed,
-            triggered_by_motion=from_motion,
-            motion_override_ambient=self._motion_override_ambient,
-            holiday_mode=self._get_holiday_mode(),
-            night_mode=self._night_mode,
-        )
+        if on_sequence and not from_motion and not self._state.dimmed:
+            action = determine_on_sequence_action(
+                current_scene=self._state.scene_slug,
+                scene_slugs=self.area.scene_slugs,
+                holiday_mode=self._get_holiday_mode(),
+                on_sequence=on_sequence,
+            )
+        else:
+            action = determine_on_action(
+                current_scene=self._state.scene_slug,
+                scene_slugs=self.area.scene_slugs,
+                dimmed=self._state.dimmed,
+                triggered_by_motion=from_motion,
+                motion_override_ambient=self._motion_override_ambient,
+                holiday_mode=self._get_holiday_mode(),
+                night_mode=self._night_mode,
+            )
         _LOGGER.debug(
             "Area %s: on_decision action=%s target_scene=%s",
             self.area.id,

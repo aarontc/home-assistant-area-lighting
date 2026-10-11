@@ -151,6 +151,41 @@ def determine_on_action(
     return _default_sequence(scene_slugs, holiday_mode, night_mode)
 
 
+def determine_on_sequence_action(
+    current_scene: str,
+    scene_slugs: set[str],
+    holiday_mode: str,
+    on_sequence: list[str],
+) -> SceneAction:
+    """Determine the 'on' press for a remote with a ``buttons.on`` sequence.
+
+    The active holiday scene comes first, then each scene in
+    *on_sequence*, then the built-in rotation: circadian, the inverted sun
+    position, then daylight and evening alternating. The schema keeps
+    holiday, rotation and off slugs out of *on_sequence*. Night mode does
+    not apply. Dimmed restores and motion never reach this function.
+    """
+    holiday_active = holiday_mode != "none" and holiday_mode in scene_slugs
+
+    if current_scene in on_sequence:
+        idx = on_sequence.index(current_scene)
+        if idx + 1 < len(on_sequence):
+            return SceneAction.activate(on_sequence[idx + 1])
+        return _non_night_default(scene_slugs)
+
+    # Built-in rotation once the sequence is done
+    if current_scene == "circadian" and "circadian" in scene_slugs:
+        return SceneAction.sun_position_inverted()
+    if current_scene == "daylight" and "evening" in scene_slugs:
+        return SceneAction.activate("evening")
+    if current_scene == "evening" and "daylight" in scene_slugs:
+        return SceneAction.activate("daylight")
+
+    if holiday_active and current_scene != holiday_mode:
+        return SceneAction.activate_holiday()
+    return SceneAction.activate(on_sequence[0])
+
+
 def determine_off_action(
     current_scene: str,
     source: str,

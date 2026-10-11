@@ -320,3 +320,76 @@ async def test_favorite_override_scene_entity_calls_service(
 
     assert len(calls) == 1
     assert calls[0]["service_data"]["entity_id"] == "scene.custom_reading"
+
+
+_ON_SEQUENCE_REMOTE_ID = "on_sequence_remote_001"
+
+
+@pytest.fixture
+def config_with_on_sequence() -> dict:
+    """Config where the remote's on button starts with a study scene."""
+    return {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "network_room",
+                    "name": "Network Room",
+                    "event_handlers": True,
+                    "lights": [
+                        {
+                            "id": "light.network_room_overhead_1",
+                            "roles": ["dimming"],
+                        },
+                    ],
+                    "lutron_remotes": [
+                        {
+                            "id": _ON_SEQUENCE_REMOTE_ID,
+                            "name": "Entry Remote",
+                            "buttons": {"on": ["study"]},
+                        }
+                    ],
+                    "scenes": [
+                        {"id": "christmas", "name": "Christmas"},
+                        {"id": "circadian", "name": "Circadian"},
+                        {"id": "daylight", "name": "Daylight"},
+                        {"id": "evening", "name": "Evening"},
+                        {"id": "night", "name": "Night"},
+                        {"id": "study", "name": "Study"},
+                    ],
+                }
+            ]
+        }
+    }
+
+
+async def _press_on_through(hass: HomeAssistant, ctrl, expected: list[str]) -> None:
+    for slug in expected:
+        _fire_lutron_button(hass, _ON_SEQUENCE_REMOTE_ID, "on")
+        await hass.async_block_till_done()
+        assert ctrl._state.scene_slug == slug
+
+
+@pytest.mark.integration
+async def test_on_sequence_without_holiday(
+    hass: HomeAssistant, helper_entities, config_with_on_sequence
+) -> None:
+    """Study, circadian, the inverted sun position, then daylight and evening alternate."""
+    await _setup(hass, config_with_on_sequence)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    ctrl._night_mode = True
+
+    # Daylight lights are enabled in the fixture, so the inverted sun
+    # position is evening.
+    await _press_on_through(hass, ctrl, ["study", "circadian", "evening", "daylight", "evening"])
+
+
+@pytest.mark.integration
+async def test_on_sequence_with_holiday(
+    hass: HomeAssistant, helper_entities, config_with_on_sequence
+) -> None:
+    """The holiday scene comes first, then the sequence and the sun rotation."""
+    hass.states.async_set("input_select.holiday_mode", "christmas")
+    await _setup(hass, config_with_on_sequence)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+
+    await _press_on_through(hass, ctrl, ["christmas", "study", "circadian", "evening", "daylight"])
