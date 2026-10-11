@@ -234,6 +234,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Set up event handlers
     hass.data[DOMAIN]["unsubs"] = await async_setup_event_handlers(hass, area_config)
 
+    # Last, so a failed setup leaves no entity behind.
+    try:
+        await _register_circadian_sensor(hass)
+    except Exception:
+        _LOGGER.exception("Failed to register the circadian sensor")
+
     return True
 
 
@@ -653,7 +659,20 @@ def _apply_hidden_default(hass: HomeAssistant) -> None:
 
 
 async def _register_sensors(hass: HomeAssistant) -> None:
-    """Register the diagnostic and circadian sensors via the sensor EntityComponent."""
+    """Register the diagnostic sensor once Home Assistant has started."""
+    if await _add_sensors(hass, [AreaLightingDiagnosticSensor(hass)]):
+        _LOGGER.info("Registered diagnostic sensor")
+
+
+async def _register_circadian_sensor(hass: HomeAssistant) -> None:
+    """Register the circadian sensor during setup, so automations whose
+    triggers attach at startup can find it."""
+    if await _add_sensors(hass, [AreaLightingCircadianSensor(hass)]):
+        _LOGGER.info("Registered circadian sensor")
+
+
+async def _add_sensors(hass: HomeAssistant, sensors: Sequence[Entity]) -> bool:
+    """Add sensors via the sensor EntityComponent."""
     from homeassistant.components.sensor import (  # type: ignore[attr-defined]
         DATA_COMPONENT as SENSOR_DATA_COMPONENT,
     )
@@ -661,12 +680,11 @@ async def _register_sensors(hass: HomeAssistant) -> None:
     component = hass.data.get(SENSOR_DATA_COMPONENT)
     if component is None:
         _LOGGER.error("Sensor component not loaded; cannot register sensors")
-        return
+        return False
 
-    sensors = [AreaLightingDiagnosticSensor(hass), AreaLightingCircadianSensor(hass)]
     await component.async_add_entities(sensors)
     _record_entities(hass, sensors)
-    _LOGGER.info("Registered diagnostic and circadian sensors")
+    return True
 
 
 def _record_entities(hass: HomeAssistant, entities: Sequence[Entity]) -> None:

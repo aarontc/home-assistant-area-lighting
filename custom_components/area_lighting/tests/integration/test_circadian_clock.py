@@ -10,7 +10,8 @@ import pytest
 import voluptuous as vol
 from astral import Observer
 from astral import sun as astral_sun
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -77,6 +78,65 @@ async def test_sensor_reports_percent_and_colortemp(
     assert state.attributes["unit_of_measurement"] == "%"
     assert state.attributes["friendly_name"] == "Area Lighting Circadian"
     assert state.attributes["icon"] == "mdi:theme-light-dark"
+
+
+@pytest.mark.integration
+async def test_sensor_exists_before_home_assistant_starts(
+    hass: HomeAssistant, helper_entities, network_room_config, pin_circadian
+) -> None:
+    """Automations attach their triggers when Home Assistant starts, and a
+    numeric_state trigger on an entity that does not exist yet fails to set
+    up. The sensor therefore has to exist once setup returns."""
+    await pin_circadian(42.0, 4321.0, tick=False)
+    assert await async_setup_component(hass, DOMAIN, network_room_config)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SENSOR)
+    assert state is not None
+    assert state.attributes["colortemp"] == 4321
+
+
+@pytest.mark.integration
+async def test_numeric_state_automation_on_the_sensor_sets_up_at_startup(
+    hass: HomeAssistant,
+    helper_entities,
+    network_room_config,
+    pin_circadian,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """While Home Assistant starts, automations attach their triggers before
+    EVENT_HOMEASSISTANT_STARTED fires. A numeric_state trigger on the sensor
+    must find it then, without the "unknown entity" warning, and fire when the
+    color temperature crosses."""
+    hass.set_state(CoreState.starting)
+    await pin_circadian(-5.0, 3000.0, tick=False)
+    assert await async_setup_component(hass, DOMAIN, network_room_config)
+    assert await async_setup_component(
+        hass,
+        "automation",
+        {
+            "automation": {
+                "trigger": {
+                    "platform": "numeric_state",
+                    "entity_id": SENSOR,
+                    "value_template": "{{ state.attributes.colortemp }}",
+                    "above": 4000,
+                },
+                "action": {"event": "circadian_daylight"},
+            }
+        },
+    )
+    await hass.async_block_till_done()
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    fired: list = []
+    hass.bus.async_listen("circadian_daylight", fired.append)
+    await pin_circadian(5.0, 4500.0)
+
+    assert len(fired) == 1
+    assert "Error initializing" not in caplog.text
 
 
 @pytest.mark.integration

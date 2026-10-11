@@ -978,6 +978,8 @@ the percent from `min_colortemp` to `max_colortemp`, and at night it stays at
 `min_colortemp`. `sensor.area_lighting_circadian` reports the percent as its
 state and the color temperature in kelvin as its `colortemp` attribute. Like
 the per-area entities, it is hidden by default.
+It exists as soon as the integration loads, so automations can trigger on
+it at startup.
 
 **Groups and types.** A light follows the curve when it names a
 `circadian_group` declared in its area and a `circadian_type`. The group

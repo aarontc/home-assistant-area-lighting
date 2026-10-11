@@ -334,6 +334,12 @@ area_lighting from loading.
 
 ### Fixed
 
+- **`sensor.area_lighting_circadian` exists from the moment the integration
+  loads.** 3.0.0 added it only after Home Assistant had started. Automations
+  attach their triggers before that, so a `numeric_state` trigger on it logged
+  "Error initializing ... unknown entity" at every restart, and templates
+  could not read it during startup.
+
 - **An alert no longer overrides countdown changes made while it ran.** When
   an alert ends it puts back the motion and occupancy countdowns it paused.
   A countdown that a sensor or a reload stopped or restarted during the alert
