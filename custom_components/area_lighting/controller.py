@@ -2093,6 +2093,7 @@ class AreaLightingController:
             area_ambience_enabled=self._ambience_enabled,
             holiday_mode=self._get_holiday_mode(),
             ambient_scene_mode=self._get_ambient_scene_mode(),
+            has_ambient_scene=self.area.has_ambient_scene,
         )
         _LOGGER.debug(
             "Area %s: off_decision action=%s target_scene=%s",
@@ -2131,6 +2132,7 @@ class AreaLightingController:
             area_ambience_enabled=self._ambience_enabled,
             holiday_mode=self._get_holiday_mode(),
             ambient_scene_mode=self._get_ambient_scene_mode(),
+            has_ambient_scene=self.area.has_ambient_scene,
         )
         _LOGGER.debug(
             "Area %s: off_fade_decision action=%s target_scene=%s",
@@ -2780,7 +2782,10 @@ class AreaLightingController:
         self._enforce_occupancy_timer()
 
     async def handle_ambient_enabled(self) -> None:
-        """Ambient mode enabled (zone or area). Activate ambient scene if off."""
+        """Ambient mode enabled (zone or area). Activate ambient scene if off.
+
+        An area with no ambient scene stays off unless a holiday scene applies.
+        """
         _LOGGER.debug(
             "Area %s: handle_ambient_enabled current_scene=%s",
             self.area.id,
@@ -2792,7 +2797,7 @@ class AreaLightingController:
         ambient_mode = self._get_ambient_scene_mode()
         if ambient_mode == "holiday" and holiday != HOLIDAY_MODE_NONE:
             await self._activate_holiday_scene(ActivationSource.AMBIENCE)
-        else:
+        elif self.area.has_ambient_scene:
             await self._activate_scene("ambient", ActivationSource.AMBIENCE)
 
     async def handle_ambient_disabled(self) -> None:
@@ -2897,7 +2902,9 @@ class AreaLightingController:
         if reason is LeaderReason.AMBIENT:
             if not self.area.follow_leader_deactivation:
                 return
-            await self._activate_scene("ambient", ActivationSource.LEADER)
+            # A follower with no ambient scene turns off instead
+            slug = "ambient" if self.area.has_ambient_scene else SCENE_OFF_INTERNAL
+            await self._activate_scene(slug, ActivationSource.LEADER)
             return
 
         # LeaderReason.MANUAL: always no-op

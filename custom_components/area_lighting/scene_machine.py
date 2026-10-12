@@ -193,12 +193,14 @@ def determine_off_action(
     area_ambience_enabled: bool,
     holiday_mode: str,
     ambient_scene_mode: str,
+    has_ambient_scene: bool,
 ) -> SceneAction:
     """Determine what to do when 'off' is pressed.
 
     Source-aware (D7): holiday/ambient scenes that are ambience-owned
     go straight to off; user-owned holiday scenes with ambience active
-    fall back to literal ambient.
+    fall back to literal ambient. An area with no ambient scene turns
+    off instead of falling back to it.
 
     Args:
         current_scene: The area's current scene slug.
@@ -209,10 +211,12 @@ def determine_off_action(
         area_ambience_enabled: Whether the area's ambience is enabled.
         holiday_mode: Current holiday mode.
         ambient_scene_mode: Value of input_select.ambient_scene.
+        has_ambient_scene: Whether the area configures an ambient scene.
     """
     ambience_active = ambient_zone_enabled and area_ambience_enabled
     in_holiday = current_scene in HOLIDAY_SCENES
     in_ambient = current_scene == "ambient"
+    ambient_fallback = "ambient" if has_ambient_scene else "off_internal"
 
     # Already in an ambience-owned ambient/holiday state → off for real
     if (in_holiday or in_ambient) and source == "ambience":
@@ -221,12 +225,12 @@ def determine_off_action(
     if ambience_active:
         # In a user-owned holiday scene → fall back to literal ambient
         if in_holiday:
-            return SceneAction.activate("ambient")
+            return SceneAction.activate(ambient_fallback)
         # In a non-ambient-like scene → ambient or holiday-ambient
         if not in_ambient:
             if ambient_scene_mode == "holiday" and holiday_mode != "none":
                 return SceneAction.activate_holiday()
-            return SceneAction.activate("ambient")
+            return SceneAction.activate(ambient_fallback)
 
     return SceneAction.activate("off_internal")
 
@@ -238,6 +242,7 @@ def determine_off_fade_action(
     area_ambience_enabled: bool,
     holiday_mode: str,
     ambient_scene_mode: str,
+    has_ambient_scene: bool,
 ) -> SceneAction:
     """Determine what to do when fading off (motion/occupancy timer expired).
 
@@ -250,6 +255,7 @@ def determine_off_fade_action(
         area_ambience_enabled,
         holiday_mode,
         ambient_scene_mode,
+        has_ambient_scene,
     )
 
 

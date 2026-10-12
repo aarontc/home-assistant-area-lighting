@@ -366,13 +366,14 @@ Holiday nuance:
 1. If `off` falls back into ambience from a normal scene, holiday ambience may be chosen if a matching holiday scene exists
 2. If `off` is pressed while already in a holiday scene, the fallback is the literal `ambient` scene without holiday logic
 3. If the area is already in an ambience-owned ambient state, the next `off` turns the lights off
+4. If the fallback would be the literal `ambient` scene and the area has none, `off` turns the lights off
 
 Current code notes:
 
 1. Ambience gating via both area flag and ambient zone is implemented
 2. Falling back to ambience from normal scenes is implemented
 3. Turning off from already-ambient states is implemented
-4. The "holiday scene -> literal ambient" fallback is implemented at `scene_machine.py:186-189` (user-owned holiday + ambience active → `ambient`)
+4. The "holiday scene -> literal ambient" fallback is implemented in `determine_off_action` in `scene_machine.py` (user-owned holiday + ambience active → `ambient`)
 
 ### Remote flow
 
@@ -429,7 +430,7 @@ When an area's ambient zone becomes active:
 When ambience activates:
 
 1. If a global holiday scene is currently selected and the area has a matching holiday scene, activate that holiday scene
-2. Otherwise activate the area's literal `ambient` scene
+2. Otherwise activate the area's literal `ambient` scene, or stay off if the area has none
 3. Record that the source of the current lighting state is `ambience`
 
 When ambience deactivates:
@@ -463,7 +464,9 @@ flowchart TD
     F -->|No| E
     F -->|Yes| G{Matching holiday scene available?}
     G -->|Yes| H[Activate holiday scene with source=ambience]
-    G -->|No| I[Activate ambient scene with source=ambience]
+    G -->|No| J{Area has an ambient scene?}
+    J -->|Yes| I[Activate ambient scene with source=ambience]
+    J -->|No| K[Stay off]
 ```
 
 ### 3. Motion and occupancy
@@ -1187,7 +1190,9 @@ work:
    baseline.
 2. ~~**Follow-area scene mirroring.**~~ **Implemented** as leader/follower
    relationships via `leader_area_id` and `follow_leader_deactivation`
-   per-area config. A follower mirrors its leader's scene transitions.
+   per-area config. A follower mirrors its leader's scene transitions. A
+   follower that would follow its leader into `ambient` but has no `ambient`
+   scene turns off instead.
 3. **Light followers.** Configurable leader/follower light pairs for
    situations like "fan light tracks ceiling light." Removed pending a
    clearer use case.
