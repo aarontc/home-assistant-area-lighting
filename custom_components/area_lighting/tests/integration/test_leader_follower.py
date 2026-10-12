@@ -459,3 +459,26 @@ async def test_follower_timer_runs_independently_of_leader(
     assert closet._motion_timer.deadline_utc == closet_deadline_before
     # Bath's timer should have been reset (deadline changed)
     assert bath._motion_timer.deadline_utc != bath_deadline_before
+
+
+@pytest.mark.integration
+async def test_scenario_b_leader_ambient_turns_off_follower_with_no_ambient_scene(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    hass.states.async_set("light.bath_overhead", "on")
+    hass.states.async_set("light.closet_overhead", "on")
+    cfg = _bath_closet_config(follow_leader_deactivation=True)
+    closet_cfg = cfg["area_lighting"]["areas"][1]
+    closet_cfg["scenes"] = [s for s in closet_cfg["scenes"] if s["id"] != "ambient"]
+    assert await _setup(hass, cfg)
+    controllers = hass.data["area_lighting"]["controllers"]
+    bath = controllers["bath"]
+    closet = controllers["closet"]
+
+    await closet._activate_scene("evening", ActivationSource.USER)
+    await hass.async_block_till_done()
+
+    await bath._activate_scene("ambient", ActivationSource.AMBIENCE)
+    await hass.async_block_till_done()
+
+    assert closet._state.is_off

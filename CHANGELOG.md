@@ -344,6 +344,16 @@ area_lighting from loading.
 
 ### Fixed
 
+- **An area with no `ambient` scene turns off instead of falling back to
+  it.** With ambience active, `off` and the motion and occupancy fade-out
+  sent such an area to `ambient` anyway. Every light without a `scenes` list
+  got a bare `light.turn_on`, so pressing off lit the room, and the scene
+  select read `unknown`. Ambience turning on did the same to an off area,
+  and so did a follower that followed its leader into `ambient`. These now
+  turn the area off, or leave it off. The holiday fallback is unchanged: with `input_select.ambient_scene`
+  set to `holiday`, an area that has the current holiday's scene still drops
+  to it.
+
 - **A reload or restart that removes an area's current scene switches the
   area to `manual`.** The area used to stay in the removed scene. The next
   demand-response change or self-heal then sent a bare `light.turn_on` to its
