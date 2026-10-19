@@ -188,7 +188,7 @@ def _make_mock_controller(light_ids: list[str], state: AreaState | None = None):
     ctrl._state = state or AreaState()
     ctrl._active_scene_targets = {}
     ctrl._notify_state_change = MagicMock()
-    ctrl.async_end_alert = AsyncMock(side_effect=lambda: setattr(ctrl, "_alert_active", False))
+    ctrl.async_end_alert = AsyncMock(side_effect=lambda *_: setattr(ctrl, "_alert_active", False))
     for timer_name in ("_motion_timer", "_motion_night_timer", "_occupancy_timer"):
         timer = MagicMock()
         timer.deadline_utc = None

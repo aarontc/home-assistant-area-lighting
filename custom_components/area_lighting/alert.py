@@ -23,6 +23,24 @@ _LOGGER = logging.getLogger(__name__)
 
 COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
 
+
+class _AlertCancelled(Exception):
+    """A manual action took the area over from the alert."""
+
+
+def _raise_if_cancelled(cancel: asyncio.Event) -> None:
+    if cancel.is_set():
+        raise _AlertCancelled
+
+
+async def _sleep_unless_cancelled(cancel: asyncio.Event, delay: float) -> None:
+    try:
+        await asyncio.wait_for(cancel.wait(), delay)
+    except TimeoutError:
+        return
+    raise _AlertCancelled
+
+
 _CAPTURE_ATTRS = (
     "brightness",
     "color_mode",
@@ -115,8 +133,12 @@ async def _execute_steps(
     pattern: AlertPattern,
     individual_light_ids: list[str],
     clusters: list[tuple[str, list[str]]],
+    cancel: asyncio.Event,
 ) -> None:
     """Run the step sequence with repeat and start_inverted logic.
+
+    Raises _AlertCancelled before the next batch or during a delay once
+    ``cancel`` is set.
 
     Target filtering classifies *individual* lights by capability
     (color/white via supported_color_modes). The resulting entity set
@@ -154,6 +176,7 @@ async def _execute_steps(
             if targeted:
                 targeted_set = set(targeted)
                 if targeted_set & batch_entities:
+                    _raise_if_cancelled(cancel)
                     await _apply_batch(hass, batch, clusters)
                     batch = []
                     batch_entities = set()
@@ -161,15 +184,17 @@ async def _execute_steps(
                 batch_entities |= targeted_set
             if step.delay > 0:
                 if batch:
+                    _raise_if_cancelled(cancel)
                     await _apply_batch(hass, batch, clusters)
                     batch = []
                     batch_entities = set()
-                await asyncio.sleep(step.delay)
+                await _sleep_unless_cancelled(cancel, step.delay)
         if batch:
+            _raise_if_cancelled(cancel)
             await _apply_batch(hass, batch, clusters)
 
     if pattern.delay > 0:
-        await asyncio.sleep(pattern.delay)
+        await _sleep_unless_cancelled(cancel, pattern.delay)
 
 
 def _step_state_dict(step: AlertStep) -> dict[str, Any]:
@@ -248,6 +273,10 @@ async def execute_alert(
     7. Clear _alert_active flag; if demand response is active, or a shed
        from before the alert is still tracked, re-drive the area through
        its normal activation path
+
+    A manual action stops the alert where it is (_manual_takeover). The
+    lights, scene state and targets are then left to that action, the area
+    is already handed back, and only timers nobody touched are restored.
     """
     # Classify on individual lights (not clusters) so target filtering
     # sees per-entity supported_color_modes.  Cluster optimization is
@@ -270,6 +299,8 @@ async def execute_alert(
 
     # Once _alert_active is set, a demand-response flip's re-activation
     # skips this area and defers to the finally block below.
+    cancel = asyncio.Event()
+    controller._alert_cancels.add(cancel)
     controller._alert_active = True
     saved_state = controller._state.to_dict()
     saved_targets = dict(controller._active_scene_targets)
@@ -289,28 +320,36 @@ async def execute_alert(
             len(timer_deadlines),
         )
 
-        await _execute_steps(hass, controller, pattern, individual_light_ids, clusters)
+        await _execute_steps(hass, controller, pattern, individual_light_ids, clusters, cancel)
 
         if pattern.restore and captured:
 
             async def _call(domain: str, service: str, **kwargs: Any) -> None:
+                _raise_if_cancelled(cancel)
                 await hass.services.async_call(domain, service, kwargs, blocking=True)
 
             await restore_light_states(captured, _call)
 
+    except _AlertCancelled:
+        _LOGGER.debug("Area %s: alert stopped by a manual action", controller.area.id)
+
     finally:
-        # A timer that a sensor or a reload started or cancelled during the
-        # alert keeps that newer decision.
+        # A timer that a sensor, a reload or the manual action started or
+        # cancelled during the alert keeps that newer decision.
         for name, (deadline, epoch) in timer_deadlines.items():
             if timers[name].epoch == epoch:
                 timers[name].restore(deadline)
 
-        controller._state = AreaState.from_dict(saved_state)
-        controller._active_scene_targets = saved_targets
-        # A reload during the alert may have removed the saved scene.
-        if controller._leave_removed_scene():
-            controller._enforce_occupancy_timer()
-        controller._notify_state_change()
+        if not cancel.is_set():
+            controller._state = AreaState.from_dict(saved_state)
+            controller._active_scene_targets = saved_targets
+            # A reload during the alert may have removed the saved scene.
+            if controller._leave_removed_scene():
+                controller._enforce_occupancy_timer()
+            controller._notify_state_change()
 
-        await controller.async_end_alert()
+            await controller.async_end_alert(cancel)
+        # Removed only now, so a manual action while async_end_alert waits
+        # still hands the area back at once.
+        controller._alert_cancels.discard(cancel)
         _LOGGER.debug("Area %s: alert finished", controller.area.id)

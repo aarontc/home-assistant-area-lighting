@@ -68,6 +68,10 @@ from .timer_manager import TimerHandle, parse_duration_to_seconds
 
 _LOGGER = logging.getLogger(__name__)
 
+# Sources that mean a person acted: a remote press, the app, a scene or a
+# service call. See _manual_takeover.
+MANUAL_SOURCES = frozenset({ActivationSource.USER, ActivationSource.REMOTE})
+
 
 class _LinkedActivation(NamedTuple):
     """A remote scene that linked motion resolved, and what it read to decide."""
@@ -119,6 +123,17 @@ class AreaLightingController:
         # Counts handle_motion_on calls, so a motion timer callback can tell
         # that motion came back while it awaited.
         self._motion_on_seq: int = 0
+        # Bumped by _manual_takeover, so a motion timer callback can tell
+        # that someone took the area over while it awaited.
+        self._takeover_seq: int = 0
+        # One event per running alert. A manual action sets them, which
+        # stops each alert where it is.
+        self._alert_cancels: set[asyncio.Event] = set()
+        # A recheck for an all-off report that arrived while lights the
+        # scene turned on were still settling, and the activation claim it
+        # was scheduled under.
+        self._lights_off_recheck_handle: asyncio.TimerHandle | None = None
+        self._lights_off_recheck_seq: int = 0
 
         # Timer durations — user-tunable via number entities. Initialized
         # from the area config at construction; the user can change them
@@ -567,6 +582,7 @@ class AreaLightingController:
         State-only: no light is commanded. Entering circadian starts the
         adjuster, so the lights follow at the next tick.
         """
+        self._manual_takeover()
         if value == "circadian":
             self._state.transition_to_circadian(ActivationSource.USER)
             self._start_circadian()
@@ -1655,7 +1671,7 @@ class AreaLightingController:
             unsub()
         self._circadian_unsubs.clear()
 
-    async def async_end_alert(self) -> None:
+    async def async_end_alert(self, cancel: asyncio.Event | None = None) -> None:
         """Hand the area back from an alert and bring its lights up to date.
 
         A tick still in flight is waited for first, up to a bound, with the
@@ -1664,10 +1680,16 @@ class AreaLightingController:
         finished while the alert ran may have left that route out of step
         with the lights the alert restored, so the next sync derives the
         route from the lights again and sends what is needed.
+
+        A manual action during that wait sets ``cancel``. It has already
+        handed the area back, and nothing here may replay the old scene over
+        it.
         """
         if self._circadian_tick_done is not None:
             # asyncio.wait neither raises on timeout nor cancels the tick.
             await asyncio.wait({self._circadian_tick_done}, timeout=CIRCADIAN_SETTLE_SECONDS)
+        if cancel is not None and cancel.is_set():
+            return
         self._alert_active = False
         if self._kelvin_router is not None:
             self._kelvin_router.deactivate()
@@ -2062,6 +2084,8 @@ class AreaLightingController:
             self._state.dimmed,
             on_sequence,
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
 
         # Scenario A: if we're transitioning from off/ambient → on and
         # have a leader with a concrete on-scene we also define, mirror
@@ -2134,6 +2158,8 @@ class AreaLightingController:
             source.value,
             self._state.scene_slug,
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
         action = determine_off_action(
             current_scene=self._state.scene_slug,
             source=self._state.source.value,
@@ -2171,6 +2197,8 @@ class AreaLightingController:
             self._state.scene_slug,
             self._motion_fade_seconds(),
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
         self._stop_circadian()
 
         action = determine_off_fade_action(
@@ -2214,6 +2242,8 @@ class AreaLightingController:
             source.value,
             self._state.scene_slug,
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
         await self._activate_scene(SCENE_OFF_INTERNAL, source)
 
     async def lighting_favorite(
@@ -2235,6 +2265,8 @@ class AreaLightingController:
             self._state.scene_slug,
             favorite_cycle,
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
 
         if favorite_cycle:
             if len(favorite_cycle) == 1 and favorite_cycle[0].startswith("scene."):
@@ -2284,6 +2316,8 @@ class AreaLightingController:
             self.area.id,
             source.value,
         )
+        if source in MANUAL_SOURCES:
+            self._manual_takeover()
         self._activation_seq += 1
         self._active_scene_targets = {}
         await self._activate_circadian(source)
@@ -2328,6 +2362,7 @@ class AreaLightingController:
           the minimum (step) brightness, restoring that scene for color/state
           context. Raise and lower behave identically here.
         """
+        self._manual_takeover()
         step = self._brightness_step_pct()
 
         if not self._on_light_entity_ids():
@@ -2391,11 +2426,15 @@ class AreaLightingController:
 
     # ── Event handlers ────────────────────────────────────────────────
 
-    async def handle_scene_activated(self, scene_slug: str) -> None:
+    async def handle_scene_activated(
+        self, scene_slug: str, transition: float | None = None
+    ) -> None:
         """External scene.turn_on detected. Track which scene is now active.
 
         Any transition away from circadian stops the circadian adjuster
-        so it doesn't keep fighting the externally-activated scene.
+        so it doesn't keep fighting the externally-activated scene. The
+        targets are stamped as just commanded, with the call's transition,
+        so the lights get the same settling grace as any other activation.
         """
         _LOGGER.debug(
             "Area %s: handle_scene_activated scene=%s",
@@ -2404,6 +2443,7 @@ class AreaLightingController:
         )
         if scene_slug == SCENE_OFF_INTERNAL:
             return
+        self._manual_takeover()
         # A new claim, so an in-flight activation that yields to newer ones
         # (demand response, linked motion) does not commit over this.
         self._activation_seq += 1
@@ -2421,10 +2461,58 @@ class AreaLightingController:
         else:
             self._stop_circadian()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
+            self._stamp_targets_with_command_metadata(transition)
             self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()
         await self._sync_kelvin_router()
+
+    def all_lights_off(self) -> bool:
+        """Whether no light in the area reads on."""
+        return not any(
+            (st := self.hass.states.get(light.id)) is not None and st.state == STATE_ON
+            for light in self.area.all_lights
+        )
+
+    def lights_settling_until(self) -> float | None:
+        """The monotonic time by which every light the active scene turned on
+        has had its fade and the report grace, if one is still inside it.
+
+        A scene swap turns some lights off and others on, and the off reports
+        can arrive before the on reports. Until then the area only looks dark.
+        """
+        now = time.monotonic()
+        deadlines = [
+            target["commanded_at"] + target.get("transition", 0.0) + MANUAL_DETECTION_GRACE_SECONDS
+            for target in self._active_scene_targets.values()
+            if target.get("state") == "on" and "commanded_at" in target
+        ]
+        latest = max(deadlines, default=None)
+        return latest if latest is not None and latest > now else None
+
+    def recheck_lights_off_at(self, deadline: float) -> None:
+        """Check again at the deadline whether the area is really dark."""
+        if self._lights_off_recheck_handle is not None:
+            self._lights_off_recheck_handle.cancel()
+        self._lights_off_recheck_seq = self._activation_seq
+        self._lights_off_recheck_handle = self.hass.loop.call_at(
+            self.hass.loop.time() + max(0.0, deadline - time.monotonic()),
+            self._run_lights_off_recheck,
+        )
+
+    def _run_lights_off_recheck(self) -> None:
+        self._lights_off_recheck_handle = None
+        if self._closed or self._alert_active or self._state.is_off:
+            return
+        # An activation since then owns the area. Its own off reports
+        # schedule a recheck if it needs one.
+        if self._activation_seq != self._lights_off_recheck_seq:
+            return
+        if (settle_at := self.lights_settling_until()) is not None:
+            self.recheck_lights_off_at(settle_at)
+            return
+        if self.all_lights_off():
+            self.hass.async_create_task(self.handle_lights_all_off())
 
     async def handle_lights_all_off(self) -> None:
         """All lights in area turned off externally.
@@ -2447,6 +2535,30 @@ class AreaLightingController:
         self._notify_state_change()
         await self._sync_kelvin_router()
 
+    def _manual_takeover(self) -> None:
+        """Someone changed the area by hand, from a remote, the app, a scene
+        or a service: motion no longer owns it, and an alert in progress
+        stops where it is without restoring anything.
+
+        Only the motion timers are cancelled. The occupancy timer keeps
+        running, so the area still turns off once the room is empty.
+        """
+        self._takeover_seq += 1
+        self._motion_timer.cancel()
+        self._motion_night_timer.cancel()
+        if self._alert_cancels:
+            _LOGGER.debug("Area %s: manual action stops the alert", self.area.id)
+            for cancel in self._alert_cancels:
+                cancel.set()
+            self._alert_cancels.clear()
+            # Hand the area back now, so the action's own commands and the
+            # circadian adjuster are not suppressed as alert traffic. The
+            # router forgets its route, as at the end of an alert, because
+            # the alert's commands may have left it out of step.
+            self._alert_active = False
+            if self._kelvin_router is not None:
+                self._kelvin_router.deactivate()
+
     async def handle_manual_light_change(self, force_when_dimmed: bool = False) -> None:
         """A light was manually adjusted outside the scene system.
 
@@ -2468,6 +2580,7 @@ class AreaLightingController:
             self._state.dimmed,
         )
         if force_when_dimmed or not self._state.dimmed:
+            self._manual_takeover()
             self._stop_circadian()
             self._state.transition_to_manual()
             self._enforce_occupancy_timer()
@@ -3028,9 +3141,13 @@ class AreaLightingController:
     async def _on_motion_timer(self) -> None:
         _LOGGER.debug("Area %s: motion timer expired", self.area.id)
         motion_on_seq = self._motion_on_seq
+        takeover_seq = self._takeover_seq
         await self._cleanup_linked_areas()
         if self._motion_on_seq != motion_on_seq:
             # Motion came back while cleanup awaited, so the room is occupied.
+            return
+        if self._takeover_seq != takeover_seq:
+            # Someone took the area over while cleanup awaited.
             return
         await self.lighting_off_fade(source=ActivationSource.MOTION)
         if self._motion_on_seq == motion_on_seq:
@@ -3086,4 +3203,7 @@ class AreaLightingController:
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
             self._heal_selfcheck_handle = None
+        if self._lights_off_recheck_handle is not None:
+            self._lights_off_recheck_handle.cancel()
+            self._lights_off_recheck_handle = None
         self._stop_circadian()

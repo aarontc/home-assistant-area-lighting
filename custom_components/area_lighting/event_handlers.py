@@ -415,7 +415,9 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
                 entity_id,
                 scene_slug,
             )
-            hass.async_create_task(ctrl.handle_scene_activated(scene_slug))
+            hass.async_create_task(
+                ctrl.handle_scene_activated(scene_slug, service_data.get("transition"))
+            )
 
     return _handler
 
@@ -431,7 +433,6 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
     we check whether the remaining lights are ALL off (or unavailable);
     only then do we fire the all-off handler.
     """
-    area = ctrl.area
 
     @callback
     def _handler(event: Event) -> None:
@@ -441,10 +442,12 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
         if ctrl._alert_active:
             return
         # Any light turning off → check if all lights are now off.
-        for light in area.all_lights:
-            st = hass.states.get(light.id)
-            if st is not None and st.state == STATE_ON:
-                return  # some light is still on
+        if not ctrl.all_lights_off():
+            return
+        # Lights the scene just turned on may not have reported on yet.
+        if (settle_at := ctrl.lights_settling_until()) is not None:
+            ctrl.recheck_lights_off_at(settle_at)
+            return
         ctrl.hass.async_create_task(ctrl.handle_lights_all_off())
 
     return _handler

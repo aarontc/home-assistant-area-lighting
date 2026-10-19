@@ -538,6 +538,14 @@ Motion timer expiry:
 1. Treat it like an `off` event with a fade
 2. This means the result is either full off or ambience fallback, depending on ambient conditions
 
+A manual change cancels the motion timers. That covers a remote press, a
+scene from the app or a dashboard, the scene select, raise or lower, an
+`area_lighting.lighting_*` service call, and a light adjusted by hand. The
+occupancy timer keeps running, so the area still turns off once the room
+empties. Without occupancy sensors, an area someone has taken over stays on
+until someone turns it off. Motion, ambience, holiday, leader and linked
+activations leave the motion timers alone.
+
 Occupancy cleared:
 
 1. Start the occupancy timer
@@ -685,6 +693,12 @@ If all lights in an area become off:
 2. Motion and occupancy timers are canceled
 3. Dimmed restore information is cleared
 
+A light the current scene turned on counts as on until its fade and the
+4-second report grace have passed. A scene that swaps one set of lights for
+another can report the old lights off before the new ones report on, and the
+area is not really dark then. If every light still reads off at that point,
+the area turns off.
+
 Current code notes:
 
 1. Transitioning to `off` and clearing dimmed context is implemented
@@ -711,6 +725,14 @@ During an alert:
    alert completes (against the restored light state)
 4. After the pattern finishes, lights are restored to their pre-alert
    state (if `restore: true`, which is the default)
+
+A manual action stops an alert in progress: a remote press, a scene from the
+app, the scene select, raise or lower, or an `area_lighting.lighting_*`
+service call. The alert sends nothing more and restores nothing, so the
+lights and scene are whatever that action set. Timers the action left alone
+resume. The `area_lighting.alert` call that started the alert returns
+normally. A light adjusted by hand during an alert does not stop it, since
+its report cannot be told apart from the alert's own flashes.
 
 Alerts are orthogonal to the scene state machine — they do not cause
 scene transitions and have no lasting effect on the area's state.

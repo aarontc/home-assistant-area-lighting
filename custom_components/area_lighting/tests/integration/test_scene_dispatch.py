@@ -104,8 +104,8 @@ async def test_scene_turn_on_with_entity_list_dispatches_to_every_area(
     )
     await hass.async_block_till_done()
 
-    network_spy.assert_awaited_once_with("daylight")
-    craft_spy.assert_awaited_once_with("daylight")
+    network_spy.assert_awaited_once_with("daylight", None)
+    craft_spy.assert_awaited_once_with("daylight", None)
 
 
 @pytest.mark.integration
@@ -129,7 +129,7 @@ async def test_scene_turn_on_with_single_entity_string_still_dispatches(
     )
     await hass.async_block_till_done()
 
-    network_spy.assert_awaited_once_with("daylight")
+    network_spy.assert_awaited_once_with("daylight", None)
 
 
 @pytest.mark.integration
@@ -209,4 +209,4 @@ async def test_scene_turn_on_for_a_renamed_scene_dispatches_its_slug(
     )
     await hass.async_block_till_done()
 
-    network_spy.assert_awaited_once_with("daylight")
+    network_spy.assert_awaited_once_with("daylight", None)

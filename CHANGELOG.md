@@ -344,6 +344,26 @@ area_lighting from loading.
 
 ### Fixed
 
+- **A manual change cancels the motion timers.** Picking a scene on a Pico,
+  in the app or on a dashboard, using the scene select, raise or lower, an
+  `area_lighting.lighting_*` service call, or adjusting a light by hand used
+  to leave a running motion timer armed, and it then faded the room out.
+  The motion timers are now cancelled, and the occupancy timer still turns
+  the room off once it empties. A press while the timer is cleaning up
+  linked areas also stops the fade.
+
+- **A manual action stops an alert in progress.** The same actions now end
+  the alert where it is. Before, the alert carried on flashing and then
+  restored the pre-alert lights and scene over whatever the person chose.
+  The `area_lighting.alert` call still returns normally.
+
+- **A scene swap no longer looks like every light turning off.** When a
+  scene turns some lights off and others on, the off reports can arrive
+  first. Lights-off detection then turned the area off and dropped the new
+  scene's targets. A light the scene turned on now counts as on until its
+  fade and the report grace have passed, and the area turns off then only
+  if every light still reads off.
+
 - **`scene.<area>_off` turns off an area in ambient.** With ambience on,
   activating the off scene through `scene.turn_on` (scripts, HomeKit,
   Google, dashboards) put ambient straight back, because the call was
