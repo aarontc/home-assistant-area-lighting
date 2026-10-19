@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
@@ -67,6 +67,15 @@ from .scene_machine import (
 from .timer_manager import TimerHandle, parse_duration_to_seconds
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _LinkedActivation(NamedTuple):
+    """A remote scene that linked motion resolved, and what it read to decide."""
+
+    remote_area_id: str
+    remote_scene: str
+    resolved_from: str
+    remote_activation_seq: int
 
 
 class AreaLightingController:
@@ -149,8 +158,11 @@ class AreaLightingController:
         )
 
         # Linked motion state: tracks which remote scenes were activated
-        # so cleanup knows what to restore. Maps remote_area_id → scene_slug.
-        self._linked_activated_scenes: dict[str, str] = {}
+        # so cleanup knows what to restore. Maps remote_area_id to the
+        # scene slug and a claim number, which tells a re-link of the same
+        # scene apart from the entry a running cleanup is processing.
+        self._linked_activated_scenes: dict[str, tuple[str, int]] = {}
+        self._linked_claim_seq: int = 0
 
         # Callbacks for entity state updates
         self._state_listeners: list = []
@@ -169,6 +181,11 @@ class AreaLightingController:
         # activation can still be applying when a newer one starts; the late
         # resumer compares this to decide whether it still owns the area.
         self._activation_seq: int = 0
+
+        # Activations still awaiting their light commands. A visual scene
+        # commits its state only after them, so while this is non-zero the
+        # committed scene may be about to change.
+        self._activations_in_flight: int = 0
 
         # Scene self-healing: monotonic timestamps of recent re-asserts per
         # entity (loop-cap window), and the pending post-settle self-check.
@@ -887,6 +904,28 @@ class AreaLightingController:
         propagate_to_followers: bool = True,
         yield_if_superseded: bool = False,
     ) -> None:
+        """Activate a scene, counting it in ``_activations_in_flight``."""
+        self._activations_in_flight += 1
+        try:
+            await self._run_activation(
+                scene_slug,
+                source,
+                transition,
+                propagate_to_followers=propagate_to_followers,
+                yield_if_superseded=yield_if_superseded,
+            )
+        finally:
+            self._activations_in_flight -= 1
+
+    async def _run_activation(
+        self,
+        scene_slug: str,
+        source: ActivationSource,
+        transition: float | None,
+        *,
+        propagate_to_followers: bool,
+        yield_if_superseded: bool,
+    ) -> None:
         """Activate a scene by slug, transitioning state with the given source.
 
         Behavioral scenes (off_internal, circadian) are handled directly.
@@ -928,6 +967,10 @@ class AreaLightingController:
             self._stop_circadian()
             await self._turn_off_all_lights(transition)
             if self._closed:
+                return
+            if yield_if_superseded and my_activation != self._activation_seq:
+                # As for a visual scene below: the newer activation's light
+                # commands went out after these turn-offs, so it owns the area.
                 return
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
@@ -2236,6 +2279,7 @@ class AreaLightingController:
             self.area.id,
             source.value,
         )
+        self._activation_seq += 1
         await self._activate_circadian(source)
 
     async def lighting_raise(self) -> None:
@@ -2354,6 +2398,9 @@ class AreaLightingController:
         )
         if scene_slug == SCENE_OFF_INTERNAL:
             return
+        # A new claim, so an in-flight activation that yields to newer ones
+        # (demand response, linked motion) does not commit over this.
+        self._activation_seq += 1
         # External activation defaults to USER source
         if scene_slug == "circadian":
             self._active_scene_targets = {}
@@ -2625,19 +2672,19 @@ class AreaLightingController:
             )
         self._notify_state_change()
 
-    def _resolve_linked_motion(self) -> tuple[str, list[tuple[str, str]]]:
+    def _resolve_linked_motion(self) -> tuple[str, list[_LinkedActivation]]:
         """Resolve linked_motion mappings based on remote area states.
 
         Returns:
-            (local_scene, [(remote_area_id, remote_scene), ...])
-            where remote_scene entries with None are excluded.
+            (local_scene, remote activations), excluding mappings whose
+            remote_scene is None.
         """
         if not self.area.linked_motion:
             return "circadian", []
 
         controllers = self.hass.data.get(DOMAIN, {}).get("controllers", {})
         local_scene = "circadian"
-        remote_activations: list[tuple[str, str]] = []
+        remote_activations: list[_LinkedActivation] = []
 
         for link in self.area.linked_motion:
             remote_ctrl = controllers.get(link.remote_area)
@@ -2652,13 +2699,27 @@ class AreaLightingController:
             remote_scene = remote_ctrl.current_scene
             mapping = link.resolve(remote_scene)
             local_scene = mapping.local_scene
-            if mapping.remote_scene is not None:
-                remote_activations.append((link.remote_area, mapping.remote_scene))
+            # A remote area still applying a scene may be about to leave the
+            # one just read, so it gets no linked scene this time.
+            if mapping.remote_scene is not None and not remote_ctrl._activations_in_flight:
+                remote_activations.append(
+                    _LinkedActivation(
+                        link.remote_area,
+                        mapping.remote_scene,
+                        remote_scene,
+                        remote_ctrl._activation_seq,
+                    )
+                )
 
         return local_scene, remote_activations
 
-    async def _activate_linked_areas(self, remote_activations: list[tuple[str, str]]) -> None:
+    async def _activate_linked_areas(self, remote_activations: list[_LinkedActivation]) -> None:
         """Activate scenes in remote areas via their controllers.
+
+        The activations were resolved before the local scene was applied, and
+        applying it yields to the event loop. A remote area that something
+        else activated in the meantime is left alone, so a remote press is not
+        overwritten by a linked scene that cleanup would later turn off.
 
         Merges into ``_linked_activated_scenes`` rather than replacing it. A
         later motion event can resolve to no remote activation — e.g. the remote
@@ -2667,32 +2728,74 @@ class AreaLightingController:
         activation, or ``_cleanup_linked_areas`` would have nothing to turn off
         and the remote area would be stranded on. Stale entries are harmless:
         cleanup only acts when the remote area is still in the recorded scene,
-        and it clears the dict once it runs.
+        and it removes each entry it processes.
+
+        The remote activation yields to any newer one, and the entry is
+        recorded only if the linked scene actually committed.
         """
         controllers = self.hass.data.get(DOMAIN, {}).get("controllers", {})
 
-        for remote_area_id, remote_scene in remote_activations:
-            remote_ctrl = controllers.get(remote_area_id)
+        for activation in remote_activations:
+            remote_ctrl = controllers.get(activation.remote_area_id)
             if remote_ctrl is None:
                 continue
-            await remote_ctrl._activate_scene(remote_scene, ActivationSource.LINKED)
-            self._linked_activated_scenes[remote_area_id] = remote_scene
+            if (
+                remote_ctrl._activation_seq != activation.remote_activation_seq
+                or remote_ctrl._activations_in_flight
+                or remote_ctrl.current_scene != activation.resolved_from
+            ):
+                _LOGGER.debug(
+                    "Area %s: skipping linked %s in %s, which changed since it was resolved",
+                    self.area.id,
+                    activation.remote_scene,
+                    activation.remote_area_id,
+                )
+                continue
+            await remote_ctrl._activate_scene(
+                activation.remote_scene,
+                ActivationSource.LINKED,
+                yield_if_superseded=True,
+            )
+            if (
+                remote_ctrl.current_scene == activation.remote_scene
+                and remote_ctrl._state.source == ActivationSource.LINKED
+            ):
+                self._linked_claim_seq += 1
+                self._linked_activated_scenes[activation.remote_area_id] = (
+                    activation.remote_scene,
+                    self._linked_claim_seq,
+                )
 
     async def _cleanup_linked_areas(self) -> None:
-        """Deactivate remote areas that are still in the linked scene."""
-        if not self._linked_activated_scenes:
-            return
+        """Deactivate remote areas still in the scene linked motion gave them.
 
+        A remote area someone has since put in that same scene by hand is
+        theirs, so the source must still be LINKED. An entry whose remote area
+        is applying a scene stays for the next cleanup, since that activation
+        may end in the linked scene again. Every other entry is removed just
+        before it is processed, so an entry that motion replaces while cleanup
+        awaits, or that cleanup has not reached when it raises, stays too.
+        """
         controllers = self.hass.data.get(DOMAIN, {}).get("controllers", {})
 
-        for remote_area_id, activated_scene in self._linked_activated_scenes.items():
+        for remote_area_id, entry in list(self._linked_activated_scenes.items()):
+            if self._linked_activated_scenes.get(remote_area_id) != entry:
+                continue
             remote_ctrl = controllers.get(remote_area_id)
+            if remote_ctrl is not None and remote_ctrl._activations_in_flight:
+                continue
+            del self._linked_activated_scenes[remote_area_id]
             if remote_ctrl is None:
                 continue
-            if remote_ctrl.current_scene == activated_scene:
-                await remote_ctrl._activate_scene("off_internal", ActivationSource.LINKED)
-
-        self._linked_activated_scenes.clear()
+            if (
+                remote_ctrl.current_scene == entry[0]
+                and remote_ctrl._state.source == ActivationSource.LINKED
+            ):
+                await remote_ctrl._activate_scene(
+                    "off_internal",
+                    ActivationSource.LINKED,
+                    yield_if_superseded=True,
+                )
 
     def _enforce_occupancy_timer(self) -> None:
         """Enforce occupancy timer invariant.

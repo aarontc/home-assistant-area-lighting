@@ -344,6 +344,26 @@ area_lighting from loading.
 
 ### Fixed
 
+- **Linked motion no longer overwrites a scene chosen while it runs.**
+  Motion in a `linked_motion` area decided the remote area's scene, applied
+  its own lights, and only then set the remote scene. A remote press in that
+  second was overwritten by the linked scene, and the local motion timer
+  later turned the remote area off. The remote scene is now set only if the
+  remote area has not been activated since, is not still applying a scene,
+  and still shows the scene the mapping was resolved from. A press that
+  lands while the linked scene itself is applying wins too, and cleanup
+  leaves that area alone. `scene.turn_on` on an area's scene and the
+  `area_lighting.lighting_circadian` service now count as new activations for this
+  check.
+
+- **Linked cleanup turns off only what linked motion still owns.** A remote
+  area that someone put in the linked scene by hand, or is applying another
+  scene in, stays on when the local motion timer ends. A linked activation
+  recorded while cleanup runs is kept for the next cleanup. Before, it was
+  dropped, or with two remote areas it raised `RuntimeError` and stopped the
+  local fade-out. If cleanup fails partway, the areas it had not reached
+  stay pending.
+
 - **An area with no `ambient` scene turns off instead of falling back to
   it.** With ambience active, `off` and the motion and occupancy fade-out
   sent such an area to `ambient` anyway. Every light without a `scenes` list
