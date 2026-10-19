@@ -116,6 +116,9 @@ class AreaLightingController:
         # Exposed in diagnostic_snapshot so users can see at a glance
         # whether the event handler is firing on their motion events.
         self._last_motion_event: str | None = None
+        # Counts handle_motion_on calls, so a motion timer callback can tell
+        # that motion came back while it awaited.
+        self._motion_on_seq: int = 0
 
         # Timer durations — user-tunable via number entities. Initialized
         # from the area config at construction; the user can change them
@@ -968,9 +971,11 @@ class AreaLightingController:
             await self._turn_off_all_lights(transition)
             if self._closed:
                 return
-            if yield_if_superseded and my_activation != self._activation_seq:
-                # As for a visual scene below: the newer activation's light
-                # commands went out after these turn-offs, so it owns the area.
+            if my_activation != self._activation_seq:
+                # A newer activation claimed the area while the lights were
+                # turning off. Its light commands went out after these, so it
+                # owns the area. Unlike a visual scene, nothing an off awaits
+                # starts an activation of its own, so every caller yields.
                 return
             self._active_scene_targets = {}
             self._dr_shed_ids = frozenset()
@@ -2280,6 +2285,7 @@ class AreaLightingController:
             source.value,
         )
         self._activation_seq += 1
+        self._active_scene_targets = {}
         await self._activate_circadian(source)
 
     async def lighting_raise(self) -> None:
@@ -2590,6 +2596,10 @@ class AreaLightingController:
         # heal command's own state echo lands inside the per-entity grace
         # window and isn't misread as a fresh divergence.
         await self._apply_light_state(entity_id, target, transition=None)
+        # A scene activated during the await has replaced the targets, and
+        # this one must not overwrite the new scene's entry.
+        if self._active_scene_targets.get(entity_id) is not target:
+            return
         self._active_scene_targets[entity_id] = {
             **target,
             "commanded_at": now,
@@ -2624,6 +2634,7 @@ class AreaLightingController:
             self._state.source.value,
         )
         self._last_motion_event = "motion_on"
+        self._motion_on_seq += 1
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
 
@@ -3016,8 +3027,31 @@ class AreaLightingController:
 
     async def _on_motion_timer(self) -> None:
         _LOGGER.debug("Area %s: motion timer expired", self.area.id)
+        motion_on_seq = self._motion_on_seq
         await self._cleanup_linked_areas()
+        if self._motion_on_seq != motion_on_seq:
+            # Motion came back while cleanup awaited, so the room is occupied.
+            return
         await self.lighting_off_fade(source=ActivationSource.MOTION)
+        if self._motion_on_seq == motion_on_seq:
+            return
+        from .event_handlers import motion_may_light
+
+        # Motion that came while the fade awaited was judged against the
+        # scene being faded and did nothing. Handle it again now that the
+        # fade is done, if a sensor still reads on, nothing else is applying
+        # a scene, and the motion handler would still accept it. A reload
+        # during the fade can remove the sensors or the handlers.
+        if (
+            self.area.event_handlers
+            and not self._activations_in_flight
+            and any(
+                (s := self.hass.states.get(sid)) is not None and s.state == STATE_ON
+                for sid in self.area.motion_light_motion_sensor_ids or ()
+            )
+            and motion_may_light(self.hass, self)
+        ):
+            await self.handle_motion_on()
 
     async def _on_occupancy_timer(self) -> None:
         _LOGGER.debug("Area %s: occupancy timer expired", self.area.id)

@@ -344,6 +344,32 @@ area_lighting from loading.
 
 ### Fixed
 
+- **`scene.<area>_off` turns off an area in ambient.** With ambience on,
+  activating the off scene through `scene.turn_on` (scripts, HomeKit,
+  Google, dashboards) put ambient straight back, because the call was
+  tracked as a user-owned off before `lighting_off` read the state. The off
+  and circadian scenes are no longer tracked, since their own handlers set
+  the state. `scene.<area>_circadian` and `area_lighting.lighting_circadian`
+  now also clear the previous scene's light targets, so the post-settle
+  check no longer restores that scene's brightness over circadian.
+
+- **Off then On in quick succession leaves the area on.** An off that
+  finished after a newer activation used to commit anyway. The lights
+  stayed on while the area read `off`, with no timer to turn them off and
+  circadian still adjusting them. The off now yields to any newer
+  activation.
+
+- **Motion during a motion timer's fade-out is not lost.** Motion that
+  arrived while the timer cleaned up linked areas or faded the room did
+  nothing, and the room went dark with someone in it. Motion during the
+  cleanup now cancels the fade. Motion during the fade is handled again once
+  it ends, if a sensor still reads on and the motion handler's switches,
+  ownership rules and conditions still allow it.
+
+- **A scene heal no longer writes over a newer scene's target.** A heal that
+  finished after another scene was activated put the old scene's target
+  back, and the post-settle check could then restore the old brightness.
+
 - **Linked motion no longer overwrites a scene chosen while it runs.**
   Motion in a `linked_motion` area decided the remote area's scene, applied
   its own lights, and only then set the remote scene. A remote press in that

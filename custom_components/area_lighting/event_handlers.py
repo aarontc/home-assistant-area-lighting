@@ -33,7 +33,7 @@ from .const import (
 from .controller import AreaLightingController
 from .models import AreaLightingConfig
 from .motion_condition import evaluate_motion_condition
-from .scene import AreaLightingScene, BehavioralScene
+from .scene import AreaLightingScene
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -400,12 +400,12 @@ def _make_scene_tracker(hass: HomeAssistant, config: AreaLightingConfig):
 
         for entity_id in entity_ids:
             entity = component.get_entity(entity_id)
-            if isinstance(entity, AreaLightingScene):
-                scene_slug = entity._scene_cfg.slug
-            elif isinstance(entity, BehavioralScene):
-                scene_slug = entity._slug
-            else:
+            # A behavioral scene (off, circadian) calls a controller method
+            # that commits its own state, and lighting_off decides from the
+            # state as it was before the call, so it is not tracked here.
+            if not isinstance(entity, AreaLightingScene):
                 continue
+            scene_slug = entity._scene_cfg.slug
             area_id = entity._area.id
             if (ctrl := controllers.get(area_id)) is None:
                 continue
@@ -611,54 +611,56 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
 # ── Motion handling ────────────────────────────────────────────────────
 
 
+def motion_may_light(hass: HomeAssistant, ctrl: AreaLightingController) -> bool:
+    """Whether motion may light the area now: the global and area switches,
+    ownership, and the area's motion conditions."""
+    toggles = hass.data.get(DOMAIN, {}).get("global")
+    if toggles is not None and not toggles.motion_lights_enabled:
+        return False
+
+    # Area motion enabled
+    if not ctrl.motion_light_enabled:
+        return False
+
+    # Gate by ownership: motion may activate lighting when the area
+    # is OFF, or retrigger an existing motion-owned scene (so the
+    # timer countdown resets). It MUST NOT hijack a user-owned
+    # scene — pressing evening on the remote should not get
+    # auto-faded by some passing motion.
+    #
+    # motion_override_ambient widens the set of "overridable"
+    # scenes to include the ambient-like ones.
+    source_is_motion = ctrl._state.source == ActivationSource.MOTION
+    if ctrl.motion_override_ambient:
+        # Allow from off, motion-owned scenes, AND ambient-like
+        if not (
+            ctrl.current_scene == "off"
+            or source_is_motion
+            or ctrl.current_scene in ("ambient", "christmas", "halloween")
+        ):
+            return False
+    else:
+        if not (ctrl.current_scene == "off" or source_is_motion):
+            return False
+
+    # Area-specific conditions
+    for cond in ctrl.area.motion_light_conditions:
+        passed = evaluate_motion_condition(cond, hass.states.get)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "Area %s: motion_condition %s → %s",
+                ctrl.area.id,
+                _format_motion_condition(cond),
+                "pass" if passed else "fail",
+            )
+        if not passed:
+            return False
+
+    return True
+
+
 def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area):
     """Handle motion sensor state changes."""
-
-    def _check_conditions() -> bool:
-        """Check global + area motion conditions."""
-        toggles = hass.data.get(DOMAIN, {}).get("global")
-        if toggles is not None and not toggles.motion_lights_enabled:
-            return False
-
-        # Area motion enabled
-        if not ctrl.motion_light_enabled:
-            return False
-
-        # Gate by ownership: motion may activate lighting when the area
-        # is OFF, or retrigger an existing motion-owned scene (so the
-        # timer countdown resets). It MUST NOT hijack a user-owned
-        # scene — pressing evening on the remote should not get
-        # auto-faded by some passing motion.
-        #
-        # motion_override_ambient widens the set of "overridable"
-        # scenes to include the ambient-like ones.
-        source_is_motion = ctrl._state.source == ActivationSource.MOTION
-        if ctrl.motion_override_ambient:
-            # Allow from off, motion-owned scenes, AND ambient-like
-            if not (
-                ctrl.current_scene == "off"
-                or source_is_motion
-                or ctrl.current_scene in ("ambient", "christmas", "halloween")
-            ):
-                return False
-        else:
-            if not (ctrl.current_scene == "off" or source_is_motion):
-                return False
-
-        # Area-specific conditions
-        for cond in area.motion_light_conditions:
-            passed = evaluate_motion_condition(cond, hass.states.get)
-            if _LOGGER.isEnabledFor(logging.DEBUG):
-                _LOGGER.debug(
-                    "Area %s: motion_condition %s → %s",
-                    ctrl.area.id,
-                    _format_motion_condition(cond),
-                    "pass" if passed else "fail",
-                )
-            if not passed:
-                return False
-
-        return True
 
     @callback
     def _handler(event: Event) -> None:
@@ -677,7 +679,7 @@ def _make_motion_handler(hass: HomeAssistant, ctrl: AreaLightingController, area
         )
 
         if new_state.state == STATE_ON and old_state.state != STATE_ON:
-            if _check_conditions():
+            if motion_may_light(hass, ctrl):
                 hass.async_create_task(ctrl.handle_motion_on())
         elif new_state.state != STATE_ON and old_state.state == STATE_ON:
             # Motion transitioned OFF (or to unknown/unavailable from ON).
