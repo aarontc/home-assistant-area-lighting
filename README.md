@@ -965,6 +965,27 @@ An area configuration generally needs to define:
 This README intentionally describes behavior first. The exact YAML or storage format can evolve as long
 as these behavioral guarantees remain true.
 
+## Fade times
+
+Scene activations and the off actions send these transitions, fractions
+included. Alert restores, scene heals and demand-response shedding send none.
+
+| What | Fade |
+| --- | --- |
+| Any scene other than off and circadian, activated with no transition from a remote, motion, the app or anywhere else | 0.5 seconds |
+| Entering circadian, a light turned on mid-circadian, a sleep change | 0.5 seconds |
+| Remote off, the off scene, and every other off that names no transition (force-off, ambience, holiday, leader, linked cleanup) | `number.<area>_manual_fadeout_seconds`, default 1.5 |
+| Motion and occupancy timer expiry | `number.<area>_motion_fadeout_seconds`, default 60, or `night_fadeout_seconds` in night mode |
+| `scene.turn_on` with `transition:` | that value, except on the off and circadian scenes, which ignore it |
+
+For example, `scene.turn_on` on `scene.den_evening` with no transition fades
+the den in over 0.5 seconds, and a Pico off fades it out over 1.5.
+
+Home Assistant's Z-Wave JS light integration cuts a transition to whole
+seconds before sending it, so a Z-Wave light switches 0.5-second fades
+instantly and fades 1.5-second ones over 1. Hue, WLED and MQTT lights keep the
+fraction.
+
 ## Entity visibility
 
 Each area gets its scenes, five switches, six timeout and fadeout numbers, a
@@ -1049,15 +1070,15 @@ only. Lights without a group are left as they are.
 `sleep_colortemp` instead of the curve while that entity's state is one of
 `sleep_state`, for example dim, warm stairs while the theater is in `movie`.
 A missing entity counts as awake. When the entity's state changes, the
-group's lights that are on get the new values with a 1-second transition.
+group's lights that are on get the new values with a half-second transition.
 
 **Updates.** Entering circadian sends every grouped light outside a kelvin
-route the current values with a 1-second transition, which also turns on
+route the current values with a half-second transition, which also turns on
 the ones that were off. After that, every `interval` seconds (default 300)
 the grouped lights that are on get the current values, fading over
 `transition` seconds (default 60). Lights that are off stay off. A grouped
 light that comes on (from off, `unavailable` or `unknown`) gets the current
-values with a 1-second transition. A brightness percentage `b` is sent as
+values with a half-second transition. A brightness percentage `b` is sent as
 `brightness: round(b * 2.55)`, between 1 and 255.
 
 **Leaving circadian.** Updates stop when the area leaves `circadian` for

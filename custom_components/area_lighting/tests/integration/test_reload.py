@@ -136,7 +136,7 @@ async def test_reload_applies_a_new_light_list(
 
     assert [light.id for light in ctrl.area.lights] == [LIGHT_1, LIGHT_2, LIGHT_3]
     assert _turn_ons(service_calls) == {
-        LIGHT_3: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+        LIGHT_3: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 0.5}
     }
 
 
@@ -213,7 +213,7 @@ async def test_reload_applies_group_bounds_and_sleep_options(
     hass.states.async_set(SLEEP_ENTITY, "off")
     await hass.async_block_till_done()
     assert _turn_ons(service_calls) == {
-        LIGHT_2: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+        LIGHT_2: {"brightness": 255, "color_temp_kelvin": 4000, "transition": 0.5}
     }
 
 

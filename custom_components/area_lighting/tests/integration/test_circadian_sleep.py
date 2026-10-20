@@ -100,11 +100,11 @@ async def test_sleeping_group_uses_sleep_brightness_and_colortemp(
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
 
-    assert _turn_ons(service_calls)[MAIN] == {**SLEEP_PAYLOAD, "transition": 1}
+    assert _turn_ons(service_calls)[MAIN] == {**SLEEP_PAYLOAD, "transition": 0.5}
 
 
 @pytest.mark.integration
-async def test_sleep_entity_change_updates_group_with_one_second_transition(
+async def test_sleep_entity_change_updates_group_with_half_second_transition(
     hass: HomeAssistant, helper_entities, service_calls, pin_circadian
 ) -> None:
     hass.states.async_set(SLEEP_ENTITY, "awake")
@@ -115,7 +115,7 @@ async def test_sleep_entity_change_updates_group_with_one_second_transition(
     hass.states.async_set(SLEEP_ENTITY, "sleep")
     await hass.async_block_till_done()
 
-    assert _turn_ons(service_calls) == {MAIN: {**SLEEP_PAYLOAD, "transition": 1}}
+    assert _turn_ons(service_calls) == {MAIN: {**SLEEP_PAYLOAD, "transition": 0.5}}
 
 
 @pytest.mark.integration
@@ -144,7 +144,7 @@ async def test_missing_sleep_entity_means_awake(
     await ctrl.lighting_circadian()
     await hass.async_block_till_done()
 
-    assert _turn_ons(service_calls)[MAIN] == {**AWAKE_PAYLOAD, "transition": 1}
+    assert _turn_ons(service_calls)[MAIN] == {**AWAKE_PAYLOAD, "transition": 0.5}
 
 
 @pytest.mark.integration
@@ -159,8 +159,8 @@ async def test_sleep_applies_only_to_its_group(
     await hass.async_block_till_done()
 
     assert _turn_ons(service_calls) == {
-        MAIN: {**SLEEP_PAYLOAD, "transition": 1},
-        OTHER: {**AWAKE_PAYLOAD, "transition": 1},
+        MAIN: {**SLEEP_PAYLOAD, "transition": 0.5},
+        OTHER: {**AWAKE_PAYLOAD, "transition": 0.5},
     }
 
 

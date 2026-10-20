@@ -50,8 +50,10 @@ DEFAULT_CIRCADIAN_MIN_COLORTEMP = 2500
 DEFAULT_CIRCADIAN_MAX_COLORTEMP = 5500
 DEFAULT_CIRCADIAN_INTERVAL_SECONDS = 300
 DEFAULT_CIRCADIAN_TRANSITION_SECONDS = 60
+# Fade for a scene activation that names none, turning on or off within it.
+DEFAULT_ON_TRANSITION_SECONDS = 0.5
 # Fade for a light brought into circadian (activation, demand-response relight).
-CIRCADIAN_INITIAL_TRANSITION_SECONDS = 1
+CIRCADIAN_INITIAL_TRANSITION_SECONDS = DEFAULT_ON_TRANSITION_SECONDS
 # A tick skips a light commanded this recently: its state is still settling.
 CIRCADIAN_COMMAND_ECHO_SECONDS = 5
 # Longest an alert's end waits for a circadian tick still sending commands.

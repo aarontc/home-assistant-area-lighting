@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
-from .const import DOMAIN
+from .const import DEFAULT_ON_TRANSITION_SECONDS, DOMAIN
 from .light_targets import light_turn_on_data
 from .models import AreaConfig, SceneConfig
 from .scene_storage import SceneStorage
@@ -110,6 +110,8 @@ class AreaLightingScene(Scene):
         Priority: stored snapshot > config entities > skeleton defaults.
         """
         transition = kwargs.get("transition")
+        if transition is None:
+            transition = DEFAULT_ON_TRANSITION_SECONDS
         _LOGGER.debug(
             "Area %s: activating scene %s (has_stored=%s, has_config=%s)",
             self._area.id,

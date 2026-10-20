@@ -200,7 +200,7 @@ async def _execute_steps(
 def _step_state_dict(step: AlertStep) -> dict[str, Any]:
     """Build the target state dict for an alert step."""
     if step.state == "off":
-        return {"state": "off"}
+        return {"state": "off", "transition": 0 if step.transition is None else step.transition}
     d: dict[str, Any] = {"state": "on", "transition": 0}
     if step.brightness is not None:
         d["brightness"] = step.brightness
@@ -242,7 +242,10 @@ async def _apply_batch(
         if state_dict.get("state") == "off":
             calls.append(
                 hass.services.async_call(
-                    "light", "turn_off", {"entity_id": entity_id}, blocking=True
+                    "light",
+                    "turn_off",
+                    {"entity_id": entity_id, "transition": state_dict["transition"]},
+                    blocking=True,
                 )
             )
         else:

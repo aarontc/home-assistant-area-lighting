@@ -12,7 +12,7 @@ from custom_components.area_lighting.const import DOMAIN
 from custom_components.area_lighting.global_state import GlobalToggles
 
 NETWORK_LIGHTS = ("light.network_room_overhead_1", "light.network_room_overhead_2")
-PAYLOAD = {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+PAYLOAD = {"brightness": 255, "color_temp_kelvin": 4000, "transition": 0.5}
 
 
 async def _setup(hass: HomeAssistant, cfg: dict) -> None:

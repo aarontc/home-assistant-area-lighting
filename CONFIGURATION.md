@@ -126,7 +126,7 @@ Brightness follows the curve only at night. Between sunrise and sunset it is
 at sunset to `min_brightness` at solar midnight and climbs back by sunrise.
 
 A change in the state of `sleep_entity` re-sends the group's lights that are
-on, with a 1-second transition. Attribute-only changes are ignored.
+on, with a half-second transition. Attribute-only changes are ignored.
 
 Validation rejects two groups with the same name in one area, and
 `min_brightness` above `max_brightness`. The 2.x key `circadian_switches` is
@@ -493,7 +493,7 @@ circadian:
 | `min_colortemp` | int, `1000..10000`  | `2500`  | Kelvin from sunset to sunrise. Must not be above `max_colortemp`. |
 | `max_colortemp` | int, `1000..10000`  | `5500`  | Kelvin at solar noon. |
 | `interval`      | int seconds, `>= 1` | `300`   | Time between periodic updates of the circadian lights and of `sensor.area_lighting_circadian`. |
-| `transition`    | float seconds, `0..6553` | `60` | Fade time of each periodic update. Entering circadian, a light turning on and a sleep change use 1 second instead. |
+| `transition`    | float seconds, `0..6553` | `60` | Fade time of each periodic update. Entering circadian, a light turning on and a sleep change use 0.5 seconds instead. |
 
 The curve's percent runs from -100 at solar midnight through 0 at sunrise
 and sunset to +100 at solar noon. Sun times come from Home Assistant's

@@ -59,10 +59,10 @@ async def test_active_scene_targets_record_commanded_at_and_transition(
 
 
 @pytest.mark.integration
-async def test_active_scene_targets_record_zero_transition_when_unset(
+async def test_active_scene_targets_record_default_transition_when_unset(
     hass: HomeAssistant, helper_entities, network_room_config
 ) -> None:
-    """A scene activation without a transition records transition=0."""
+    """A scene activation without a transition records the 0.5 s default."""
     await _setup(hass, network_room_config)
     ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
 
@@ -70,7 +70,7 @@ async def test_active_scene_targets_record_zero_transition_when_unset(
 
     assert ctrl._active_scene_targets
     for target in ctrl._active_scene_targets.values():
-        assert target["transition"] == pytest.approx(0.0)
+        assert target["transition"] == pytest.approx(0.5)
 
 
 @pytest.mark.integration

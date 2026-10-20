@@ -32,6 +32,7 @@ from .const import (
     CIRCADIAN_DAYLIGHT_ENABLED_ENTITY,
     CIRCADIAN_INITIAL_TRANSITION_SECONDS,
     CIRCADIAN_SETTLE_SECONDS,
+    DEFAULT_ON_TRANSITION_SECONDS,
     DOMAIN,
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
@@ -984,6 +985,8 @@ class AreaLightingController:
 
         if scene_slug == SCENE_OFF_INTERNAL:
             self._stop_circadian()
+            if transition is None:
+                transition = self._manual_fade_seconds()
             await self._turn_off_all_lights(transition)
             if self._closed:
                 return
@@ -1016,6 +1019,8 @@ class AreaLightingController:
         # Visual scene → stop the circadian adjuster first so its ticks stop
         # overriding the scene's color/brightness, then apply + transition.
         self._stop_circadian()
+        if transition is None:
+            transition = DEFAULT_ON_TRANSITION_SECONDS
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
@@ -1314,7 +1319,7 @@ class AreaLightingController:
                     continue
                 svc_data: dict[str, Any] = {"entity_id": light.id}
                 if transition is not None:
-                    svc_data["transition"] = int(transition)
+                    svc_data["transition"] = transition
                 if light.in_scene(scene_slug) and light.id not in shed:
                     tasks.append(self._call_service("light.turn_on", **svc_data))
                 else:
@@ -1331,7 +1336,7 @@ class AreaLightingController:
         target_state = state_data.get("state", "off")
         svc_data: dict[str, Any] = {"entity_id": entity_id}
         if transition is not None:
-            svc_data["transition"] = int(transition)
+            svc_data["transition"] = transition
 
         if target_state == "on":
             svc_data.update(light_turn_on_data(state_data))
@@ -1603,7 +1608,7 @@ class AreaLightingController:
         for light in self.area.all_lights:
             data: dict[str, Any] = {"entity_id": light.id}
             if transition is not None:
-                data["transition"] = int(transition)
+                data["transition"] = transition
             tasks.append(self._call_service("light.turn_off", **data))
         if tasks:
             await asyncio.gather(*tasks)
@@ -2461,7 +2466,9 @@ class AreaLightingController:
         else:
             self._stop_circadian()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
-            self._stamp_targets_with_command_metadata(transition)
+            self._stamp_targets_with_command_metadata(
+                DEFAULT_ON_TRANSITION_SECONDS if transition is None else transition
+            )
             self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
         self._notify_state_change()

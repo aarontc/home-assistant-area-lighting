@@ -7,6 +7,19 @@ readable companion that highlights user-facing changes.
 
 ## Unreleased
 
+### Changed
+
+- **Activations fade in over 0.5 seconds by default.** A scene activation
+  that names no transition, from a remote, motion, the app or a service,
+  used to send none, so each bulb used its own default. It now sends 0.5
+  seconds. Lights coming into circadian (entering circadian, a light turned
+  on mid-circadian, a sleep change) also fade over 0.5 seconds instead of 1.
+
+- **An off that names no transition uses the area's off fade.** Force-off,
+  ambience, holiday, leader and linked-motion offs now fade over
+  `number.<area>_manual_fadeout_seconds` (default 1.5) instead of the bulb's
+  default.
+
 ### Built-in circadian lighting and reload (3.0.0)
 
 area_lighting now computes circadian brightness and color temperature itself
@@ -343,6 +356,12 @@ area_lighting from loading.
   makes `lower` from a dark area light the room (previously a no-op).
 
 ### Fixed
+
+- **Fade times are no longer cut to whole seconds.** Turning lights off,
+  scene activations and kelvin route crossfades sent `int(transition)`, so
+  the default 1.5-second off fade reached the lights as 1 second, and a
+  2.5-second motion fade as 2. Fades are now sent as given. Alert `off`
+  steps now send their `transition`, 0 when unset like `on` steps.
 
 - **A manual change cancels the motion timers.** Picking a scene on a Pico,
   in the app or on a dashboard, using the scene select, raise or lower, an

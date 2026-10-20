@@ -271,7 +271,7 @@ class CircadianKelvinRouter:
                 len(on_calls_to_issue),
             )
 
-            crossfade = int(self._config.crossfade_seconds)
+            crossfade = self._config.crossfade_seconds
             if ctrl is None:
                 await asyncio.gather(
                     *(

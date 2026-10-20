@@ -85,7 +85,7 @@ def _stub_off(hass: HomeAssistant, *entity_ids: str) -> None:
 
 
 @pytest.mark.integration
-async def test_activation_sends_payload_with_one_second_transition(
+async def test_activation_sends_payload_with_half_second_transition(
     hass: HomeAssistant, helper_entities, network_room_config, service_calls, pin_circadian
 ) -> None:
     await pin_circadian(50, 4000, tick=False)
@@ -94,7 +94,7 @@ async def test_activation_sends_payload_with_one_second_transition(
 
     await _circadian(hass, "network_room")
 
-    expected = {"brightness": 255, "color_temp_kelvin": 4000, "transition": 1}
+    expected = {"brightness": 255, "color_temp_kelvin": 4000, "transition": 0.5}
     assert _turn_ons(service_calls) == dict.fromkeys(NETWORK_LIGHTS, expected)
 
 
@@ -277,7 +277,7 @@ async def test_rgb_light_gets_rgb_color(
 
     rgb = tuple(round(c) for c in color_temperature_to_rgb(4000))
     assert _turn_ons(service_calls) == {
-        "light.den_strip": {"brightness": 255, "rgb_color": rgb, "transition": 1}
+        "light.den_strip": {"brightness": 255, "rgb_color": rgb, "transition": 0.5}
     }
 
 
@@ -292,7 +292,7 @@ async def test_brightness_light_gets_brightness_only(
 
     await _circadian(hass, "den")
 
-    assert _turn_ons(service_calls) == {"light.den_lamp": {"brightness": 255, "transition": 1}}
+    assert _turn_ons(service_calls) == {"light.den_lamp": {"brightness": 255, "transition": 0.5}}
 
 
 @pytest.mark.integration
