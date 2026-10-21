@@ -57,7 +57,7 @@
     },
     "lighting_raise": {
       "name": "Raise area brightness",
-      "description": "Raises brightness of the lights that are currently on in the area by the configured brightness step percentage. Marks the area as dimmed without losing its scene identity.",
+      "description": "Raises the lights that are on in the area. The brightest moves up by the area's brightness step and the others keep their brightness relative to it. In a dark area, turns the remembered scene's lights on at the step level. Marks the area as dimmed without losing its scene identity.",
       "fields": {
         "area_id": {
           "name": "Area ID",
@@ -67,7 +67,7 @@
     },
     "lighting_lower": {
       "name": "Lower area brightness",
-      "description": "Lowers brightness of the lights that are currently on in the area by the configured brightness step percentage. Marks the area as dimmed without losing its scene identity. No-op when the area is off.",
+      "description": "Lowers the lights that are on in the area. The brightest moves down by the area's brightness step and the others keep their brightness relative to it, and once the brightest would reach zero they all turn off. In a dark area, turns the remembered scene's lights on at the step level, as raise does. Marks the area as dimmed without losing its scene identity.",
       "fields": {
         "area_id": {
           "name": "Area ID",

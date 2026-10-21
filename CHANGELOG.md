@@ -7,6 +7,12 @@ readable companion that highlights user-facing changes.
 
 ## Unreleased
 
+### Fixed
+
+- **The raise and lower service descriptions match what they do.** They
+  described a fixed percentage step, and said lower does nothing in a
+  dark area, where it lights the remembered scene at the step level.
+
 ### Changed
 
 - **Raise and lower keep the lights in proportion.** A press used to move
