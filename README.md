@@ -267,9 +267,24 @@ brightness applied to every member — which would switch the dark members on
 and flatten the lit ones to one level. Members of a zone are therefore
 stepped one by one, and each keeps its own brightness relative to the others.
 
+A press moves the brightest lit bulb by the step, 12% of full brightness, and
+scales every other lit bulb by the same factor. A room with an overhead at 98%
+and vanities at 50% goes to 86% and 44% on one lower press, not 86% and 38%,
+so all its lights dim together and reach off on the same press. Once the
+brightest bulb reaches 100%, further raise presses keep raising the dimmer
+ones. A bulb that
+reports no brightness, such as an on/off light, still gets a plain 12% step.
+
+A press steps from the level area_lighting last sent a bulb when the bulb has
+not yet reported it, for up to 5 seconds and until the next scene activation.
+Hue bulbs can take over a second to report, and a quick second press used to
+step from the old level and change nothing. Presses run one at a time, so
+their commands reach the bulbs in order. A press waits at most 10 seconds for
+the one before it, and after that order is not guaranteed.
+
 Behavior:
 
-1. If any lights are on, increase the brightness of just those lights by 12.5%; lights that are off stay off
+1. If any lights are on, raise just those lights, the brightest by 12% of full brightness and the rest in proportion; lights that are off stay off
 2. If no lights are on, restore the remembered scene (or the default on-scene) for color and next-`on`-press context, then bring that scene's lights up to 12.5% (the minimum) and mark the area `dimmed`. The remembered scene survives the room going dark, so a room that was showing `evening` when it turned off comes back to `evening` rather than to the default on-scene. Turning off from `manual` records nothing to restore
 3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
@@ -290,7 +305,7 @@ Status: `Implemented`
 
 Behavior:
 
-1. If any lights are on, decrease the brightness of just those lights by 12.5%; lights that are off stay off
+1. If any lights are on, lower just those lights, the brightest by 12% of full brightness and the rest in proportion; lights that are off stay off. A press that takes the brightest to 0 turns them all off
 2. If no lights are on, behave exactly like `raise` from a dark area: restore the scene and bring every area light up to the minimum (12.5%). (Previously `lower` from a dark area was a no-op.)
 3. From `circadian` (with lights on), disengage circadian control before stepping brightness
 4. From scene-based states other than `manual`, mark the area as `dimmed`
@@ -400,7 +415,7 @@ flowchart TD
     N -->|No| P[No action]
 
     B -->|Raise or Lower| Q{Any lights currently on?}
-    Q -->|Yes| R["Step only the on lights: raise +12.5%, lower -12.5%"]
+    Q -->|Yes| R["Step only the on lights: brightest +/-12%, the rest in proportion"]
     R --> S{Known scene?}
     S -->|Yes| T[Mark dimmed]
     S -->|No, manual| U[Remain manual]

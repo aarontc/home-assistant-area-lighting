@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, NamedTuple
 
 from homeassistant.const import STATE_ON
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
@@ -28,6 +28,8 @@ from .const import (
     AMBIENT_ZONE_ENTITY_PREFIX,
     AMBIENT_ZONE_ENTITY_SUFFIX,
     BRIGHTNESS_STEP_DEFAULT,
+    BRIGHTNESS_STEP_LOCK_TIMEOUT_SECONDS,
+    BRIGHTNESS_STEP_REPORT_GRACE_SECONDS,
     CIRCADIAN_COMMAND_ECHO_SECONDS,
     CIRCADIAN_DAYLIGHT_ENABLED_ENTITY,
     CIRCADIAN_INITIAL_TRANSITION_SECONDS,
@@ -81,6 +83,18 @@ class _LinkedActivation(NamedTuple):
     remote_scene: str
     resolved_from: str
     remote_activation_seq: int
+
+
+class _BrightnessStep(NamedTuple):
+    """A raise/lower step sent to one bulb."""
+
+    # Levels the steps since the bulb last reported something new replaced.
+    replaced: frozenset[int | None]
+    level: int
+    sent_at: float
+    # The area's _activation_seq when sent. Any activation since replaces
+    # the bulb's level, so the step no longer describes it.
+    activation_seq: int
 
 
 class AreaLightingController:
@@ -237,6 +251,13 @@ class AreaLightingController:
         # for its route commands to land before the router re-reads the lights.
         self._circadian_tick_done: asyncio.Future[None] | None = None
         self._circadian_commanded_at: dict[str, float] = {}
+        # The last raise/lower step sent to each bulb. The next press steps
+        # from its level while the bulb still reports a level the step
+        # replaced.
+        self._brightness_steps_sent: dict[str, _BrightnessStep] = {}
+        self._brightness_step_lock = asyncio.Lock()
+        self._brightness_step_unsub: Callable[[], None] | None = None
+        self._brightness_step_listened_ids: list[str] = []
 
         self._kelvin_router = self._build_kelvin_router()
 
@@ -1969,20 +1990,142 @@ class AreaLightingController:
             if (st := self.hass.states.get(entity_id)) and st.state == "on"
         ]
 
+    @staticmethod
+    def _reported_level(st: State | None) -> int | None:
+        """A bulb's reported brightness, 0 when it is not on, and None when it
+        is on but reports no brightness, as an on/off light does."""
+        if st is None or st.state != STATE_ON:
+            return 0
+        return st.attributes.get("brightness")
+
+    def _stepping_brightness(
+        self, entity_id: str, now: float
+    ) -> tuple[int | None, frozenset[int | None]]:
+        """The level a raise/lower press steps a lit bulb from, and the levels
+        a step from it replaces.
+
+        The level is the bulb's reported one, unless this controller sent it a
+        step within BRIGHTNESS_STEP_REPORT_GRACE_SECONDS, with no activation
+        since, and the bulb still reports a level from before that step. Then
+        the reports are in flight and the level sent is the better guess. Two
+        quick presses can both land before the first report, which is why
+        every level the chain of steps has replaced counts as stale, not just
+        the last.
+        """
+        reported = self._reported_level(self.hass.states.get(entity_id))
+        sent = self._brightness_steps_sent.get(entity_id)
+        if (
+            sent is not None
+            and sent.activation_seq == self._activation_seq
+            and now - sent.sent_at < BRIGHTNESS_STEP_REPORT_GRACE_SECONDS
+            and reported in sent.replaced
+        ):
+            return sent.level, sent.replaced | {sent.level}
+        return reported, frozenset({reported})
+
+    def _lit_light_levels(
+        self, now: float
+    ) -> tuple[dict[str, tuple[int, frozenset[int | None]]], list[str]]:
+        """The lit bulbs a press steps, as {entity: (level, replaced)} for
+        bulbs with a brightness, and a list of those without one. A bulb that
+        still reports on after a step turned it off is left out of both.
+        """
+        levels: dict[str, tuple[int, frozenset[int | None]]] = {}
+        unlevelled: list[str] = []
+        for entity_id in self._on_light_entity_ids():
+            level, replaced = self._stepping_brightness(entity_id, now)
+            if level is None:
+                unlevelled.append(entity_id)
+            elif level > 0:
+                levels[entity_id] = (level, replaced)
+        return levels, unlevelled
+
+    @callback
+    def _on_brightness_step_report(self, event: Event[EventStateChangedData]) -> None:
+        """Forget a bulb's step once the bulb reports anything but a level the
+        step replaced: the level sent, or one someone else set."""
+        entity_id = event.data["entity_id"]
+        sent = self._brightness_steps_sent.get(entity_id)
+        if sent is not None and self._reported_level(event.data["new_state"]) not in sent.replaced:
+            del self._brightness_steps_sent[entity_id]
+
+    def _listen_for_brightness_step_reports(self) -> None:
+        """Follow the area's bulbs, again whenever a reload changes them."""
+        entity_ids = self._individual_light_ids()
+        if self._closed or entity_ids == self._brightness_step_listened_ids:
+            return
+        if self._brightness_step_unsub is not None:
+            self._brightness_step_unsub()
+        self._brightness_step_unsub = async_track_state_change_event(
+            self.hass, entity_ids, self._on_brightness_step_report
+        )
+        self._brightness_step_listened_ids = entity_ids
+
+    async def _send_brightness_step(self, entity_id: str, step: _BrightnessStep) -> None:
+        """Send one bulb's step, and forget it if the command fails, so the
+        next press steps from what the bulb reports."""
+        self._brightness_steps_sent[entity_id] = step
+        try:
+            if step.level == 0:
+                await self._call_service("light.turn_off", entity_id=entity_id)
+            else:
+                await self._call_service(
+                    "light.turn_on", entity_id=entity_id, brightness=step.level
+                )
+        except Exception:
+            if self._brightness_steps_sent.get(entity_id) is step:
+                del self._brightness_steps_sent[entity_id]
+            raise
+
+    @staticmethod
+    async def _send_brightness_commands(calls: list[Awaitable[None]]) -> None:
+        """Wait for every command of a press, then raise the first failure.
+
+        Raising as soon as one fails would release the press lock while the
+        others are still in flight, and the next press's commands could then
+        land before them.
+        """
+        results = await asyncio.gather(*calls, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
     async def _step_on_lights_pct(self, delta_pct: int) -> None:
-        """Apply brightness_step_pct to every currently-on light in the area."""
-        entity_ids = self._on_light_entity_ids()
-        if entity_ids:
-            await asyncio.gather(
-                *[
-                    self._call_service(
-                        "light.turn_on",
-                        entity_id=entity_id,
-                        brightness_step_pct=delta_pct,
-                    )
-                    for entity_id in entity_ids
-                ]
+        """Step every currently-on light in the area by one press.
+
+        The brightest lit bulb moves by delta_pct of full brightness, and every
+        other lit bulb is scaled by the same factor, so the area dims and
+        brightens as one and the lights keep their brightness relative to each
+        other. A fixed step for every bulb would take most of the light out of
+        a dim bulb while barely touching a bright one. Each level is clamped to
+        1..255, except that a lower press that takes the brightest bulb to 0
+        turns every lit bulb off, as the fixed step did. Bulbs that report no
+        brightness still get a plain brightness_step_pct.
+        """
+        now = time.monotonic()
+        levels, unlevelled = self._lit_light_levels(now)
+        self._listen_for_brightness_step_reports()
+        calls = [
+            self._call_service("light.turn_on", entity_id=entity_id, brightness_step_pct=delta_pct)
+            for entity_id in unlevelled
+        ]
+        if levels:
+            brightest = max(level for level, _ in levels.values())
+            target = brightest + round(255 * delta_pct / 100)
+            factor = max(0, target) / brightest
+            _LOGGER.debug(
+                "Area %s: brightness step delta_pct=%s brightest=%s factor=%.3f",
+                self.area.id,
+                delta_pct,
+                brightest,
+                factor,
             )
+            for entity_id, (level, replaced) in levels.items():
+                new_level = 0 if target <= 0 else max(1, min(255, round(level * factor)))
+                step = _BrightnessStep(replaced, new_level, now, self._activation_seq)
+                calls.append(self._send_brightness_step(entity_id, step))
+        if calls:
+            await self._send_brightness_commands(calls)
 
     def _scene_bulb_ids(self, scene_slug: str) -> list[str]:
         """The physical bulbs a scene turns on, in a deterministic order.
@@ -2368,9 +2511,33 @@ class AreaLightingController:
           context. Raise and lower behave identically here.
         """
         self._manual_takeover()
+        # Presses run one at a time, so their commands land in order. A press
+        # whose commands never return must not hold up every later one, so the
+        # wait is bounded.
+        try:
+            async with asyncio.timeout(BRIGHTNESS_STEP_LOCK_TIMEOUT_SECONDS):
+                await self._brightness_step_lock.acquire()
+            locked = True
+        except TimeoutError:
+            _LOGGER.warning(
+                "Area %s: previous raise/lower still running after %s s, not waiting for it",
+                self.area.id,
+                BRIGHTNESS_STEP_LOCK_TIMEOUT_SECONDS,
+            )
+            locked = False
+        try:
+            # Again, for whatever started while this press waited its turn.
+            self._manual_takeover()
+            await self._adjust_brightness_locked(sign)
+        finally:
+            if locked:
+                self._brightness_step_lock.release()
+
+    async def _adjust_brightness_locked(self, sign: int) -> None:
         step = self._brightness_step_pct()
 
-        if not self._on_light_entity_ids():
+        levels, unlevelled = self._lit_light_levels(time.monotonic())
+        if not levels and not unlevelled:
             await self._bring_dark_area_to_min(step)
             return
 
@@ -3214,3 +3381,7 @@ class AreaLightingController:
             self._lights_off_recheck_handle.cancel()
             self._lights_off_recheck_handle = None
         self._stop_circadian()
+        if self._brightness_step_unsub is not None:
+            self._brightness_step_unsub()
+            self._brightness_step_unsub = None
+            self._brightness_step_listened_ids = []

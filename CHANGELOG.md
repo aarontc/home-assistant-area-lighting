@@ -9,6 +9,20 @@ readable companion that highlights user-facing changes.
 
 ### Changed
 
+- **Raise and lower keep the lights in proportion.** A press used to move
+  every lit bulb by 12 points, which took most of the light out of a dim
+  bulb and barely touched a bright one. Three lower presses took a
+  bathroom's vanities from 50% to 14% and its overhead only from 98% to
+  62%. Now the brightest lit bulb moves 12 points and the others scale by
+  the same factor, so the room dims as one and every light reaches off on
+  the same press.
+
+- **A quick second press is no longer lost.** Each press stepped from the
+  bulb's reported level, and a Hue bulb can take over a second to report.
+  A press inside that gap stepped from the old level and changed nothing.
+  A press now steps from the level it last sent while that report is still
+  outstanding, for up to 5 seconds.
+
 - **Activations fade in over 0.5 seconds by default.** A scene activation
   that names no transition, from a remote, motion, the app or a service,
   used to send none, so each bulb used its own default. It now sends 0.5

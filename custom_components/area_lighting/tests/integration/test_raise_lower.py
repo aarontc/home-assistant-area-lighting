@@ -36,11 +36,20 @@ def _ids_set_to_min(service_calls: list) -> set[str]:
 
 
 def _stepped_ids(service_calls: list) -> set[str]:
-    """Entity IDs that received a relative brightness step."""
+    """Entity IDs that a raise/lower press stepped to a new level."""
     return {
         c.data.get("entity_id")
         for c in _light_turn_on_calls(service_calls)
-        if c.data.get("brightness_step_pct", 0) != 0
+        if "brightness" in c.data or c.data.get("brightness_step_pct", 0) != 0
+    }
+
+
+def _levels_sent(service_calls: list) -> dict[str, int]:
+    """The absolute brightness each light.turn_on call sent, by entity ID."""
+    return {
+        c.data["entity_id"]: c.data["brightness"]
+        for c in _light_turn_on_calls(service_calls)
+        if "brightness" in c.data
     }
 
 
@@ -98,12 +107,7 @@ async def test_lighting_lower_only_dims_currently_on_lights(
     service_calls.clear()
     await ctrl.lighting_lower()
 
-    stepped_ids = {
-        c.data.get("entity_id")
-        for c in _light_turn_on_calls(service_calls)
-        if c.data.get("brightness_step_pct", 0) != 0
-    }
-    assert stepped_ids == {"light.network_room_overhead_1"}
+    assert _stepped_ids(service_calls) == {"light.network_room_overhead_1"}
     # The off light is left off, not brought up to min.
     assert "light.network_room_overhead_2" not in _ids_set_to_min(service_calls)
 
@@ -123,12 +127,9 @@ async def test_lighting_raise_from_scene_steps_on_lights(
     service_calls.clear()
     await ctrl.lighting_raise()
 
-    on_calls = _light_turn_on_calls(service_calls)
-    stepped_ids = {
-        c.data.get("entity_id") for c in on_calls if c.data.get("brightness_step_pct", 0) > 0
-    }
-    assert "light.network_room_overhead_1" in stepped_ids
-    assert "light.network_room_overhead_2" in stepped_ids
+    levels = _levels_sent(service_calls)
+    assert levels["light.network_room_overhead_1"] > 128
+    assert levels["light.network_room_overhead_2"] > 128
     assert ctrl._state.dimmed
     assert ctrl._state.previous_scene == "evening"
 
@@ -149,12 +150,7 @@ async def test_lighting_raise_only_dims_currently_on_lights(
     service_calls.clear()
     await ctrl.lighting_raise()
 
-    stepped_ids = {
-        c.data.get("entity_id")
-        for c in _light_turn_on_calls(service_calls)
-        if c.data.get("brightness_step_pct", 0) != 0
-    }
-    assert stepped_ids == {"light.network_room_overhead_1"}
+    assert _stepped_ids(service_calls) == {"light.network_room_overhead_1"}
 
 
 @pytest.mark.integration
@@ -609,6 +605,447 @@ async def test_raise_treats_a_cluster_with_all_members_off_as_dark(
     service_calls.clear()
     await ctrl.lighting_raise()
 
-    assert _stepped_ids(service_calls) == set()
+    # Only the dark-area path's minimum level is sent, and never to the zone.
+    assert set(_levels_sent(service_calls).values()) == {MIN_BRIGHTNESS}
+    assert ZONE not in _commanded_ids(service_calls)
     assert {"light.den_a", "light.den_b"} <= _ids_set_to_min(service_calls)
     assert ctrl._state.dimmed
+
+
+# ── Proportional stepping ───────────────────────────────────────────────
+#
+# A press moves the brightest lit bulb by the step and scales the others by
+# the same factor, so the lights keep their brightness relative to each
+# other. A fixed step took a 2:1 overhead and vanity to 158 and 36 in three
+# presses.
+
+STEP = round(255 * BRIGHTNESS_STEP_DEFAULT / 100)
+
+
+def _press_from(levels: dict[str, int], delta: int) -> dict[str, int]:
+    brightest = max(levels.values())
+    factor = max(0, brightest + delta) / brightest
+    return {eid: max(1, min(255, round(level * factor))) for eid, level in levels.items()}
+
+
+@pytest.mark.integration
+async def test_lower_scales_every_light_by_the_brightest_lights_step(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 250})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 127})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    levels = _levels_sent(service_calls)
+    assert levels["light.network_room_overhead_1"] == 250 - STEP
+    assert levels["light.network_room_overhead_2"] == round(127 * (250 - STEP) / 250)
+
+
+@pytest.mark.integration
+async def test_raise_caps_at_full_and_keeps_raising_the_dimmer_light(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 250})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 100})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    service_calls.clear()
+    await ctrl.lighting_raise()
+
+    levels = _levels_sent(service_calls)
+    assert levels["light.network_room_overhead_1"] == 255
+    assert levels["light.network_room_overhead_2"] == round(100 * (250 + STEP) / 250)
+
+
+@pytest.mark.integration
+async def test_lower_past_the_bottom_turns_every_lit_light_off(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": STEP})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 3})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    turned_off = {
+        c.data["entity_id"]
+        for c in service_calls
+        if c.domain == "light" and c.service == "turn_off"
+    }
+    assert turned_off == {"light.network_room_overhead_1", "light.network_room_overhead_2"}
+    assert not _levels_sent(service_calls)
+
+
+@pytest.mark.integration
+async def test_a_press_before_the_bulb_reports_steps_from_the_level_sent(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Two quick presses step twice even though no bulb has reported yet."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 250, "light.network_room_overhead_2": 127}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_lower()
+    service_calls.clear()
+    # The test's light.turn_on is a mock, so the states still report `start`.
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(_press_from(start, -STEP), -STEP)
+
+
+@pytest.mark.integration
+async def test_three_presses_step_three_times_whichever_reports_have_landed(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """The first press's report lands between the second and third press.
+
+    It shows a level the second press already replaced, so the third press
+    must still step from the second press's level.
+    """
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 250, "light.network_room_overhead_2": 127}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    first = _press_from(start, -STEP)
+    second = _press_from(first, -STEP)
+    await ctrl.lighting_lower()
+    await ctrl.lighting_lower()
+    for eid, level in first.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(second, -STEP)
+
+
+@pytest.mark.integration
+async def test_three_presses_before_any_report_step_three_times(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 250, "light.network_room_overhead_2": 127}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_lower()
+    await ctrl.lighting_lower()
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    expected = _press_from(_press_from(_press_from(start, -STEP), -STEP), -STEP)
+    assert _levels_sent(service_calls) == expected
+
+
+@pytest.mark.integration
+async def test_a_reported_change_from_elsewhere_wins_over_the_level_sent(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Once a bulb reports a level other than the one before the press, the
+    next press steps from that report, whoever set it."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 200})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_lower()
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 60})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": 60})
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(
+        {"light.network_room_overhead_1": 60, "light.network_room_overhead_2": 60}, -STEP
+    )
+
+
+@pytest.mark.integration
+async def test_the_level_sent_expires_after_the_report_grace(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, monkeypatch
+) -> None:
+    """A bulb that never reports goes back to its reported level after the grace."""
+    import custom_components.area_lighting.controller as controller_module
+    from custom_components.area_lighting.const import BRIGHTNESS_STEP_REPORT_GRACE_SECONDS
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 250, "light.network_room_overhead_2": 127}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    clock = [1000.0]
+    monkeypatch.setattr(controller_module.time, "monotonic", lambda: clock[0])
+    await ctrl.lighting_lower()
+    clock[0] += BRIGHTNESS_STEP_REPORT_GRACE_SECONDS
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(start, -STEP)
+
+
+@pytest.mark.integration
+async def test_a_light_without_brightness_still_gets_a_plain_step(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": 200})
+    hass.states.async_set("light.network_room_overhead_2", "on", {})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    plain = {
+        c.data["entity_id"]: c.data["brightness_step_pct"]
+        for c in _light_turn_on_calls(service_calls)
+        if "brightness_step_pct" in c.data
+    }
+    assert plain == {"light.network_room_overhead_2": -BRIGHTNESS_STEP_DEFAULT}
+    assert _levels_sent(service_calls) == {"light.network_room_overhead_1": 200 - STEP}
+
+
+@pytest.mark.integration
+async def test_a_scene_activation_drops_the_level_sent(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """A scene that puts a bulb back at its pre-press level is not a stale
+    report: the next press steps from the scene's level."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 100, "light.network_room_overhead_2": 100}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_raise()
+    await ctrl.handle_scene_activated("evening")
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    service_calls.clear()
+    await ctrl.lighting_raise()
+
+    assert _levels_sent(service_calls) == _press_from(start, STEP)
+
+
+@pytest.mark.integration
+async def test_raise_after_a_pending_step_off_takes_the_dark_area_path(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """Lower turns the lights off and raise comes before the off reports."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    hass.states.async_set("light.network_room_overhead_1", "on", {"brightness": STEP})
+    hass.states.async_set("light.network_room_overhead_2", "on", {"brightness": STEP})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_lower()
+    service_calls.clear()
+    await ctrl.lighting_raise()
+
+    assert {
+        "light.network_room_overhead_1",
+        "light.network_room_overhead_2",
+    } <= _ids_set_to_min(service_calls)
+    assert ctrl._state.dimmed
+
+
+@pytest.mark.integration
+async def test_a_failed_step_is_forgotten(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, monkeypatch
+) -> None:
+    """A bulb whose command failed is stepped from its report next time."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 200, "light.network_room_overhead_2": 200}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    real_call = ctrl._call_service
+
+    async def failing_call(service: str, **kwargs) -> None:
+        if kwargs.get("entity_id") == "light.network_room_overhead_1":
+            raise HomeAssistantError("unreachable")
+        await real_call(service, **kwargs)
+
+    monkeypatch.setattr(ctrl, "_call_service", failing_call)
+    with pytest.raises(HomeAssistantError):
+        await ctrl.lighting_lower()
+    monkeypatch.setattr(ctrl, "_call_service", real_call)
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    # overhead_1 steps from its report, overhead_2 from the level it was sent.
+    first = _press_from(start, -STEP)
+    assert _levels_sent(service_calls) == _press_from(
+        {
+            "light.network_room_overhead_1": 200,
+            "light.network_room_overhead_2": first["light.network_room_overhead_2"],
+        },
+        -STEP,
+    )
+
+
+@pytest.mark.integration
+async def test_overlapping_presses_send_their_commands_in_order(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, monkeypatch
+) -> None:
+    """A second press waits for the first press's commands to finish."""
+    import asyncio
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 200, "light.network_room_overhead_2": 200}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    real_call = ctrl._call_service
+    release = asyncio.Event()
+    sent: list[int] = []
+
+    async def slow_first_call(service: str, **kwargs) -> None:
+        if not sent:
+            sent.append(kwargs["brightness"])
+            await release.wait()
+        else:
+            sent.append(kwargs["brightness"])
+        await real_call(service, **kwargs)
+
+    monkeypatch.setattr(ctrl, "_call_service", slow_first_call)
+    first = hass.async_create_task(ctrl.lighting_lower())
+    await asyncio.sleep(0)
+    second = hass.async_create_task(ctrl.lighting_lower())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    # The second press has sent nothing while the first is still in flight.
+    assert len(sent) == 2
+    release.set()
+    await first
+    await second
+
+    after_one = _press_from(start, -STEP)
+    after_two = _press_from(after_one, -STEP)
+    assert sent == [
+        after_one["light.network_room_overhead_1"],
+        after_one["light.network_room_overhead_2"],
+        after_two["light.network_room_overhead_1"],
+        after_two["light.network_room_overhead_2"],
+    ]
+
+
+@pytest.mark.integration
+async def test_a_failed_command_holds_the_next_press_until_its_siblings_finish(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, monkeypatch
+) -> None:
+    import asyncio
+
+    from homeassistant.exceptions import HomeAssistantError
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    for eid in ("light.network_room_overhead_1", "light.network_room_overhead_2"):
+        hass.states.async_set(eid, "on", {"brightness": 200})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    real_call = ctrl._call_service
+    release = asyncio.Event()
+    sent: list[str] = []
+
+    async def fail_one_stall_the_other(service: str, **kwargs) -> None:
+        sent.append(kwargs["entity_id"])
+        if len(sent) == 1:
+            raise HomeAssistantError("unreachable")
+        if len(sent) == 2:
+            await release.wait()
+        await real_call(service, **kwargs)
+
+    monkeypatch.setattr(ctrl, "_call_service", fail_one_stall_the_other)
+    first = hass.async_create_task(ctrl.lighting_lower())
+    await asyncio.sleep(0)
+    second = hass.async_create_task(ctrl.lighting_lower())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert len(sent) == 2
+    release.set()
+    with pytest.raises(HomeAssistantError):
+        await first
+    await second
+    assert len(sent) == 4
+
+
+@pytest.mark.integration
+async def test_a_level_reported_after_the_step_arrived_is_not_stale(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls
+) -> None:
+    """The bulb reports the step, then someone puts it back where it was."""
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 200, "light.network_room_overhead_2": 200}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    await ctrl.lighting_lower()
+    for eid, level in _press_from(start, -STEP).items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    await hass.async_block_till_done()
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    await hass.async_block_till_done()
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(start, -STEP)
+
+
+@pytest.mark.integration
+async def test_a_press_that_never_finishes_does_not_block_later_presses(
+    hass: HomeAssistant, helper_entities, network_room_config, service_calls, monkeypatch
+) -> None:
+    import asyncio
+
+    import custom_components.area_lighting.controller as controller_module
+
+    await _setup(hass, network_room_config)
+    ctrl = hass.data["area_lighting"]["controllers"]["network_room"]
+    start = {"light.network_room_overhead_1": 200, "light.network_room_overhead_2": 200}
+    for eid, level in start.items():
+        hass.states.async_set(eid, "on", {"brightness": level})
+    ctrl._state.transition_to_scene("evening", ActivationSource.USER)
+
+    real_call = ctrl._call_service
+    hang = asyncio.Event()
+
+    async def hanging_call(service: str, **kwargs) -> None:
+        await hang.wait()
+
+    monkeypatch.setattr(controller_module, "BRIGHTNESS_STEP_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(ctrl, "_call_service", hanging_call)
+    stuck = hass.async_create_task(ctrl.lighting_lower())
+    await asyncio.sleep(0)
+    monkeypatch.setattr(ctrl, "_call_service", real_call)
+    service_calls.clear()
+    await ctrl.lighting_lower()
+
+    assert _levels_sent(service_calls) == _press_from(_press_from(start, -STEP), -STEP)
+    hang.set()
+    await stuck

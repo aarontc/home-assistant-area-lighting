@@ -86,6 +86,15 @@ DEFAULT_OCCUPANCY_OFF_SECONDS = 1800  # 30 minutes
 BRIGHTNESS_STEP_DEFAULT = 12
 # Backwards-compat alias; new code should use BRIGHTNESS_STEP_DEFAULT.
 BRIGHTNESS_STEP_PCT = BRIGHTNESS_STEP_DEFAULT
+# How long a raise/lower press trusts the level it last sent a bulb over the
+# bulb's reported level, while that report still shows the level from before
+# the press. Hue bulbs took up to 1.4 s to report a step, and a second press
+# inside that gap used to step from the stale level and change nothing.
+BRIGHTNESS_STEP_REPORT_GRACE_SECONDS = 5
+# Raise/lower presses run one at a time. A press waits this long for the one
+# before it, then goes ahead, so a command that never returns cannot block
+# every later press.
+BRIGHTNESS_STEP_LOCK_TIMEOUT_SECONDS = 10
 
 # Manual detection grace period (seconds after scene change)
 MANUAL_DETECTION_GRACE_SECONDS = 4
