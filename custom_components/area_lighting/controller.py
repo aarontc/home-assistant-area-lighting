@@ -2078,7 +2078,7 @@ class AreaLightingController:
             raise
 
     @staticmethod
-    async def _send_brightness_commands(calls: list[Awaitable[None]]) -> None:
+    async def _send_brightness_commands(calls: Iterable[Awaitable[None]]) -> None:
         """Wait for every command of a press, then raise the first failure.
 
         Raising as soon as one fails would release the press lock while the
