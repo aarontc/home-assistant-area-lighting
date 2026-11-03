@@ -1,18 +1,25 @@
-"""Number platform for Area Lighting - fadeout seconds configuration."""
+"""Number platform for Area Lighting: per-area fadeouts and timeouts, and
+the global circadian minimum brightness reduction."""
 
 from __future__ import annotations
 
 import logging
 
 from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from .const import DOMAIN
 from .controller import AreaLightingController
+from .global_state import GlobalToggles
 
 _LOGGER = logging.getLogger(__name__)
+
+CIRCADIAN_MIN_BRIGHTNESS_REDUCTION_UNIQUE_ID = (
+    "area_lighting_global_circadian_min_brightness_reduction"
+)
 
 
 async def async_setup_platform(
@@ -215,3 +222,38 @@ class AreaOccupancyNightTimeoutNumber(_BaseTimeoutMinutes):
         # Outline variant = night/lighter version of AreaOccupancyTimeoutNumber.
         self._attr_icon = "mdi:account-clock-outline"
         self.entity_id = f"number.{area.id}_occupancy_night_timeout_minutes"
+
+
+class CircadianMinBrightnessReductionNumber(NumberEntity):
+    """Percentage by which every circadian group's minimum brightness is lowered."""
+
+    _attr_should_poll = False
+    _attr_name = "Area Lighting Circadian Minimum Brightness Reduction"
+    _attr_icon = "mdi:weather-night"
+    _attr_unique_id = CIRCADIAN_MIN_BRIGHTNESS_REDUCTION_UNIQUE_ID
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 5.0
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_mode = NumberMode.SLIDER
+
+    def __init__(self, toggles: GlobalToggles) -> None:
+        self._toggles = toggles
+        self.entity_id = "number.area_lighting_circadian_min_brightness_reduction"
+
+    @property
+    def native_value(self) -> float:
+        return self._toggles.circadian_min_brightness_reduction
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._toggles.async_set_circadian_min_brightness_reduction(value)
+
+    async def async_added_to_hass(self) -> None:
+        self._toggles.add_state_listener(self._on_change)
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._toggles.remove_state_listener(self._on_change)
+
+    @callback
+    def _on_change(self) -> None:
+        self.async_write_ha_state()

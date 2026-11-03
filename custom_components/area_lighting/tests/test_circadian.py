@@ -15,6 +15,7 @@ from custom_components.area_lighting.circadian import (
     brightness_pct,
     kelvin,
     percent,
+    reduced_min_brightness,
     relevant_events,
     to_brightness,
     turn_on_payload,
@@ -110,6 +111,13 @@ def test_brightness_is_maximum_by_day_and_follows_the_curve_overnight():
     assert brightness_pct(0, 10, 90) == 90
     assert brightness_pct(-50, 10, 90) == 50
     assert brightness_pct(-100, 10, 90) == 10
+
+
+def test_reduced_min_brightness_scales_the_minimum():
+    assert reduced_min_brightness(40, 0) == 40
+    assert reduced_min_brightness(40, 50) == 20
+    assert reduced_min_brightness(40, 80) == 8
+    assert reduced_min_brightness(40, 100) == 0
 
 
 def test_to_brightness_rounds_and_clamps():

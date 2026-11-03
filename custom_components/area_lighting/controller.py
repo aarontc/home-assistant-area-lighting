@@ -1197,8 +1197,12 @@ class AreaLightingController:
             brightness_pct: float = group.sleep_brightness
         else:
             kelvin = values.kelvin
+            toggles = self.hass.data.get(DOMAIN, {}).get("global")
+            reduction = toggles.circadian_min_brightness_reduction if toggles else 0.0
             brightness_pct = circadian.brightness_pct(
-                values.percent, group.min_brightness, group.max_brightness
+                values.percent,
+                circadian.reduced_min_brightness(group.min_brightness, reduction),
+                group.max_brightness,
             )
         return {
             "entity_id": light.id,
@@ -1793,6 +1797,17 @@ class AreaLightingController:
             and group.sleep_entity == event.data["entity_id"]
         ]
         self._send_circadian_now(lights, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+
+    def refresh_circadian_brightness(self) -> None:
+        """Re-send the lights that are on after the global minimum brightness
+        reduction changed. Unlike a tick, this neither waits behind a tick in
+        flight nor skips lights inside the echo window, so a second change
+        made seconds after the first still reaches them."""
+        if not self.circadian_running or self._closed or self._alert_active:
+            return
+        self._send_circadian_now(
+            list(self.area.all_lights), self._global_config.circadian.transition
+        )
 
     def _send_circadian_now(self, lights: list[LightConfig], transition: float) -> None:
         """Send these lights the current values from a state listener."""

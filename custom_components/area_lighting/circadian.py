@@ -73,6 +73,11 @@ def brightness_pct(pct: float, min_brightness: float, max_brightness: float) -> 
     return min_brightness + (max_brightness - min_brightness) * (100 + pct) / 100
 
 
+def reduced_min_brightness(min_brightness: float, reduction_pct: float) -> float:
+    """A group's `min_brightness` lowered by `reduction_pct` percent of itself."""
+    return min_brightness * (100 - reduction_pct) / 100
+
+
 def to_brightness(brightness_pct: float) -> int:
     """Convert a percentage to light.turn_on's 1-255 `brightness`."""
     return min(255, max(1, round(brightness_pct * 2.55)))

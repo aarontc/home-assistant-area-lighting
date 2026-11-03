@@ -157,6 +157,7 @@ async def test_registered_entities_are_recorded_by_area(
         "switch.area_lighting_motion_lights_enabled",
         "switch.area_lighting_occupancy_timeout_enabled",
         "switch.area_lighting_demand_response_active",
+        "number.area_lighting_circadian_min_brightness_reduction",
         "sensor.area_lighting_diagnostics",
         "sensor.area_lighting_circadian",
     }

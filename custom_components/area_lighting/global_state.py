@@ -1,8 +1,9 @@
 """Global (all-area) master toggles for area_lighting.
 
 Owns three booleans: motion-triggered lights-on, occupancy-timeout
-lights-off, and demand-response shedding, each gating every area.
-Persisted via the StateStorage reserved global key. Reaches controllers
+lights-off, and demand-response shedding, each gating every area. Also
+owns the percentage by which every circadian group's minimum brightness
+is lowered. Persisted via the StateStorage reserved global key. Reaches controllers
 lazily through hass.data so it holds no back-references.
 """
 
@@ -20,7 +21,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class GlobalToggles:
-    """Holds, persists, and broadcasts the three global master flags."""
+    """Holds, persists, and broadcasts the global master flags and the
+    circadian minimum brightness reduction."""
 
     def __init__(self, hass: HomeAssistant, state_storage: StateStorage) -> None:
         self._hass = hass
@@ -28,6 +30,7 @@ class GlobalToggles:
         self._motion_lights_enabled = True
         self._occupancy_timeout_enabled = True
         self._demand_response_active = False
+        self._circadian_min_brightness_reduction = 0.0
         self._listeners: list[Callable[[], None]] = []
 
     @property
@@ -41,6 +44,10 @@ class GlobalToggles:
     @property
     def demand_response_active(self) -> bool:
         return self._demand_response_active
+
+    @property
+    def circadian_min_brightness_reduction(self) -> float:
+        return self._circadian_min_brightness_reduction
 
     # ── listener plumbing (mirrors controller.add_state_listener) ──
     def add_state_listener(self, cb: Callable[[], None]) -> None:
@@ -63,6 +70,7 @@ class GlobalToggles:
             "motion_lights_enabled": self._motion_lights_enabled,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "demand_response_active": self._demand_response_active,
+            "circadian_min_brightness_reduction": self._circadian_min_brightness_reduction,
         }
 
     def load_persisted_state(self, data: dict) -> None:
@@ -74,6 +82,10 @@ class GlobalToggles:
             self._occupancy_timeout_enabled = bool(data["occupancy_timeout_enabled"])
         if "demand_response_active" in data:
             self._demand_response_active = bool(data["demand_response_active"])
+        if "circadian_min_brightness_reduction" in data:
+            self._circadian_min_brightness_reduction = _clamp_percent(
+                data["circadian_min_brightness_reduction"]
+            )
 
     # ── setters (called by the switch entities) ──
     async def async_set_motion_lights_enabled(self, enabled: bool) -> None:
@@ -111,3 +123,18 @@ class GlobalToggles:
             self._hass.async_create_task(ctrl.reactivate_for_demand_response())
         self._notify()
         self._schedule_save()
+
+    async def async_set_circadian_min_brightness_reduction(self, reduction: float) -> None:
+        reduction = _clamp_percent(reduction)
+        if self._circadian_min_brightness_reduction == reduction:
+            return
+        self._circadian_min_brightness_reduction = reduction
+        controllers = self._hass.data.get(DOMAIN, {}).get("controllers", {})
+        for ctrl in controllers.values():
+            ctrl.refresh_circadian_brightness()
+        self._notify()
+        self._schedule_save()
+
+
+def _clamp_percent(value: float) -> float:
+    return min(100.0, max(0.0, float(value)))

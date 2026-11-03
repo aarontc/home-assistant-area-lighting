@@ -34,12 +34,14 @@ from .event_handlers import async_setup_event_handlers
 from .global_state import GlobalToggles
 from .models import AreaConfig, AreaLightingConfig
 from .number import (
+    CIRCADIAN_MIN_BRIGHTNESS_REDUCTION_UNIQUE_ID,
     AreaManualFadeoutNumber,
     AreaMotionFadeoutNumber,
     AreaMotionNightTimeoutNumber,
     AreaMotionTimeoutNumber,
     AreaOccupancyNightTimeoutNumber,
     AreaOccupancyTimeoutNumber,
+    CircadianMinBrightnessReductionNumber,
 )
 from .scene import (
     BEHAVIORAL_SCENE_HANDLERS,
@@ -494,7 +496,7 @@ async def _register_helper_entities(
     toggles: GlobalToggles | None = None,
 ) -> None:
     """Register switch/select/number helper entities for each controller,
-    and the global switches when `toggles` is given."""
+    and the global switches and number when `toggles` is given."""
     from homeassistant.components.number import (  # type: ignore[attr-defined]
         DATA_COMPONENT as NUMBER_COMPONENT,
     )
@@ -531,6 +533,7 @@ async def _register_helper_entities(
     if toggles is not None:
         for flag, name, icon, uid, eid in GLOBAL_SWITCH_DEFS:
             switches.append(AreaLightingGlobalSwitch(toggles, flag, name, icon, uid, eid))
+        numbers.append(CircadianMinBrightnessReductionNumber(toggles))
 
     if switch_component is not None and switches:
         await switch_component.async_add_entities(switches)
@@ -623,7 +626,7 @@ async def _assign_entities_to_ha_areas(
 def _apply_hidden_default(hass: HomeAssistant) -> None:
     """Hide the entities an earlier release registered visible.
 
-    Every entity except the global switches sets
+    Every entity except the global switches and the global number sets
     entity_registry_visible_default = False, but Home Assistant applies
     that only when it first creates a registry entry. Each entry is
     handled once and marked in its registry options, which are saved in
@@ -633,7 +636,8 @@ def _apply_hidden_default(hass: HomeAssistant) -> None:
     from homeassistant.helpers import entity_registry as er
 
     entity_reg = er.async_get(hass)
-    global_switch_ids = {uid for _flag, _name, _icon, uid, _eid in GLOBAL_SWITCH_DEFS}
+    visible_ids = {("switch", uid) for _flag, _name, _icon, uid, _eid in GLOBAL_SWITCH_DEFS}
+    visible_ids.add(("number", CIRCADIAN_MIN_BRIGHTNESS_REDUCTION_UNIQUE_ID))
     hidden = 0
     for entry in list(entity_reg.entities.values()):
         if (
@@ -642,7 +646,7 @@ def _apply_hidden_default(hass: HomeAssistant) -> None:
             # platform named after the domain.
             or entry.platform != entry.domain
             or not entry.unique_id.startswith("area_lighting_")
-            or (entry.domain == "switch" and entry.unique_id in global_switch_ids)
+            or (entry.domain, entry.unique_id) in visible_ids
             or HIDDEN_DEFAULT_APPLIED in entry.options.get(DOMAIN, {})
         ):
             continue

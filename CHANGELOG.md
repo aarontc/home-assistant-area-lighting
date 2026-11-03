@@ -7,6 +7,15 @@ readable companion that highlights user-facing changes.
 
 ## Unreleased
 
+### Added
+
+- **A global dial for dimmer circadian nights.**
+  `number.area_lighting_circadian_min_brightness_reduction` lowers every
+  circadian group's `min_brightness` by a percentage of itself. At 50, a
+  group with a minimum of 40% reaches 20% at solar midnight. Daytime
+  brightness does not change, and lights that are on follow a new value
+  at once. It defaults to 0 and survives restarts.
+
 ### Fixed
 
 - **The raise and lower service descriptions match what they do.** They

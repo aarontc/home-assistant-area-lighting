@@ -27,6 +27,7 @@ class _FakeController:
         self.enforced = 0
         self.cancelled = 0
         self.reactivated = 0
+        self.circadian_refreshed = 0
 
     def enforce_occupancy_timer(self) -> None:
         self.enforced += 1
@@ -36,6 +37,9 @@ class _FakeController:
 
     async def reactivate_for_demand_response(self) -> None:
         self.reactivated += 1
+
+    def refresh_circadian_brightness(self) -> None:
+        self.circadian_refreshed += 1
 
 
 class _FakeHass:
@@ -76,6 +80,7 @@ def test_state_dict_shape():
         "motion_lights_enabled": False,
         "occupancy_timeout_enabled": True,
         "demand_response_active": False,
+        "circadian_min_brightness_reduction": 0.0,
     }
 
 
@@ -96,6 +101,7 @@ async def test_set_motion_notifies_and_saves():
             "motion_lights_enabled": False,
             "occupancy_timeout_enabled": True,
             "demand_response_active": False,
+            "circadian_min_brightness_reduction": 0.0,
         }
     ]
 
@@ -184,4 +190,45 @@ async def test_set_demand_response_idempotent():
     await hass.drain()
 
     assert c1.reactivated == 0
+    assert storage.saved == []
+
+
+def test_min_brightness_reduction_defaults_to_zero_and_loads_clamped():
+    t = GlobalToggles(_FakeHass(), _FakeStorage())
+    assert t.circadian_min_brightness_reduction == 0.0
+    t.load_persisted_state({"circadian_min_brightness_reduction": 50})
+    assert t.circadian_min_brightness_reduction == 50.0
+    t.load_persisted_state({"circadian_min_brightness_reduction": 140})
+    assert t.circadian_min_brightness_reduction == 100.0
+
+
+@pytest.mark.asyncio
+async def test_set_min_brightness_reduction_refreshes_notifies_and_saves():
+    hass, storage = _FakeHass(), _FakeStorage()
+    c1, c2 = _FakeController(), _FakeController()
+    hass.data[DOMAIN] = {"controllers": {"a": c1, "b": c2}}
+    t = GlobalToggles(hass, storage)
+    calls: list[int] = []
+    t.add_state_listener(lambda: calls.append(1))
+
+    await t.async_set_circadian_min_brightness_reduction(80)
+    await hass.drain()
+
+    assert t.circadian_min_brightness_reduction == 80.0
+    assert (c1.circadian_refreshed, c2.circadian_refreshed) == (1, 1)
+    assert calls == [1]
+    assert storage.saved[-1]["circadian_min_brightness_reduction"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_set_min_brightness_reduction_idempotent():
+    hass, storage = _FakeHass(), _FakeStorage()
+    c1 = _FakeController()
+    hass.data[DOMAIN] = {"controllers": {"a": c1}}
+    t = GlobalToggles(hass, storage)
+
+    await t.async_set_circadian_min_brightness_reduction(0)
+    await hass.drain()
+
+    assert c1.circadian_refreshed == 0
     assert storage.saved == []

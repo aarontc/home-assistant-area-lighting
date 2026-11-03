@@ -1009,7 +1009,7 @@ hidden, as do `sensor.area_lighting_diagnostics` and
 `sensor.area_lighting_circadian`, so the dashboards Home
 Assistant generates by itself (the default Overview, the legacy Overview and
 the Areas dashboard) leave them out. The three global master switches below
-stay visible. Hidden entities still work in automations, scripts, remotes and
+and `number.area_lighting_circadian_min_brightness_reduction` stay visible. Hidden entities still work in automations, scripts, remotes and
 any card you add by hand, and they still appear on the area's page under
 Settings → Areas.
 
@@ -1026,7 +1026,7 @@ assistants. An entity it already exposed keeps its current setting.
 Home Assistant applies the hidden default only when it first registers an
 entity. So that existing installs match, the first start after upgrading
 hides every entity an earlier release registered, except the global master
-switches. It runs once, so an entity you un-hide later stays visible.
+switches and the minimum brightness reduction. It runs once, so an entity you un-hide later stays visible.
 
 ## Global master switches
 
@@ -1086,6 +1086,17 @@ only. Lights without a group are left as they are.
 `sleep_state`, for example dim, warm stairs while the theater is in `movie`.
 A missing entity counts as awake. When the entity's state changes, the
 group's lights that are on get the new values with a half-second transition.
+
+**Minimum brightness reduction.**
+`number.area_lighting_circadian_min_brightness_reduction` lowers every
+group's `min_brightness` by a percentage of itself, from 0 (the default) to
+100 in steps of 5. At 50, a group with `min_brightness: 40` bottoms out at
+20% at solar midnight. The curve still starts from `max_brightness` at
+sunset, so the reduction dims the evening more and more as it goes on and
+leaves the day alone. It does not change `sleep_brightness`. A new value
+reaches the lights that are on at once, fading over `transition` seconds.
+The value survives restarts and stays until someone changes it. Unlike the
+per-area entities, it is visible, so it can go on a dashboard.
 
 **Updates.** Entering circadian sends every grouped light outside a kelvin
 route the current values with a half-second transition, which also turns on
