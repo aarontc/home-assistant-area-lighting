@@ -110,6 +110,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
+        scene = next(scene for scene in area.scenes if scene.slug == scene_slug)
+        if scene.animations:
+            _LOGGER.warning(
+                "Area %s: snapshot_scene refused for animated scene '%s'; "
+                "a snapshot would capture only one animation step",
+                area_id,
+                scene_slug,
+            )
+            return
+
         # Refuse while demand response is shedding. The snapshot captures raw
         # hass states, so the shed bulbs (physically off) would be baked into
         # the stored scene permanently: the scene stays wrong after the window

@@ -18,6 +18,7 @@ rationale behind *why* a feature exists, see [`README.md`](README.md).
 ```yaml
 area_lighting:
   areas: [...]            # required, list of areas
+  animations: {...}       # optional, named scene color palettes
   alert_patterns: {...}   # optional, named flash/alert animations
   circadian: {...}        # optional, circadian curve and update timing
   scene_self_heal: true   # optional, default true
@@ -26,6 +27,7 @@ area_lighting:
 | Key               | Type                              | Required | Description |
 |-------------------|-----------------------------------|----------|-------------|
 | `areas`           | list of [area](#area)              | **yes**  | One entry per area/room managed by this integration. |
+| `animations`      | dict of [animation](#animation)   | no (default `{}`) | Named color palettes that scenes may animate. |
 | `alert_patterns`  | dict of [pattern](#alert-pattern)  | no (default `{}`) | Named flash/alert animations invocable from remotes, automations, or the `area_lighting.alert` service. |
 | `circadian`       | [circadian](#circadian)            | no (defaults below) | Color temperature bounds of the circadian curve, and how often and how slowly circadian lights follow it. |
 | `scene_self_heal` | boolean                            | no (default `true`) | When `true`, out-of-band bulb divergences that look like glitches (Hue power-on defaults, RF dropouts, `unavailable` recovery) are silently re-asserted to the active scene target instead of latching the area to `manual`. Set to `false` to disable — all divergences latch `manual` as before. `area_lighting.reload` applies a change to running areas. See "Scene self-healing" in [`README.md`](README.md). |
@@ -61,6 +63,10 @@ area_lighting:
     <pattern_name>:
       steps: [...]
       delay, repeat, start_inverted, restore
+  animations:
+    <animation_name>:
+      period, transition
+      palette: [...]
   circadian:
     min_colortemp, max_colortemp, interval, transition
   scene_self_heal: true   # optional, default true
@@ -298,6 +304,12 @@ scenes:
 | `group_exclude` | list of entity_id         | no       | `[]`    | Lights that should **not** be affected when this scene activates. |
 | `cycle`         | list of scene slugs       | no       | —       | Defines a favorite-button cycle sequence. Parsed but not yet wired to the on-button cycler (tracked in `TODO.md`). |
 | `entities`      | free-form dict            | no       | —       | Per-light target state (`brightness`, `rgb_color`, `color_temp_kelvin`, …). Same shape HA uses for its own scene entities. |
+| `animations`    | list of animation names   | no       | `[]`    | Names from the top-level `animations` map. Requires an `entities` map. Duplicate and unknown names fail validation. |
+
+An entity stanza may set `animate: false` only when its scene lists
+animations. This leaves that light at its static scene target. See
+[animation](#animation) for which lights animate and how colors replace
+their targets.
 
 #### Reserved scene slugs
 
@@ -506,6 +518,90 @@ percent from `min_colortemp` to `max_colortemp`, and all night it stays at
 circadian pick up the new values at the next update.
 
 ---
+
+## Animation
+
+Top-level `animations:` maps names to repeating scene palettes. Names use
+lowercase letters and digits separated by single underscores, as scene ids
+do. `off` is reserved for the select option that restores static scenes.
+
+```yaml
+animations:
+  christmas_drift:
+    period: 60
+    transition: 60
+    palette:
+      - hs_color: [0, 100]
+        weight: 2
+      - hs_color: [128, 100]
+        weight: 2
+      - color_temp_kelvin: 5000
+        brightness: 120
+```
+
+| Key | Type | Required | Default | Notes |
+|-----|------|----------|---------|-------|
+| `period` | number, seconds | yes | none | At least 1. All areas use UTC epoch seconds divided by this period to determine their step. |
+| `transition` | number, seconds | no | `period` | From 0 to `period`, inclusive. Lights without transition support jump between steps. |
+| `palette` | list of palette entries | yes | none | At least one entry. |
+
+Each palette entry requires exactly one of `hs_color`, `rgb_color`,
+`xy_color` or `color_temp_kelvin`. It may also set `brightness`, an integer
+from 1 to 255, and `weight`, an integer of at least 1 that defaults to 1.
+Unknown keys fail validation. A palette brightness replaces the scene
+brightness for that step; omitting it preserves the scene brightness.
+
+The palette expands into slots by smooth weighted round robin. For example,
+weights `red: 2`, `green: 2`, `white: 1` yield red, green, red, green, white.
+Weighted palettes can put the same color on neighbouring lights.
+The animated light at index `i` uses slot `(i + step) % slot_count`, where
+`step = floor(unix_time / period)`. Indexes follow the order of the scene's
+`entities` map.
+
+A light animates only when its scene stanza has `state: "on"` and one of
+`hs_color`, `rgb_color`, `rgbw_color`, `rgbww_color` or `xy_color`. Lights
+with `animate: false` and cluster entities are excluded. Color-temperature
+lights, dimmers and off lights keep their scene targets. For each animated
+light, the palette color replaces all scene color keys and `color_mode`.
+Other scene attributes, such as `effect`, stay in place.
+When a snapshot includes `color_mode`, only `hs`, `rgb`, `rgbw`, `rgbww`
+and `xy` modes animate. A white light stays white even if its snapshot also
+contains `hs_color`. Activations skip cluster entities while an animation
+is selected.
+
+Each animated scene id creates
+`select.area_lighting_<scene_id>_animation`. Its options are `off` followed
+by the union of animations listed by enabled areas for that scene id, in
+config order. Its name uses the first enabled area's scene name. The initial
+choice is the first animation an enabled area lists. The choice persists across
+restarts. Reload falls back to that default if a saved choice disappears,
+and removes the select if no area offers animations for that scene id.
+
+The selection applies to every area currently in that scene. Areas that
+do not list the selected animation show their static scene. Selecting
+`off` restores static colors with the default scene transition. Selecting
+an animation applies its current step with its configured transition. An
+area is left alone when its effective animation does not change.
+Normal activations keep the caller's transition, or the default 0.5 seconds.
+Ticks and reapplication after a selection change or reload use the animation
+transition. A slow activation catches up immediately if it misses the next
+step boundary. Setting the area's last-scene select starts the ticks too.
+Alerts and dimming pause it; alert completion and `lighting_on` resume it.
+Manual changes and leaving the scene stop it. Demand-response shedding
+still applies on every step. Reload restarts a scene's animation under the
+new config. A slow send causes an overlapping step to be skipped.
+Manual color and brightness changes stop the animation even with self-heal
+enabled and a transition equal to the period. After the command grace
+period, reports must stay within 0.03 xy units of the segment between the
+previous and current colors, and within their brightness range with a
+tolerance of 10. Reports without xy use endpoint matching. Recovery from
+`unavailable` or `unknown` still heals. The post-settle self-check waits for
+each light's current transition and grace period before reasserting it.
+
+`snapshot_scene` refuses scenes with animations, even when their select is
+`off`. A snapshot stored before animations were configured still receives
+the overlay. Each area's diagnostic `animation` is the running animation's
+`name` and current `step`, or `null` while none is running.
 
 ## Alert pattern
 

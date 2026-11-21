@@ -81,6 +81,7 @@ def test_state_dict_shape():
         "occupancy_timeout_enabled": True,
         "demand_response_active": False,
         "circadian_min_brightness_reduction": 0.0,
+        "scene_animations": {},
     }
 
 
@@ -102,6 +103,7 @@ async def test_set_motion_notifies_and_saves():
             "occupancy_timeout_enabled": True,
             "demand_response_active": False,
             "circadian_min_brightness_reduction": 0.0,
+            "scene_animations": {},
         }
     ]
 

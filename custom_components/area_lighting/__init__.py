@@ -20,12 +20,14 @@ from .binary_sensor import AreaOccupiedBinarySensor
 from .circadian_clock import AreaLightingCircadianSensor, CircadianClock
 from .config_schema import (
     ALERT_PATTERN_SCHEMA,
+    ANIMATIONS_SCHEMA,
     AREA_SCHEMA,
     CIRCADIAN_SCHEMA,
     parse_config,
     validate_circadian_groups,
     validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
+    validate_scene_animations,
 )
 from .const import DOMAIN
 from .controller import AreaLightingController
@@ -50,7 +52,7 @@ from .scene import (
     BehavioralScene,
 )
 from .scene_storage import SceneStorage
-from .select import AreaLastSceneSelect
+from .select import AreaLastSceneSelect, SceneAnimationSelect
 from .services import async_register_services
 from .state_storage import StateStorage
 from .switch import GLOBAL_SWITCH_DEFS, SWITCH_DEFS, AreaLightingGlobalSwitch, AreaLightingSwitch
@@ -71,6 +73,7 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional("alert_patterns", default={}): {
                     cv.string: ALERT_PATTERN_SCHEMA,
                 },
+                vol.Optional("animations", default={}): ANIMATIONS_SCHEMA,
                 vol.Optional("scene_self_heal", default=True): cv.boolean,
                 vol.Optional("circadian", default={}): CIRCADIAN_SCHEMA,
                 # Ignored fields from templater.yaml kept for config compat
@@ -90,6 +93,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     conf = config[DOMAIN]
     area_config = parse_config(conf)
+    try:
+        validate_scene_animations(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid scene animations: %s", err)
+        return False
     try:
         validate_leader_follower_graph(area_config)
     except vol.Invalid as err:
@@ -128,6 +136,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Global (all-area) master toggles, restored from persisted state
     global_toggles = GlobalToggles(hass, state_storage)
     global_toggles.load_persisted_state(state_storage.get_global_state())
+    global_toggles.configure_scene_animations(area_config)
 
     clock = CircadianClock(hass, area_config.circadian)
 
@@ -223,11 +232,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 ctrl.reconcile_startup_state()
         except Exception:
             _LOGGER.exception("Failed to reconcile startup state")
-        try:
-            for ctrl in hass.data[DOMAIN]["controllers"].values():
+        for ctrl in hass.data[DOMAIN]["controllers"].values():
+            try:
                 await ctrl.async_resume_circadian()
-        except Exception:
-            _LOGGER.exception("Failed to resume circadian areas")
+                await ctrl.async_scene_animation_changed(ctrl.current_scene)
+            except Exception:
+                _LOGGER.exception("Area %s: failed to resume", ctrl.area.id)
 
     hass.data[DOMAIN]["unsub_started"] = hass.bus.async_listen_once(
         EVENT_HOMEASSISTANT_STARTED, _on_started
@@ -275,6 +285,7 @@ async def _async_read_config(hass: HomeAssistant) -> AreaLightingConfig:
         validate_leader_follower_graph(config)
         validate_circadian_kelvin_routes(config)
         validate_circadian_groups(config)
+        validate_scene_animations(config)
     except Exception as err:
         _LOGGER.error("area_lighting reload: invalid config: %s", err)
         raise HomeAssistantError(f"area_lighting reload failed: {err}") from err
@@ -320,6 +331,7 @@ async def _async_reload(hass: HomeAssistant) -> None:
         controllers[ctrl.area.id] = ctrl
     _wire_leaders(controllers)
     data["config"] = new_config
+    data["global"].configure_scene_animations(new_config)
     data["unsubs"] = await async_setup_event_handlers(hass, new_config)
 
     await _remove_stale_entities(hass)
@@ -330,13 +342,22 @@ async def _async_reload(hass: HomeAssistant) -> None:
     if started:
         await _register_scene_entities(hass, new_config.enabled_areas)
         await _register_helper_entities(hass, added)
+        await _register_animation_selects(hass)
     for ctrl in kept:
-        await ctrl.async_resume_circadian()
+        try:
+            await ctrl.async_resume_circadian()
+            await ctrl.async_scene_animation_changed(ctrl.current_scene)
+        except Exception:
+            _LOGGER.exception("Area %s: failed to resume after reload", ctrl.area.id)
     if started:
         for ctrl in added:
-            await ctrl.restore_timers()
-            ctrl.reconcile_startup_state()
-            await ctrl.async_resume_circadian()
+            try:
+                await ctrl.restore_timers()
+                ctrl.reconcile_startup_state()
+                await ctrl.async_resume_circadian()
+                await ctrl.async_scene_animation_changed(ctrl.current_scene)
+            except Exception:
+                _LOGGER.exception("Area %s: failed to resume after reload", ctrl.area.id)
     # Tick once the areas have their new config, so no light gets the old
     # group values. The tick skips the lights that resuming areas just sent.
     await clock.async_tick()
@@ -358,10 +379,17 @@ async def _remove_stale_entities(hass: HomeAssistant) -> None:
     """
     controllers: dict[str, AreaLightingController] = hass.data[DOMAIN]["controllers"]
     record: dict[str, list[Entity]] = hass.data[DOMAIN]["entities"]
+    stale: list[Entity]
     for key in list(record):
         if key == GLOBAL_ENTITIES:
-            continue
-        if key not in controllers:
+            scene_ids = hass.data[DOMAIN]["global"].animated_scene_ids
+            stale = [
+                e
+                for e in record[key]
+                if isinstance(e, SceneAnimationSelect) and e.scene_id not in scene_ids
+            ]
+            record[key] = [e for e in record[key] if e not in stale]
+        elif key not in controllers:
             stale = record.pop(key)
         else:
             slugs = controllers[key].area.scene_slugs
@@ -382,6 +410,8 @@ def _refresh_entities(hass: HomeAssistant) -> None:
         for entity in entities:
             if isinstance(entity, AreaLightingDiagnosticSensor):
                 entity.sync_controller_listeners()
+            elif isinstance(entity, SceneAnimationSelect):
+                entity.refresh_from_config()
             elif key == GLOBAL_ENTITIES:
                 continue
             elif isinstance(entity, AreaLightingScene):
@@ -496,7 +526,7 @@ async def _register_helper_entities(
     toggles: GlobalToggles | None = None,
 ) -> None:
     """Register switch/select/number helper entities for each controller,
-    and the global switches and number when `toggles` is given."""
+    and the global helpers when `toggles` is given."""
     from homeassistant.components.number import (  # type: ignore[attr-defined]
         DATA_COMPONENT as NUMBER_COMPONENT,
     )
@@ -577,6 +607,32 @@ async def _register_helper_entities(
     await _assign_entities_to_ha_areas(
         hass, controllers, switches, selects, numbers, binary_sensors
     )
+    if toggles is not None:
+        await _register_animation_selects(hass)
+
+
+async def _register_animation_selects(hass: HomeAssistant) -> None:
+    from homeassistant.components.select import (  # type: ignore[attr-defined]
+        DATA_COMPONENT,
+    )
+
+    data = hass.data[DOMAIN]
+    component = hass.data.get(DATA_COMPONENT)
+    if component is None:
+        return
+    registered = {
+        entity.scene_id
+        for entity in data["entities"].get(GLOBAL_ENTITIES, [])
+        if isinstance(entity, SceneAnimationSelect)
+    }
+    entities = [
+        SceneAnimationSelect(data["global"], scene_id)
+        for scene_id in data["global"].animated_scene_ids
+        if scene_id not in registered
+    ]
+    if entities:
+        await component.async_add_entities(entities)
+        _record_entities(hass, entities)
 
 
 async def _assign_entities_to_ha_areas(
@@ -638,6 +694,10 @@ def _apply_hidden_default(hass: HomeAssistant) -> None:
     entity_reg = er.async_get(hass)
     visible_ids = {("switch", uid) for _flag, _name, _icon, uid, _eid in GLOBAL_SWITCH_DEFS}
     visible_ids.add(("number", CIRCADIAN_MIN_BRIGHTNESS_REDUCTION_UNIQUE_ID))
+    visible_ids.update(
+        ("select", f"area_lighting_{scene_id}_animation")
+        for scene_id in hass.data[DOMAIN]["global"].animated_scene_ids
+    )
     hidden = 0
     for entry in list(entity_reg.entities.values()):
         if (

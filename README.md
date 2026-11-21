@@ -1128,6 +1128,125 @@ made during the alert.
 resumes at startup. Its lights that are on get the current values with the
 configured `transition`, and lights that are off stay off.
 
+## Animated scenes
+
+Declare named `animations` at the top level, then list their names on a
+scene with an `entities` map. Animated lights rotate through the palette on
+each period. Areas running the same animation use the same clock step,
+including areas that join halfway through a period.
+
+```yaml
+area_lighting:
+  animations:
+    christmas_drift:
+      period: 60
+      transition: 60
+      palette:
+        - hs_color: [0, 100]
+          weight: 2
+        - hs_color: [128, 100]
+          weight: 2
+        - color_temp_kelvin: 5000
+          brightness: 120
+    party:
+      period: 2
+      transition: 0.5
+      palette:
+        - hs_color: [0, 100]
+        - hs_color: [120, 100]
+        - hs_color: [240, 100]
+  areas:
+    - id: kitchen
+      name: Kitchen
+      lights:
+        - id: light.kitchen_overhead
+          roles: [color, dimming]
+        - id: light.kitchen_sink
+          roles: [white, dimming]
+        - id: light.kitchen_island
+          roles: [color, dimming]
+      scenes:
+        - id: christmas
+          name: Christmas
+          animations: [christmas_drift, party]
+          entities:
+            light.kitchen_overhead:
+              state: "on"
+              brightness: 255
+              hs_color: [0, 100]
+            light.kitchen_sink:
+              state: "on"
+              brightness: 200
+              color_temp_kelvin: 2700
+            light.kitchen_island:
+              state: "on"
+              brightness: 255
+              hs_color: [0, 100]
+              animate: false
+```
+
+`select.area_lighting_christmas_animation` chooses the animation for every
+area's `christmas` scene. It starts with `christmas_drift` in this example.
+Choose `off` to restore static scene colors. An area whose scene does not
+list the selected animation also uses its static scene. The choice survives
+restarts. After a reload removes that choice, it returns to the first
+configured animation.
+Only enabled areas contribute the select's name, choices and default.
+Changing the selection leaves an area alone when its effective animation
+stays the same.
+
+Only on lights whose scene stanza sets `hs_color`, `rgb_color`,
+`rgbw_color`, `rgbww_color` or `xy_color` animate. Color-temperature lights,
+dimmers and off lights keep their scene targets. `animate: false` keeps a
+colored light static. Snapshots preserve white lights by their recorded
+color mode. While an animation is selected, activations also skip cluster
+entities so their static colors cannot override the individual bulbs.
+
+Lights follow their order in `entities`. Each step moves every animated
+light forward one palette slot. `weight` repeats an entry's slots, with
+interleaving to spread repeated colors across the lights. A palette entry
+can replace brightness; otherwise each light keeps its scene brightness.
+`period` must be at least one second. `transition` defaults to the period
+and may be any duration from zero to the period.
+Activating the scene keeps the caller's transition, or 0.5 seconds by
+default. Only animation steps, selection changes and reloads use the
+animation's transition. A slow activation catches up as soon as it finishes
+if it missed the next step. Setting the area's last-scene select also
+starts animation steps.
+
+Alerts and dimming pause the animation. It resumes when the alert ends or
+`lighting_on` clears dimming. Leaving the scene, turning the area off or a
+manual light change stops it. Demand response keeps shed bulbs off during
+every step. Reloading a running scene applies the updated animation.
+`snapshot_scene` refuses scenes with animations, even with the select off,
+because a snapshot would capture only one step. Existing snapshots still
+receive the animation overlay.
+After the first tick, manual color, brightness or off changes stop the
+animation at once, including just after a command and with scene self-heal
+enabled. The four-second grace after scene activation still covers staged
+turn-on reports, even when the first tick has already run. Reports along
+the current fade's color path are accepted within its brightness range.
+For four seconds after each tick, late reports along the previous fade's
+path and brightness range also count. This includes colors clamped to Hue
+bulb gamuts. Turning every light off puts the area in `off` without waiting
+for the fade. The area's own turn-off keeps the last tick's transition
+window, so a late echo never latches `manual`.
+A light recovering from unavailable or unknown never latches `manual`.
+With self-heal enabled it heals; otherwise the next tick recolors it.
+
+A failed light command is logged and the animation keeps ticking. A failure
+in one area during reload or startup does not prevent later areas from
+resuming their animations or circadian lighting.
+
+Lights without transition support jump between colors. Fast animations suit
+a room or two: a Hue bridge accepts roughly ten light commands per second,
+so a two-second period over 45 bulbs on one bridge falls behind. A step
+that arrives while the previous step is still sending is skipped. Areas
+agree on the step, but their radios determine when each bulb receives it.
+The area's diagnostics report the running animation's name and step.
+
+See [`CONFIGURATION.md`](CONFIGURATION.md#animation) for the full key reference.
+
 ## Demand response
 
 When `switch.area_lighting_demand_response_active` is on (default off, persisted),

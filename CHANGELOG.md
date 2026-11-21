@@ -9,6 +9,19 @@ readable companion that highlights user-facing changes.
 
 ### Added
 
+- **Animated scenes.** A top-level `animations:` block defines palettes
+  with a `period` and a `transition`, and a scene lists the animations it
+  may run. Each step rotates the scene's colored lights one palette slot,
+  in proportion to the palette weights. Every area computes the step from
+  the clock, so areas running the same animation change together.
+  Color-temperature lights and lights marked `animate: false` keep their
+  scene state. `select.area_lighting_<scene>_animation` picks the animation
+  for every area, or `off`, and survives restarts. A person's change to an
+  animated light still latches `manual`, judged by whether the reported
+  color lies on the current fade. Alerts and dimming pause the animation,
+  demand response keeps shed bulbs off, and `snapshot_scene` refuses
+  animated scenes.
+
 - **A global dial for dimmer circadian nights.**
   `number.area_lighting_circadian_min_brightness_reduction` lowers every
   circadian group's `min_brightness` by a percentage of itself. At 50, a

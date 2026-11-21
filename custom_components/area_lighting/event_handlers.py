@@ -7,6 +7,7 @@ and routing events to the appropriate AreaLightingController.
 from __future__ import annotations
 
 import logging
+from itertools import pairwise
 from typing import Any
 
 from homeassistant.components.scene import DATA_COMPONENT as SCENE_COMPONENT
@@ -23,6 +24,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 
+from .animation import brightness_in_range, point_on_animation_segment, target_color_xy
 from .area_state import ActivationSource
 from .const import (
     DOMAIN,
@@ -488,8 +490,12 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             return
 
         entity_id = new_state.entity_id
+        target = ctrl._active_scene_targets.get(entity_id)
+        animation_from = target.get("animation_from") if target is not None else None
 
-        if new_state.state != STATE_ON:
+        if new_state.state != STATE_ON and not (
+            new_state.state == STATE_OFF and animation_from is not None
+        ):
             _skip("new state not on", entity_id)
             return
 
@@ -552,13 +558,50 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 )
                 return
 
-        # Per-entity transition window: a scene activation may carry a
-        # fade duration (e.g. a 60 s motion off-fade). Until the
-        # transition completes the bulb's reports will diverge from
-        # the post-fade endpoint — treat that as still settling, not
-        # a manual override.
-        target = ctrl._active_scene_targets.get(entity_id)
-        if target is not None:
+        if target is not None and animation_from is not None:
+            if new_state.state == STATE_OFF and ctrl.all_lights_off():
+                _skip("all lights off", entity_id)
+                return
+            endpoints = [animation_from, target]
+            commanded_at = target.get("commanded_at")
+            if (
+                (previous := target.get("animation_from_previous")) is not None
+                and commanded_at is not None
+                and _time.monotonic() - commanded_at < MANUAL_DETECTION_GRACE_SECONDS
+            ):
+                endpoints.insert(0, previous)
+            coordinates = [
+                xy for endpoint in endpoints if (xy := target_color_xy(endpoint)) is not None
+            ]
+            actual_xy = new_state.attributes.get("xy_color")
+            if actual_xy is not None and len(coordinates) == len(endpoints):
+                matches_animation = (
+                    new_state.state == STATE_ON
+                    and brightness_in_range(
+                        new_state.attributes.get("brightness"),
+                        *(endpoint.get("brightness") for endpoint in endpoints),
+                    )
+                    and any(
+                        point_on_animation_segment(actual_xy, start, end)
+                        for start, end in pairwise(coordinates)
+                    )
+                )
+            else:
+                matches_animation = any(
+                    ctrl.state_matches_scene_target(entity_id, new_state, endpoint)
+                    for endpoint in endpoints
+                )
+            if matches_animation:
+                _skip("matches animation fade", entity_id)
+                return
+            if old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                if ctrl.scene_self_heal_enabled:
+                    hass.async_create_task(ctrl.handle_scene_drift_reassert(entity_id, "recovery"))
+                else:
+                    _skip("animation recovery", entity_id)
+                return
+        elif target is not None:
+            # Static scene reports may still be settling toward their target.
             commanded_at = target.get("commanded_at")
             transition = target.get("transition")
             if commanded_at is not None and transition is not None:
@@ -574,7 +617,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
         # Compare against scene targets: if the light's current state
         # matches what the scene instructed, this is a late bridge
         # report or convergence, not a manual override.
-        if ctrl.state_matches_scene_target(entity_id, new_state):
+        if animation_from is None and ctrl.state_matches_scene_target(entity_id, new_state):
             _skip("matches scene target", entity_id)
             return
 
@@ -589,7 +632,7 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 is_recovery = old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
                 in_glitch_window = False
                 commanded_at = target.get("commanded_at")
-                if commanded_at is not None:
+                if commanded_at is not None and animation_from is None:
                     transition = target.get("transition") or 0.0
                     age = _time.monotonic() - commanded_at
                     settle = transition + MANUAL_DETECTION_GRACE_SECONDS

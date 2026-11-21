@@ -144,7 +144,12 @@ class AreaLightingScene(Scene):
         transition: float | None,
     ) -> None:
         """Apply stored snapshot data to lights."""
-        if self._demand_response_active():
+        controller = None
+        if self._scene_cfg.animations:
+            controller = self.hass.data.get(DOMAIN, {}).get("controllers", {}).get(self._area.id)
+            if controller is not None:
+                stored = controller._effective_scene_targets(self._scene_cfg.slug)
+        if controller is None and self._demand_response_active():
             from .demand_response import apply_demand_response
 
             # Clusters out BEFORE the shed. Never drive a cluster entity under

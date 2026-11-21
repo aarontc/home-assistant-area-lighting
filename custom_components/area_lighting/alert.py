@@ -305,6 +305,7 @@ async def execute_alert(
     cancel = asyncio.Event()
     controller._alert_cancels.add(cancel)
     controller._alert_active = True
+    controller._stop_animation()
     saved_state = controller._state.to_dict()
     saved_targets = dict(controller._active_scene_targets)
     try:

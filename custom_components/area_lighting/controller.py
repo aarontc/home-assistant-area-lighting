@@ -6,15 +6,20 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from datetime import datetime
 from typing import Any, NamedTuple
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_point_in_utc_time,
+    async_track_state_change_event,
+)
 from homeassistant.util import dt as dt_util
 
 from . import circadian
+from .animation import COLOR_KEYS, animated_light_ids, build_step_targets, step_number
 from .area_state import (
     ActivationSource,
     AreaState,
@@ -50,6 +55,7 @@ from .const import (
 from .demand_response import apply_demand_response, demand_response_shed_ids
 from .light_targets import light_turn_on_data
 from .models import (
+    AnimationConfig,
     AreaConfig,
     AreaLightingConfig,
     CircadianKelvinRoutesConfig,
@@ -251,6 +257,11 @@ class AreaLightingController:
         # for its route commands to land before the router re-reads the lights.
         self._circadian_tick_done: asyncio.Future[None] | None = None
         self._circadian_commanded_at: dict[str, float] = {}
+        self._animation_unsub: Callable[[], None] | None = None
+        self._animation_generation = 0
+        self._animation_tick_generation: int | None = None
+        self._animation_name: str | None = None
+        self._animation_reload_pending = False
         # The last raise/lower step sent to each bulb. The next press steps
         # from its level while the bulb still reports a level the step
         # replaced.
@@ -278,6 +289,11 @@ class AreaLightingController:
         awaits, so no sensor change goes unheard. It then resumes circadian.
         An area in a scene the new config drops switches to manual.
         """
+        old_scene = self._get_scene_config(self.current_scene)
+        self._animation_reload_pending = self._animation_reload_pending or bool(
+            old_scene and old_scene.animations
+        )
+        self._stop_animation()
         self._stop_circadian()
         self.area = area
         self._global_config = global_config
@@ -538,6 +554,7 @@ class AreaLightingController:
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
             "circadian_running": self.circadian_running,
+            "animation": self._animation_diagnostic(),
             "demand_response_active": self._demand_response_active(),
             "demand_response_shed": sorted(self._dr_shed_ids),
             "scene_self_heal_enabled": self._scene_self_heal,
@@ -616,6 +633,7 @@ class AreaLightingController:
                 self._state.transition_to_manual()
             else:
                 self._state.transition_to_scene(value, ActivationSource.USER)
+                self._start_animation()
         self._notify_state_change()
 
     def current_on_scene_slug(self) -> str | None:
@@ -805,6 +823,8 @@ class AreaLightingController:
         self._state_listeners = [c for c in self._state_listeners if c != callback]
 
     def _notify_state_change(self) -> None:
+        if self._animation_name is not None and self._running_animation() is None:
+            self._stop_animation()
         self._log_state_snapshot_if_changed()
         for listener in self._state_listeners:
             listener()
@@ -920,7 +940,7 @@ class AreaLightingController:
             self.hass.async_create_task(follower.handle_leader_change(self, new_slug, reason))
 
     def _stamp_targets_with_command_metadata(self, transition: float | None) -> None:
-        """Record commanded_at + transition on every active scene target.
+        """Record commanded_at and transition on every active scene target.
 
         Manual detection reads these to distinguish a real divergence
         from a bulb that's still settling into a commanded fade. The
@@ -935,6 +955,7 @@ class AreaLightingController:
                 "commanded_at": now,
                 "transition": tx,
             }
+            self._active_scene_targets[entity_id].pop("animation_tick", None)
 
     async def _activate_scene(
         self,
@@ -1003,6 +1024,8 @@ class AreaLightingController:
         # background replay with no user behind it, yields to a newer claim.
         self._activation_seq += 1
         my_activation = self._activation_seq
+        self._animation_reload_pending = False
+        self._stop_animation()
 
         if scene_slug == SCENE_OFF_INTERNAL:
             self._stop_circadian()
@@ -1040,29 +1063,39 @@ class AreaLightingController:
         # Visual scene → stop the circadian adjuster first so its ticks stop
         # overriding the scene's color/brightness, then apply + transition.
         self._stop_circadian()
+        animation = self._selected_animation(scene_slug)
+        applied_step = (
+            step_number(dt_util.utcnow().timestamp(), animation[1].period)
+            if animation is not None
+            else None
+        )
         if transition is None:
             transition = DEFAULT_ON_TRANSITION_SECONDS
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
-        await self._apply_scene_data(scene_slug, transition)
-        if self._closed:
-            return
-        if yield_if_superseded and my_activation != self._activation_seq:
-            # A newer activation claimed the area while this one was applying.
-            # It has already written the targets and will write the state, so
-            # committing here would leave the two describing different scenes.
-            # Its light commands were issued after ours, so they win visually
-            # too; there is nothing left for this activation to do.
-            _LOGGER.debug(
-                "Area %s: activation of %s superseded, skipping state commit",
-                self.area.id,
-                scene_slug,
-            )
-            return
-        self._schedule_post_settle_selfcheck(transition)
-        self._clear_scene_drift_issue()
-        self._state.transition_to_scene(scene_slug, source)
+        try:
+            await self._apply_scene_data(scene_slug, transition)
+            if self._closed:
+                return
+            if yield_if_superseded and my_activation != self._activation_seq:
+                # A newer activation claimed the area while this one was applying.
+                # It has already written the targets and will write the state, so
+                # committing here would leave the two describing different scenes.
+                # Its light commands were issued after ours, so they win visually
+                # too; there is nothing left for this activation to do.
+                _LOGGER.debug(
+                    "Area %s: activation of %s superseded, skipping state commit",
+                    self.area.id,
+                    scene_slug,
+                )
+                return
+            self._schedule_post_settle_selfcheck(transition)
+            self._clear_scene_drift_issue()
+            self._state.transition_to_scene(scene_slug, source)
+        finally:
+            if my_activation == self._activation_seq and self.current_scene == scene_slug:
+                self._start_animation(applied_step)
         self._enforce_occupancy_timer()
         self._notify_state_change()
         await self._sync_kelvin_router()
@@ -1273,51 +1306,36 @@ class AreaLightingController:
         sequential-per-light flicker.
         """
         from .cluster_dispatch import select_dispatch_commands
-        from .scene_storage import SceneStorage
 
-        storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
-        stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
         scene_cfg = self._get_scene_config(scene_slug)
-
-        entities: dict[str, Any] | None = stored or (
-            scene_cfg.entities if scene_cfg and scene_cfg.entities else None
-        )
+        entities = self._scene_entities(scene_slug)
+        if transition is None:
+            transition = DEFAULT_ON_TRANSITION_SECONDS
 
         if entities:
-            # Filter to light.* entities only (legacy templater scene
-            # files sometimes include input_boolean flags too).
-            light_entities = {
-                eid: state for eid, state in entities.items() if eid.startswith("light.")
-            }
-            if self._demand_response_active():
-                # Drop cluster entities BEFORE computing the shed. Never drive
-                # a cluster entity under DR: a snapshot's zone entry would
-                # survive as an `on` target and relight shed members through
-                # the zone. It must also not reach the shed itself, where an
-                # undeclared `on` target now counts toward n; a cluster
-                # addresses the same physical bulbs as its members, so
-                # counting it too would push n across a tier boundary and
-                # over-shed. cluster_specs stays as-is so kept members still
-                # coalesce into a zone command when they cover it entirely.
-                clusters = self._cluster_entity_ids()
-                light_entities = {
-                    eid: st for eid, st in light_entities.items() if eid not in clusters
-                }
-                light_entities = apply_demand_response(
-                    light_entities, [light.id for light in self.area.lights]
-                )
+            light_entities = self._effective_scene_targets(scene_slug)
+            animation = self._selected_animation(scene_slug)
             cluster_specs = [
                 (light.id, list(light.members))
                 for light in self.area.light_clusters
-                if light.is_cluster
+                if light.is_cluster and animation is None
             ]
             commands = select_dispatch_commands(light_entities, cluster_specs)
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[
                     self._apply_light_state(entity_id, state_data, transition)
                     for entity_id, state_data in commands
-                ]
+                ],
+                return_exceptions=animation is not None,
             )
+            for (entity_id, _), result in zip(commands, results, strict=True):
+                if isinstance(result, Exception):
+                    _LOGGER.warning(
+                        "Area %s: animation update of %s failed: %s",
+                        self.area.id,
+                        entity_id,
+                        result,
+                    )
         else:
             # No snapshot -> role-based on/off. Lights in the scene's
             # group_exclude are skipped entirely (matching
@@ -1375,6 +1393,21 @@ class AreaLightingController:
                 return s
         return None
 
+    def _scene_entities(self, scene_slug: str) -> dict[str, dict]:
+        """Read snapshot or configured entities, retaining animation exclusions."""
+        storage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
+        stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
+        scene_cfg = self._get_scene_config(scene_slug)
+        configured = scene_cfg.entities if scene_cfg and scene_cfg.entities else {}
+        entities = stored or configured
+        return {
+            eid: {
+                **state,
+                **({"animate": False} if configured.get(eid, {}).get("animate") is False else {}),
+            }
+            for eid, state in entities.items()
+        }
+
     def _resolve_raw_scene_targets(self, scene_slug: str) -> dict[str, dict]:
         """Resolve the per-light target states for a scene.
 
@@ -1384,18 +1417,24 @@ class AreaLightingController:
         lights in the active scene's group_exclude are intentionally
         OMITTED (left untracked and untouched).
         """
-        from .scene_storage import SceneStorage
-
-        storage: SceneStorage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
-        stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
         scene_cfg = self._get_scene_config(scene_slug)
-
-        entities: dict[str, Any] | None = stored or (
-            scene_cfg.entities if scene_cfg and scene_cfg.entities else None
-        )
-
+        entities = self._scene_entities(scene_slug)
         if entities:
-            return {eid: state for eid, state in entities.items() if eid.startswith("light.")}
+            entities = {eid: state for eid, state in entities.items() if eid.startswith("light.")}
+            animation = self._selected_animation(scene_slug)
+            if animation is not None:
+                config = animation[1]
+                clusters = self._cluster_entity_ids()
+                return build_step_targets(
+                    {eid: target for eid, target in entities.items() if eid not in clusters},
+                    config,
+                    step_number(dt_util.utcnow().timestamp(), config.period),
+                    clusters,
+                )
+            return {
+                eid: {key: value for key, value in state.items() if key != "animate"}
+                for eid, state in entities.items()
+            }
 
         # Skeleton fallback: role-based on/off, no attribute targets. Lights
         # in the scene's group_exclude are OMITTED entirely (matching
@@ -1544,7 +1583,9 @@ class AreaLightingController:
                 yield_if_superseded=True,
             )
 
-    def state_matches_scene_target(self, entity_id: str, ha_state) -> bool:
+    def state_matches_scene_target(
+        self, entity_id: str, ha_state, target: dict | None = None
+    ) -> bool:
         """Check whether a light's HA state matches the active scene target.
 
         Returns True if the light's current attributes are consistent with
@@ -1552,7 +1593,8 @@ class AreaLightingController:
         Returns False if no target exists for this light or if the values
         diverge, indicating a genuine manual override.
         """
-        target = self._active_scene_targets.get(entity_id)
+        if target is None:
+            target = self._active_scene_targets.get(entity_id)
         if target is None:
             return False
 
@@ -1658,6 +1700,163 @@ class AreaLightingController:
             slug = resolve_sun_position_inverted(self._is_daylight_enabled())
             await self._activate_scene(slug, source, transition)
 
+    def _selected_animation(self, scene_slug: str) -> tuple[str, AnimationConfig] | None:
+        scene = self._get_scene_config(scene_slug)
+        if scene is None or not scene.animations:
+            return None
+        toggles = self.hass.data.get(DOMAIN, {}).get("global")
+        name = toggles.scene_animation(scene_slug) if toggles is not None else scene.animations[0]
+        if name not in scene.animations or name not in self._global_config.animations:
+            return None
+        return name, self._global_config.animations[name]
+
+    def _running_animation(self) -> tuple[str, AnimationConfig] | None:
+        if self._closed or self._alert_active or self._state.dimmed or not self._state.is_scene:
+            return None
+        return self._selected_animation(self._state.scene_slug)
+
+    def _animation_diagnostic(self) -> dict | None:
+        animation = self._running_animation()
+        if self._animation_name is None or animation is None:
+            return None
+        name, config = animation
+        return {"name": name, "step": step_number(dt_util.utcnow().timestamp(), config.period)}
+
+    def _start_animation(self, applied_step: int | None = None) -> None:
+        animation = self._running_animation()
+        if animation is None or self._animation_unsub is not None:
+            return
+        self._animation_name = animation[0]
+        self._schedule_animation_boundary(self._animation_generation, animation[1], applied_step)
+
+    def _stop_animation(self) -> None:
+        self._animation_generation += 1
+        self._animation_name = None
+        for target in self._active_scene_targets.values():
+            target.pop("animation_from", None)
+            target.pop("animation_from_previous", None)
+        if self._animation_unsub is not None:
+            self._animation_unsub()
+            self._animation_unsub = None
+
+    def _schedule_animation_boundary(
+        self, generation: int, config: AnimationConfig, applied_step: int | None = None
+    ) -> None:
+        if applied_step is None:
+            applied_step = step_number(dt_util.utcnow().timestamp(), config.period)
+        next_step = applied_step + 1
+
+        @callback
+        def tick(_now: datetime) -> None:
+            if generation != self._animation_generation or self._running_animation() is None:
+                return
+            self._animation_unsub = None
+            self._schedule_animation_boundary(generation, config)
+            self.hass.async_create_task(self._animation_tick(generation))
+
+        boundary = dt_util.utc_from_timestamp(next_step * config.period)
+        now = dt_util.utcnow()
+        if boundary <= now:
+            self._animation_unsub = self.hass.loop.call_soon(tick, now).cancel
+        else:
+            self._animation_unsub = async_track_point_in_utc_time(self.hass, tick, boundary)
+
+    async def _animation_tick(self, generation: int) -> None:
+        animation = self._running_animation()
+        if generation != self._animation_generation or animation is None:
+            return
+        if self._animation_tick_generation == generation:
+            _LOGGER.debug("Area %s: previous animation tick still running, skipping", self.area.id)
+            return
+        self._animation_tick_generation = generation
+        try:
+            scene_slug = self._state.scene_slug
+            previous = self._active_scene_targets
+            targets = self._effective_scene_targets(scene_slug)
+            self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
+            animated = animated_light_ids(
+                self._scene_entities(scene_slug), self._cluster_entity_ids()
+            )
+            commanded = [eid for eid in animated if targets[eid].get("state") == "on"]
+            now = time.monotonic()
+            for eid, target in targets.items():
+                if eid in commanded:
+                    target["commanded_at"] = now
+                    target["transition"] = animation[1].transition
+                    target["animation_tick"] = True
+                    previous_target = previous.get(eid, {})
+                    if previous_target.get("state") == "on":
+                        target["animation_from"] = {
+                            key: value
+                            for key, value in previous_target.items()
+                            if key in COLOR_KEYS or key in {"state", "brightness"}
+                        }
+                        if "animation_from" in previous_target:
+                            target["animation_from_previous"] = previous_target["animation_from"]
+                else:
+                    for key in (
+                        "commanded_at",
+                        "transition",
+                        "animation_tick",
+                        "animation_from",
+                        "animation_from_previous",
+                    ):
+                        if key in previous.get(eid, {}):
+                            target[key] = previous[eid][key]
+            self._active_scene_targets = targets
+            results = await asyncio.gather(
+                *(
+                    self._send_animation_light(eid, animation[1].transition, generation)
+                    for eid in commanded
+                ),
+                return_exceptions=True,
+            )
+            for eid, result in zip(commanded, results, strict=True):
+                if isinstance(result, Exception):
+                    _LOGGER.warning(
+                        "Area %s: animation update of %s failed: %s", self.area.id, eid, result
+                    )
+        finally:
+            if self._animation_tick_generation == generation:
+                self._animation_tick_generation = None
+
+    async def _send_animation_light(
+        self, entity_id: str, transition: float, generation: int
+    ) -> None:
+        if generation != self._animation_generation or self._running_animation() is None:
+            return
+        await self._apply_light_state(entity_id, self._active_scene_targets[entity_id], transition)
+
+    async def async_scene_animation_changed(
+        self, scene_slug: str, *, previous_option: str | None = None
+    ) -> None:
+        """Apply the global choice or a reloaded animation to the active scene."""
+        scene = self._get_scene_config(scene_slug)
+        should_apply = self._animation_reload_pending or bool(scene and scene.animations)
+        if (
+            not should_apply
+            or self._closed
+            or self._alert_active
+            or self._state.dimmed
+            or not self._state.is_scene
+            or self._state.scene_slug != scene_slug
+        ):
+            return
+        animation = self._selected_animation(scene_slug)
+        if previous_option is not None and not self._animation_reload_pending:
+            previous_name = (
+                previous_option if scene and previous_option in scene.animations else None
+            )
+            if previous_name == (animation[0] if animation is not None else None):
+                return
+        await self._activate_scene(
+            scene_slug,
+            self._state.source,
+            animation[1].transition if animation is not None else DEFAULT_ON_TRANSITION_SECONDS,
+            propagate_to_followers=False,
+            yield_if_superseded=True,
+        )
+
     # ── Circadian helpers ──────────────────────────────────────────────
 
     def _start_circadian(self) -> None:
@@ -1741,6 +1940,7 @@ class AreaLightingController:
             # Restarts an adjuster a reload stopped mid-alert, and brings the
             # restored lights to the current values, sleep changes included.
             await self.async_resume_circadian()
+            await self.async_scene_animation_changed(self.current_scene)
 
     async def async_resume_circadian(self) -> None:
         """Restart the adjuster of an area that is already in circadian and
@@ -2566,6 +2766,7 @@ class AreaLightingController:
         # stick. Setting the flag first means the echoes arrive to a guard
         # that is already in place.
         if not self._state.is_manual:
+            self._stop_animation()
             self._state.mark_dimmed()
             self._notify_state_change()
 
@@ -2607,6 +2808,7 @@ class AreaLightingController:
         # Mark dimmed BEFORE commanding: the bulbs' state echoes must find the
         # dimmed flag already set, or manual detection and self-heal read the
         # dim as scene drift and undo it.
+        self._stop_animation()
         self._state.mark_dimmed()
         await self._set_lights_to_pct(step, entity_ids)
         self._notify_state_change()
@@ -2648,11 +2850,17 @@ class AreaLightingController:
         else:
             self._stop_circadian()
             self._active_scene_targets = self._effective_scene_targets(scene_slug)
+            animation = self._selected_animation(scene_slug)
             self._stamp_targets_with_command_metadata(
                 DEFAULT_ON_TRANSITION_SECONDS if transition is None else transition
             )
             self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
             self._state.transition_to_scene(scene_slug, ActivationSource.USER)
+            self._start_animation(
+                step_number(dt_util.utcnow().timestamp(), animation[1].period)
+                if animation is not None
+                else None
+            )
         self._notify_state_change()
         await self._sync_kelvin_router()
 
@@ -2674,7 +2882,9 @@ class AreaLightingController:
         deadlines = [
             target["commanded_at"] + target.get("transition", 0.0) + MANUAL_DETECTION_GRACE_SECONDS
             for target in self._active_scene_targets.values()
-            if target.get("state") == "on" and "commanded_at" in target
+            if target.get("state") == "on"
+            and "commanded_at" in target
+            and not target.get("animation_tick")
         ]
         latest = max(deadlines, default=None)
         return latest if latest is not None and latest > now else None
@@ -2710,6 +2920,7 @@ class AreaLightingController:
         area (README §4 "All lights externally turned off" bullet 3).
         """
         _LOGGER.debug("Area %s: handle_lights_all_off", self.area.id)
+        self._stop_animation()
         self._active_scene_targets = {}
         self._dr_shed_ids = frozenset()
         self._clear_scene_drift_issue()
@@ -2733,6 +2944,7 @@ class AreaLightingController:
         running, so the area still turns off once the room is empty.
         """
         self._takeover_seq += 1
+        self._stop_animation()
         self._motion_timer.cancel()
         self._motion_night_timer.cancel()
         if self._alert_cancels:
@@ -2837,6 +3049,14 @@ class AreaLightingController:
         for entity_id, target in list(self._active_scene_targets.items()):
             if target.get("state") != "on":
                 continue
+            commanded_at = target.get("commanded_at")
+            if (
+                target.get("animation_tick")
+                and commanded_at is not None
+                and time.monotonic()
+                < commanded_at + (target.get("transition") or 0.0) + MANUAL_DETECTION_GRACE_SECONDS
+            ):
+                continue
             st = self.hass.states.get(entity_id)
             if st is None or st.state != STATE_ON:
                 continue
@@ -2907,6 +3127,7 @@ class AreaLightingController:
             "commanded_at": now,
             "transition": 0.0,
         }
+        self._active_scene_targets[entity_id].pop("animation_tick", None)
 
     def _raise_scene_drift_issue(self, entity_id: str) -> None:
         from homeassistant.helpers import issue_registry as ir
@@ -3384,6 +3605,7 @@ class AreaLightingController:
         if persist:
             self._schedule_save({**self.state_dict(), "timer_deadlines": {}})
         self._closed = True
+        self._stop_animation()
         self.leader = None
         self.followers = []
         self._motion_timer.close()

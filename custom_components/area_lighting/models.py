@@ -64,6 +64,7 @@ class SceneConfig:
     cycle: list[str] | None = None
     entities: dict[str, dict] | None = None  # Inline light state data
     icon: str | None = None
+    animations: list[str] = field(default_factory=list)
 
     @property
     def entity_id(self) -> str:
@@ -291,6 +292,15 @@ class CircadianConfig:
 
 
 @dataclass
+class AnimationConfig:
+    """Timing and weighted colours for a named scene animation."""
+
+    period: float
+    transition: float
+    palette: list[dict]
+
+
+@dataclass
 class AreaLightingConfig:
     """Top-level configuration for the area_lighting integration."""
 
@@ -298,6 +308,7 @@ class AreaLightingConfig:
     alert_patterns: dict[str, AlertPattern] = field(default_factory=dict)
     scene_self_heal: bool = True
     circadian: CircadianConfig = field(default_factory=CircadianConfig)
+    animations: dict[str, AnimationConfig] = field(default_factory=dict)
 
     @property
     def enabled_areas(self) -> list[AreaConfig]:

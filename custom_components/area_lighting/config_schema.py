@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 
@@ -29,6 +30,7 @@ from .const import (
 from .models import (
     AlertPattern,
     AlertStep,
+    AnimationConfig,
     AreaConfig,
     AreaLightingConfig,
     CircadianConfig,
@@ -145,6 +147,7 @@ SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
         },
         # Mireds, converted to color_temp_kelvin when the scene is applied.
         vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("animate"): cv.boolean,
     }
 )
 
@@ -164,16 +167,137 @@ def _validate_scene_id(value: str) -> str:
     return value
 
 
-SCENE_SCHEMA = vol.Schema(
-    {
-        vol.Required("id"): vol.All(_validate_quoted_string, _validate_scene_id),
-        vol.Required("name"): _validate_quoted_string,
-        vol.Optional("group_exclude", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Optional("cycle"): vol.All(cv.ensure_list, [_validate_quoted_string]),
-        # Per-light state data for the scene, keyed by entity_id.
-        vol.Optional("entities"): {cv.entity_id: SCENE_ENTITY_STATE_SCHEMA},
-        vol.Optional("icon"): cv.icon,
-    }
+def _validate_animation_name(value: object) -> str:
+    value = _validate_quoted_string(value)
+    if not _ID_PATTERN.fullmatch(value):
+        raise vol.Invalid(f"animation name '{value}' {_ID_RULE}")
+    if value == "off":
+        raise vol.Invalid("animation name 'off' is reserved for turning animations off")
+    return value
+
+
+def _animation_number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise vol.Invalid("expected a number")
+    if not math.isfinite(value):
+        raise vol.Invalid("number must be finite")
+    return float(value)
+
+
+def _animation_integer(value: object) -> int:
+    if type(value) is not int:
+        raise vol.Invalid("expected an integer")
+    return value
+
+
+def _validate_palette_color(value: dict) -> dict:
+    colors = {"hs_color", "rgb_color", "xy_color", "color_temp_kelvin"}.intersection(value)
+    if len(colors) != 1:
+        raise vol.Invalid("palette entry must set exactly one colour key")
+    return value
+
+
+ANIMATION_PALETTE_ENTRY_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional("hs_color"): vol.ExactSequence(
+                [
+                    vol.All(_animation_number, vol.Range(min=0, max=360)),
+                    vol.All(_animation_number, vol.Range(min=0, max=100)),
+                ]
+            ),
+            vol.Optional("rgb_color"): vol.ExactSequence(
+                [
+                    vol.All(_animation_integer, vol.Range(min=0, max=255)),
+                    vol.All(_animation_integer, vol.Range(min=0, max=255)),
+                    vol.All(_animation_integer, vol.Range(min=0, max=255)),
+                ]
+            ),
+            vol.Optional("xy_color"): vol.ExactSequence(
+                [
+                    vol.All(_animation_number, vol.Range(min=0, max=1)),
+                    vol.All(_animation_number, vol.Range(min=0, max=1)),
+                ]
+            ),
+            vol.Optional("color_temp_kelvin"): vol.All(_animation_integer, vol.Range(min=1)),
+            vol.Optional("brightness"): vol.All(_animation_integer, vol.Range(min=1, max=255)),
+            vol.Optional("weight", default=1): vol.All(_animation_integer, vol.Range(min=1)),
+        }
+    ),
+    _validate_palette_color,
+)
+
+
+def _validate_animation_timing(value: dict) -> dict:
+    value.setdefault("transition", value["period"])
+    if value["transition"] > value["period"]:
+        raise vol.Invalid("transition must not exceed period", path=["transition"])
+    return value
+
+
+ANIMATION_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("period"): vol.All(_animation_number, vol.Range(min=1)),
+            vol.Optional("transition"): vol.All(_animation_number, vol.Range(min=0)),
+            vol.Required("palette"): vol.All(
+                list, vol.Length(min=1), [ANIMATION_PALETTE_ENTRY_SCHEMA]
+            ),
+        }
+    ),
+    _validate_animation_timing,
+)
+ANIMATIONS_SCHEMA = vol.Schema({_validate_animation_name: ANIMATION_SCHEMA})
+
+
+def _validate_scene_animation_options(value: dict, area_id: str | None = None) -> dict:
+    if not isinstance(value, dict):
+        return value
+    context = f"scene '{value.get('id', '?')}'"
+    if area_id is not None:
+        context = f"area '{area_id}', {context}"
+    animations = value.get("animations", [])
+    if "animations" in value:
+        if not isinstance(animations, list):
+            raise vol.Invalid(f"{context}: animations must be a list")
+        for name in animations:
+            try:
+                _validate_animation_name(name)
+            except vol.Invalid as err:
+                raise vol.Invalid(f"{context}: animations: {err}") from err
+        if len(set(animations)) != len(animations):
+            raise vol.Invalid(f"{context}: animations must not repeat a name")
+        if not isinstance(value.get("entities"), dict):
+            raise vol.Invalid(f"{context}: animations requires an entities map")
+    entities = value.get("entities", {})
+    if not isinstance(entities, dict):
+        return value
+    for entity_id, target in entities.items():
+        if not isinstance(target, dict) or "animate" not in target:
+            continue
+        if not animations:
+            raise vol.Invalid(f"{context}: entity '{entity_id}': animate requires animations")
+        try:
+            cv.boolean(target["animate"])
+        except vol.Invalid as err:
+            raise vol.Invalid(f"{context}: entity '{entity_id}': animate: {err}") from err
+    return value
+
+
+SCENE_SCHEMA = vol.All(
+    _validate_scene_animation_options,
+    vol.Schema(
+        {
+            vol.Required("id"): vol.All(_validate_quoted_string, _validate_scene_id),
+            vol.Required("name"): _validate_quoted_string,
+            vol.Optional("group_exclude", default=[]): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("cycle"): vol.All(cv.ensure_list, [_validate_quoted_string]),
+            # Per-light state data for the scene, keyed by entity_id.
+            vol.Optional("entities"): {cv.entity_id: SCENE_ENTITY_STATE_SCHEMA},
+            vol.Optional("icon"): cv.icon,
+            vol.Optional("animations"): [_validate_animation_name],
+        }
+    ),
 )
 
 CIRCADIAN_KELVIN_ROUTE_SCHEMA = vol.Schema(
@@ -370,45 +494,57 @@ def _validate_area_id(value: str) -> str:
     return value
 
 
-AREA_SCHEMA = vol.Schema(
-    {
-        vol.Required("id"): vol.All(_validate_quoted_string, _validate_area_id),
-        vol.Required("name"): cv.string,
-        vol.Optional("enabled", default=True): cv.boolean,
-        vol.Optional("event_handlers", default=True): cv.boolean,
-        vol.Optional("icon"): cv.string,
-        vol.Optional("special"): cv.string,
-        vol.Optional("ambient_lighting_zone"): cv.string,
-        # D3: per-area brightness step override (integer percentage)
-        vol.Optional("brightness_step_pct"): vol.All(int, vol.Range(min=1, max=100)),
-        # D6: per-area night-mode fade duration override
-        vol.Optional("night_fadeout_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
-        vol.Optional("leader_area_id"): cv.string,
-        vol.Optional("follow_leader_deactivation", default=False): cv.boolean,
-        vol.Optional("circadian_groups", default=[]): vol.All(
-            cv.ensure_list, [CIRCADIAN_GROUP_SCHEMA]
-        ),
-        vol.Optional("circadian_switches"): _removed(
-            "circadian_switches was renamed to circadian_groups in 3.0.0"
-        ),
-        vol.Optional("lights", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
-        vol.Optional("light_clusters", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
-        vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [SCENE_SCHEMA]),
-        vol.Optional("lutron_remotes", default=[]): vol.All(cv.ensure_list, [LUTRON_REMOTE_SCHEMA]),
-        vol.Optional("motion_light_motion_sensor_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Optional("motion_light_conditions", default=[]): vol.All(
-            cv.ensure_list, [MOTION_LIGHT_CONDITION_SCHEMA]
-        ),
-        vol.Optional("motion_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
-        vol.Optional("occupancy_light_sensor_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
-        vol.Optional("occupancy_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
-        vol.Optional("linked_motion", default=[]): vol.All(
-            cv.ensure_list, [LINKED_MOTION_ENTRY_SCHEMA]
-        ),
-        vol.Optional("circadian_kelvin_routes"): CIRCADIAN_KELVIN_ROUTES_SCHEMA,
-        # Dashboard fields (ignored by component, kept for config compatibility)
-        vol.Optional("overview"): dict,
-    }
+def _validate_area_animation_options(value: dict) -> dict:
+    if isinstance(value, dict) and isinstance(value.get("scenes", []), list):
+        for scene in value.get("scenes", []):
+            _validate_scene_animation_options(scene, value.get("id", "?"))
+    return value
+
+
+AREA_SCHEMA = vol.All(
+    _validate_area_animation_options,
+    vol.Schema(
+        {
+            vol.Required("id"): vol.All(_validate_quoted_string, _validate_area_id),
+            vol.Required("name"): cv.string,
+            vol.Optional("enabled", default=True): cv.boolean,
+            vol.Optional("event_handlers", default=True): cv.boolean,
+            vol.Optional("icon"): cv.string,
+            vol.Optional("special"): cv.string,
+            vol.Optional("ambient_lighting_zone"): cv.string,
+            # D3: per-area brightness step override (integer percentage)
+            vol.Optional("brightness_step_pct"): vol.All(int, vol.Range(min=1, max=100)),
+            # D6: per-area night-mode fade duration override
+            vol.Optional("night_fadeout_seconds"): vol.All(vol.Coerce(float), vol.Range(min=0)),
+            vol.Optional("leader_area_id"): cv.string,
+            vol.Optional("follow_leader_deactivation", default=False): cv.boolean,
+            vol.Optional("circadian_groups", default=[]): vol.All(
+                cv.ensure_list, [CIRCADIAN_GROUP_SCHEMA]
+            ),
+            vol.Optional("circadian_switches"): _removed(
+                "circadian_switches was renamed to circadian_groups in 3.0.0"
+            ),
+            vol.Optional("lights", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
+            vol.Optional("light_clusters", default=[]): vol.All(cv.ensure_list, [LIGHT_SCHEMA]),
+            vol.Optional("scenes", default=[]): vol.All(cv.ensure_list, [SCENE_SCHEMA]),
+            vol.Optional("lutron_remotes", default=[]): vol.All(
+                cv.ensure_list, [LUTRON_REMOTE_SCHEMA]
+            ),
+            vol.Optional("motion_light_motion_sensor_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("motion_light_conditions", default=[]): vol.All(
+                cv.ensure_list, [MOTION_LIGHT_CONDITION_SCHEMA]
+            ),
+            vol.Optional("motion_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
+            vol.Optional("occupancy_light_sensor_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
+            vol.Optional("occupancy_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
+            vol.Optional("linked_motion", default=[]): vol.All(
+                cv.ensure_list, [LINKED_MOTION_ENTRY_SCHEMA]
+            ),
+            vol.Optional("circadian_kelvin_routes"): CIRCADIAN_KELVIN_ROUTES_SCHEMA,
+            # Dashboard fields (ignored by component, kept for config compatibility)
+            vol.Optional("overview"): dict,
+        }
+    ),
 )
 
 
@@ -454,6 +590,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 cycle=s.get("cycle"),
                 entities=s.get("entities"),
                 icon=s.get("icon"),
+                animations=s.get("animations", []),
             )
             for s in area_raw.get("scenes", [])
         ]
@@ -638,7 +775,36 @@ def parse_config(raw: dict) -> AreaLightingConfig:
         alert_patterns=alert_patterns,
         scene_self_heal=raw.get("scene_self_heal", True),
         circadian=CircadianConfig(**raw.get("circadian", {})),
+        animations={
+            name: AnimationConfig(
+                period=animation["period"],
+                transition=animation.get("transition", animation["period"]),
+                palette=animation["palette"],
+            )
+            for name, animation in raw.get("animations", {}).items()
+        },
     )
+
+
+def validate_scene_animations(config: AreaLightingConfig) -> None:
+    """Require each scene's animations to name a configured animation."""
+    for area in config.areas:
+        for scene in area.scenes:
+            context = f"area '{area.id}', scene '{scene.slug}'"
+            if scene.animations and scene.entities is None:
+                raise vol.Invalid(f"{context}: animations requires an entities map")
+            if len(set(scene.animations)) != len(scene.animations):
+                raise vol.Invalid(f"{context}: animations must not repeat a name")
+            for name in scene.animations:
+                if name not in config.animations:
+                    raise vol.Invalid(
+                        f"{context}: animations references unknown animation '{name}'"
+                    )
+            for entity_id, target in (scene.entities or {}).items():
+                if "animate" in target and not scene.animations:
+                    raise vol.Invalid(
+                        f"{context}: entity '{entity_id}': animate requires animations"
+                    )
 
 
 def validate_leader_follower_graph(config: AreaLightingConfig) -> None:
