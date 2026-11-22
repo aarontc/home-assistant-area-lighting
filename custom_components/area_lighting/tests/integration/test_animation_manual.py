@@ -44,6 +44,259 @@ async def _tick_at(hass, freezer, ctrl, seconds):
 
 @pytest.mark.integration
 @pytest.mark.usefixtures("disable_post_settle_selfcheck")
+@pytest.mark.parametrize(
+    ("start", "end", "brightness", "actual_xy", "after_tick", "period", "transition", "manual"),
+    [
+        pytest.param(
+            {"color_temp_kelvin": 5000},
+            {"hs_color": [0, 100]},
+            255,
+            (0.3298, 0.2367),
+            7,
+            15,
+            15,
+            False,
+            id="kelvin-to-red",
+        ),
+        pytest.param(
+            {"xy_color": [0.371, 0.349]},
+            {"hs_color": [0, 100]},
+            200,
+            (0.4366, 0.2861),
+            7,
+            15,
+            15,
+            False,
+            id="xy-white-to-red",
+        ),
+        pytest.param(
+            {"hs_color": [128, 100]},
+            {"color_temp_kelvin": 5000},
+            255,
+            (0.2925, 0.376),
+            11,
+            15,
+            15,
+            False,
+            id="green-to-kelvin",
+        ),
+        pytest.param(
+            {"color_temp_kelvin": 5000},
+            {"hs_color": [0, 100]},
+            60,
+            (0.3298, 0.2367),
+            7,
+            15,
+            15,
+            True,
+            id="brightness-outside-range",
+        ),
+        pytest.param(
+            {"color_temp_kelvin": 5000},
+            {"hs_color": [0, 100]},
+            255,
+            (0.3298, 0.2367),
+            26,
+            30,
+            20,
+            True,
+            id="after-white-fade",
+        ),
+        pytest.param(
+            {"color_temp_kelvin": 5000},
+            {"hs_color": [0, 100]},
+            255,
+            (0.3298, 0.2367),
+            22,
+            30,
+            20,
+            False,
+            id="white-fade-grace-after-transition",
+        ),
+        pytest.param(
+            {"hs_color": [0, 100]},
+            {"hs_color": [128, 100]},
+            255,
+            (0.3298, 0.2367),
+            7,
+            15,
+            15,
+            True,
+            id="saturated-fade",
+        ),
+        pytest.param(
+            {"hs_color": [0, 0]},
+            {"hs_color": [0, 100]},
+            255,
+            None,
+            7,
+            15,
+            15,
+            False,
+            id="white-fade-without-xy",
+        ),
+        pytest.param(
+            {"hs_color": [0, 0]},
+            {"hs_color": [0, 100]},
+            60,
+            None,
+            7,
+            15,
+            15,
+            True,
+            id="brightness-outside-range-without-xy",
+        ),
+        pytest.param(
+            {"hs_color": [0, 0]},
+            {"hs_color": [0, 100]},
+            255,
+            None,
+            26,
+            30,
+            20,
+            True,
+            id="after-white-fade-without-xy",
+        ),
+    ],
+)
+async def test_desaturated_animation_report_manual_detection(
+    hass: HomeAssistant,
+    helper_entities,
+    service_calls,
+    freezer,
+    start,
+    end,
+    brightness,
+    actual_xy,
+    after_tick,
+    period,
+    transition,
+    manual,
+):
+    freezer.move_to(START)
+    cfg = _config(_area(count=2), scene_self_heal=True)
+    endpoint_brightness = 200 if brightness == 200 else 255
+    entries = [
+        dict(start, brightness=endpoint_brightness),
+        dict(end, brightness=endpoint_brightness),
+    ]
+    initial = int(START.timestamp() // period) % len(entries)
+    cfg[DOMAIN]["animations"]["festive"].update(
+        period=period, transition=transition, palette=entries[-initial:] + entries[:-initial]
+    )
+    ctrl = (await _setup(hass, cfg))["den"]
+    await _activate(hass, ctrl)
+    first_tick = period - START.timestamp() % period
+    await _tick_at(hass, freezer, ctrl, first_tick)
+    ctrl._animation_unsub()
+    ctrl._animation_unsub = None
+    target = ctrl._active_scene_targets["light.den_0"]
+    assert all(target["animation_from"][key] == value for key, value in start.items())
+    assert all(target[key] == value for key, value in end.items())
+    await _advance(hass, freezer, first_tick + after_tick)
+    service_calls.clear()
+
+    attributes = {"brightness": brightness}
+    if actual_xy is not None:
+        attributes.update(xy_color=actual_xy, color_mode="xy")
+    else:
+        attributes.update(hs_color=[240, 100], color_mode="hs")
+    hass.states.async_set("light.den_0", "on", attributes, force_update=True)
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual is manual
+    if not manual:
+        assert ctrl.current_scene == "christmas"
+        assert ctrl.diagnostic_snapshot()["animation"]["name"] == "festive"
+    assert not service_calls
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("disable_post_settle_selfcheck")
+@pytest.mark.parametrize("old_state", ["unavailable", "unknown"])
+@pytest.mark.parametrize("scene_self_heal", [False, True])
+async def test_recovery_during_white_fade_keeps_recovery_handling(
+    hass: HomeAssistant, helper_entities, service_calls, freezer, old_state, scene_self_heal
+):
+    freezer.move_to(START)
+    cfg = _config(_area(count=2), scene_self_heal=scene_self_heal)
+    entries = [
+        {"color_temp_kelvin": 5000, "brightness": 255},
+        {"hs_color": [0, 100], "brightness": 255},
+    ]
+    initial = int(START.timestamp() // 15) % len(entries)
+    cfg[DOMAIN]["animations"]["festive"].update(
+        period=15, transition=15, palette=entries[-initial:] + entries[:-initial]
+    )
+    ctrl = (await _setup(hass, cfg))["den"]
+    await _activate(hass, ctrl)
+    first_tick = 15 - START.timestamp() % 15
+    await _tick_at(hass, freezer, ctrl, first_tick)
+    ctrl._animation_unsub()
+    ctrl._animation_unsub = None
+    assert ctrl._active_scene_targets["light.den_0"]["animation_from"]["color_temp_kelvin"] == 5000
+    hass.states.async_set("light.den_0", old_state)
+    await hass.async_block_till_done()
+    await _advance(hass, freezer, first_tick + 7)
+    service_calls.clear()
+
+    hass.states.async_set(
+        "light.den_0",
+        "on",
+        {"brightness": 255, "xy_color": (0.3298, 0.2367), "color_mode": "xy"},
+    )
+    await hass.async_block_till_done()
+
+    assert ctrl.current_scene == "christmas"
+    if scene_self_heal:
+        assert _turn_ons(service_calls)["light.den_0"]["hs_color"] == [0, 100]
+    else:
+        assert not service_calls
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("disable_post_settle_selfcheck")
+@pytest.mark.parametrize("after_tick", [3, 4, 5])
+@pytest.mark.parametrize("report", ["xy", "hs", "off"])
+async def test_previous_desaturated_segment_relaxes_color_only_during_grace(
+    hass: HomeAssistant, helper_entities, service_calls, freezer, after_tick, report
+):
+    freezer.move_to(START)
+    cfg = _config(_area(count=2), scene_self_heal=True)
+    entries = [
+        {"color_temp_kelvin": 5000, "brightness": 30},
+        {"hs_color": [0, 100], "brightness": 120},
+        {"hs_color": [128, 100], "brightness": 230},
+    ]
+    initial = int(START.timestamp() // 30) % len(entries)
+    cfg[DOMAIN]["animations"]["festive"].update(
+        transition=20, palette=entries[-initial:] + entries[:-initial]
+    )
+    ctrl = (await _setup(hass, cfg))["den"]
+    await _activate(hass, ctrl)
+    await _tick_at(hass, freezer, ctrl, 20)
+    await _tick_at(hass, freezer, ctrl, 50)
+    ctrl._animation_unsub()
+    ctrl._animation_unsub = None
+    await _advance(hass, freezer, 50 + after_tick)
+    service_calls.clear()
+
+    attributes = {"brightness": 30}
+    if report == "xy":
+        attributes.update(xy_color=(0.3298, 0.2367), color_mode="xy")
+    else:
+        attributes.update(hs_color=[240, 100], color_mode="hs")
+    hass.states.async_set(
+        "light.den_0", "off" if report == "off" else "on", attributes, force_update=True
+    )
+    await hass.async_block_till_done()
+
+    assert ctrl._state.is_manual is (after_tick >= 4 or report == "off")
+    assert not service_calls
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("disable_post_settle_selfcheck")
 async def test_activation_grace_covers_staged_report_after_first_tick(
     hass: HomeAssistant, helper_entities, service_calls, freezer
 ):

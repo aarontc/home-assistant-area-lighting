@@ -192,6 +192,31 @@ def test_target_color_conversion(target, expected):
 
 
 @pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ({"color_temp_kelvin": 2700}, True),
+        ({"color_temp": 370}, True),
+        ({"color_temp_kelvin": 2700, "hs_color": [0, 100]}, True),
+        ({"hs_color": [120, 89.9]}, True),
+        ({"hs_color": [120, 90]}, False),
+        ({"hs_color": [120, 100]}, False),
+        ({"xy_color": [0.3127, 0.3290]}, True),
+        ({"xy_color": color_util.color_hs_to_xy(0, 100)}, False),
+        ({"rgb_color": [255, 255, 255]}, True),
+        ({"rgb_color": [255, 0, 0]}, False),
+        ({"rgbw_color": [0, 0, 0, 255]}, True),
+        ({"rgbw_color": [255, 0, 0, 0]}, False),
+        ({"rgbww_color": [0, 0, 0, 255, 255]}, True),
+        ({"rgbww_color": [255, 0, 0, 0, 0]}, False),
+        ({"state": "on", "brightness": 100}, False),
+        ({"color_mode": "hs"}, False),
+    ],
+)
+def test_target_desaturation(target, expected):
+    assert animation.target_is_desaturated(target) is expected
+
+
+@pytest.mark.parametrize(
     ("point", "start", "end", "expected"),
     [
         ((0.3, 0.3), (0.1, 0.1), (0.5, 0.5), 0),

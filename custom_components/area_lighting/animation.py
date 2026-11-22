@@ -104,6 +104,35 @@ def target_color_xy(target: dict) -> tuple[float, float] | None:
     return None
 
 
+def target_is_desaturated(target: dict) -> bool:
+    """Return whether a target is white or has less than 90 percent saturation."""
+    if "color_temp_kelvin" in target or "color_temp" in target:
+        return True
+    if "hs_color" in target:
+        saturation: float = target["hs_color"][1]
+        return saturation < 90
+    if "xy_color" in target:
+        return color_util.color_xy_to_hs(*target["xy_color"])[1] < 90
+    if "rgb_color" in target:
+        rgb = target["rgb_color"]
+    elif "rgbw_color" in target:
+        rgb = color_util.color_rgbw_to_rgb(*target["rgbw_color"])
+    elif "rgbww_color" in target:
+        red, green, blue, cold_white, warm_white = target["rgbww_color"]
+        rgb = color_util.color_rgbww_to_rgb(
+            red,
+            green,
+            blue,
+            cold_white,
+            warm_white,
+            target.get("min_color_temp_kelvin", DEFAULT_MIN_KELVIN),
+            target.get("max_color_temp_kelvin", DEFAULT_MAX_KELVIN),
+        )
+    else:
+        return False
+    return color_util.color_RGB_to_hs(*rgb)[1] < 90
+
+
 def point_segment_distance(
     point: tuple[float, float], start: tuple[float, float], end: tuple[float, float]
 ) -> float:

@@ -24,7 +24,12 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 
-from .animation import brightness_in_range, point_on_animation_segment, target_color_xy
+from .animation import (
+    brightness_in_range,
+    point_on_animation_segment,
+    target_color_xy,
+    target_is_desaturated,
+)
 from .area_state import ActivationSource
 from .const import (
     DOMAIN,
@@ -564,26 +569,48 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
                 return
             endpoints = [animation_from, target]
             commanded_at = target.get("commanded_at")
+            animation_age = _time.monotonic() - commanded_at if commanded_at is not None else None
+            fade_window = (target.get("transition") or 0.0) + MANUAL_DETECTION_GRACE_SECONDS
+            # A recovering bulb or one whose target is off keeps the strict rule,
+            # so self-heal and the off checks behave as before.
+            may_relax = (
+                old_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                and target.get("state") != "off"
+            )
+            relaxed_color = (
+                may_relax
+                and animation_age is not None
+                and 0 <= animation_age < fade_window
+                and (target_is_desaturated(animation_from) or target_is_desaturated(target))
+            )
             if (
                 (previous := target.get("animation_from_previous")) is not None
-                and commanded_at is not None
-                and _time.monotonic() - commanded_at < MANUAL_DETECTION_GRACE_SECONDS
+                and animation_age is not None
+                and animation_age < MANUAL_DETECTION_GRACE_SECONDS
             ):
                 endpoints.insert(0, previous)
+                relaxed_color = relaxed_color or (
+                    may_relax
+                    and animation_age >= 0
+                    and (target_is_desaturated(previous) or target_is_desaturated(animation_from))
+                )
             coordinates = [
                 xy for endpoint in endpoints if (xy := target_color_xy(endpoint)) is not None
             ]
             actual_xy = new_state.attributes.get("xy_color")
-            if actual_xy is not None and len(coordinates) == len(endpoints):
+            if relaxed_color or (actual_xy is not None and len(coordinates) == len(endpoints)):
                 matches_animation = (
                     new_state.state == STATE_ON
                     and brightness_in_range(
                         new_state.attributes.get("brightness"),
                         *(endpoint.get("brightness") for endpoint in endpoints),
                     )
-                    and any(
-                        point_on_animation_segment(actual_xy, start, end)
-                        for start, end in pairwise(coordinates)
+                    and (
+                        relaxed_color
+                        or any(
+                            point_on_animation_segment(actual_xy, start, end)
+                            for start, end in pairwise(coordinates)
+                        )
                     )
                 )
             else:

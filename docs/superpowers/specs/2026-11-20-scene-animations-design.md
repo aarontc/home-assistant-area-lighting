@@ -198,7 +198,8 @@ The usual per-light transition window cannot do this. Ticks restamp every
 animated light each period, so with `transition` close to `period` the
 window never closes, and with self-heal on, every divergence falls inside
 the glitch window and is healed instead. For a target that carries
-`animation_from`, manual detection therefore works by colour, not by time:
+`animation_from`, manual detection therefore checks the fade's colour path,
+with a timed exception for desaturated endpoints:
 
 Each tick also keeps `animation_from_previous`, the `animation_from` of the
 target it replaces, so a late echo of the command before last is still
@@ -211,8 +212,31 @@ side, and its reported `xy_color` lies within 0.03 of the segment from
 `animation_from` to the target. Within `MANUAL_DETECTION_GRACE_SECONDS`
 after `commanded_at`, when a late echo of the command before can still
 arrive, the segment from `animation_from_previous` to `animation_from`
-counts too, and so does its brightness. A light fading between two steps passes through the first
-segment; Hue fades in xy.
+counts too, and so does its brightness.
+
+When either endpoint carries `color_temp_kelvin` or `color_temp`, or has
+saturation below 90, accept any colour during that segment's fade window,
+provided the light is on and its brightness passes the same range check.
+Convert `xy_color`, `rgb_color`, `rgbw_color` and `rgbww_color` to hs to
+check saturation; use `hs_color` directly. A target without a colour key
+does not qualify. The current segment's window runs from `commanded_at`
+until `commanded_at + transition + MANUAL_DETECTION_GRACE_SECONDS`, using
+the target's stored `transition`. The previous segment qualifies only
+within `MANUAL_DETECTION_GRACE_SECONDS` after `commanded_at`.
+
+Hue fades through white follow a curved path: live 15-second fades between
+5000 K and red reported points 0.092 to 0.124 from the straight xy segment,
+while saturated red-to-green fades stayed within 0.026. A white xy-to-red
+fade deviated by 0.052 and green-to-5000 K by 0.057, so a straight colour
+corridor cannot predict these reports.
+
+After each window, the existing colour rule applies again, and a
+segment between two saturated colours uses it throughout. A recovery from
+`unavailable` or `unknown`, and a light whose target is off, never get the
+relaxed rule. Nothing rechecks a light when a window closes, so a person's
+colour-only change during a fade to or from white is caught only if the
+bulb reports again after the window. Usually the next step overwrites it
+instead of latching `manual`.
 
 - Convert `hs_color` with `color_hs_to_xy`, `rgb_color` with
   `color_RGB_to_xy`, `rgbw_color` and `rgbww_color` through their rgb form,
@@ -224,7 +248,9 @@ segment; Hue fades in xy.
   published gamut triangles as constants in `animation.py`). A report near
   any of the four passes.
 - When the report carries no `xy_color`, or a colour cannot be converted,
-  fall back to `state_matches_scene_target` against each endpoint.
+  on plus brightness in range is still enough inside a desaturated
+  segment's window. Otherwise fall back to `state_matches_scene_target`
+  against each endpoint.
 
 Then:
 

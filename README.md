@@ -1221,15 +1221,22 @@ every step. Reloading a running scene applies the updated animation.
 `snapshot_scene` refuses scenes with animations, even with the select off,
 because a snapshot would capture only one step. Existing snapshots still
 receive the animation overlay.
-After the first tick, manual color, brightness or off changes stop the
-animation at once, including just after a command and with scene self-heal
-enabled. The four-second grace after scene activation still covers staged
-turn-on reports, even when the first tick has already run. Reports along
+After the first tick, changes outside the animation's accepted color path
+and brightness range stop it, including just after a command and with
+scene self-heal enabled. The four-second grace after scene activation still
+covers staged turn-on reports, even when the first tick has already run. Reports along
 the current fade's color path are accepted within its brightness range.
 For four seconds after each tick, late reports along the previous fade's
 path and brightness range also count. This includes colors clamped to Hue
-bulb gamuts. Turning every light off puts the area in `off` without waiting
-for the fade. The area's own turn-off keeps the last tick's transition
+bulb gamuts. Hue fades to or from white follow curved color paths, so when
+either endpoint uses color temperature or has saturation below 90, any
+color is accepted while the light is on and its brightness is in range.
+This lasts for the transition plus four seconds after the tick, or only
+four seconds for the previous fade. A person's color-only change during a
+fade to or from white usually goes unnoticed, and the next step overwrites
+it instead of latching `manual`. Brightness outside the range and turning a
+light off still stop the animation. Turning every light off puts the area
+in `off` without waiting for the fade. The area's own turn-off keeps the last tick's transition
 window, so a late echo never latches `manual`.
 A light recovering from unavailable or unknown never latches `manual`.
 With self-heal enabled it heals; otherwise the next tick recolors it.

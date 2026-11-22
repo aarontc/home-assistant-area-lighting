@@ -17,8 +17,8 @@ readable companion that highlights user-facing changes.
   Color-temperature lights and lights marked `animate: false` keep their
   scene state. `select.area_lighting_<scene>_animation` picks the animation
   for every area, or `off`, and survives restarts. A person's change to an
-  animated light still latches `manual`, judged by whether the reported
-  color lies on the current fade. Alerts and dimming pause the animation,
+  animated light still latches `manual`, judged by the reported color and
+  brightness against the current fade. Alerts and dimming pause the animation,
   demand response keeps shed bulbs off, and `snapshot_scene` refuses
   animated scenes.
 
@@ -30,6 +30,14 @@ readable companion that highlights user-facing changes.
   at once. It defaults to 0 and survives restarts.
 
 ### Fixed
+
+- **Fades to or from white no longer latch `manual`.** Hue bulbs fade
+  through white along curved color paths, up to 0.12 off the straight
+  line the check expected. While an animated light fades to or from a
+  color temperature or a color below 90% saturation, any color counts as
+  the animation's own if the light is on and its brightness is in range.
+  A person's color-only change during such a fade is usually overwritten
+  by the next step instead of latching `manual`.
 
 - **The raise and lower service descriptions match what they do.** They
   described a fixed percentage step, and said lower does nothing in a
