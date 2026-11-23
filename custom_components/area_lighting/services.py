@@ -119,6 +119,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
                 scene_slug,
             )
             return
+        if scene.circadian_light_ids:
+            _LOGGER.warning(
+                "Area %s: snapshot_scene refused for scene '%s' with circadian lights; "
+                "a snapshot would freeze one tick's colour temperature and brightness",
+                area_id,
+                scene_slug,
+            )
+            return
 
         # Refuse while demand response is shedding. The snapshot captures raw
         # hass states, so the shed bulbs (physically off) would be baked into

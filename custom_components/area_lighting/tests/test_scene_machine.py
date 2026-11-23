@@ -167,6 +167,7 @@ def test_off_with_no_ambience_returns_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "off_internal"
@@ -181,6 +182,7 @@ def test_off_with_zone_only_no_area_ambience_returns_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.scene_slug == "off_internal"
 
@@ -194,6 +196,7 @@ def test_off_with_both_ambience_flags_returns_ambient():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "ambient"
@@ -209,6 +212,7 @@ def test_off_already_in_ambient_returns_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.scene_slug == "off_internal"
 
@@ -223,6 +227,7 @@ def test_off_in_user_holiday_with_ambience_falls_back_to_ambient():
         holiday_mode="christmas",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="christmas",
     )
     assert a.scene_slug == "ambient"
 
@@ -236,8 +241,9 @@ def test_off_with_holiday_ambient_mode_returns_holiday_scene():
         holiday_mode="christmas",
         ambient_scene_mode="holiday",
         has_ambient_scene=True,
+        holiday_ambient_slug="christmas",
     )
-    assert a.action == ActionType.ACTIVATE_HOLIDAY_SCENE
+    assert a.action == ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE
 
 
 # ── lighting_favorite ───────────────────────────────────────────────────
@@ -312,6 +318,7 @@ def test_off_from_user_christmas_with_ambience_falls_back_to_literal_ambient():
         holiday_mode="christmas",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="christmas",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "ambient"
@@ -327,6 +334,7 @@ def test_off_from_ambience_christmas_turns_off_internal():
         holiday_mode="christmas",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="christmas",
     )
     assert a.action == ActionType.ACTIVATE_SCENE
     assert a.scene_slug == "off_internal"
@@ -342,6 +350,7 @@ def test_off_from_ambience_ambient_turns_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.scene_slug == "off_internal"
 
@@ -356,6 +365,7 @@ def test_off_from_user_ambient_with_ambience_still_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="none",
     )
     assert a.scene_slug == "off_internal"
 
@@ -370,6 +380,7 @@ def test_off_from_user_holiday_without_ambience_still_off_internal():
         holiday_mode="christmas",
         ambient_scene_mode="ambient",
         has_ambient_scene=True,
+        holiday_ambient_slug="christmas",
     )
     assert a.scene_slug == "off_internal"
 
@@ -383,6 +394,7 @@ def test_off_with_ambience_and_no_ambient_scene_returns_off_internal():
         holiday_mode="none",
         ambient_scene_mode="ambient",
         has_ambient_scene=False,
+        holiday_ambient_slug="none",
     )
     assert a.scene_slug == "off_internal"
 
@@ -396,6 +408,7 @@ def test_off_in_user_holiday_with_no_ambient_scene_returns_off_internal():
         holiday_mode="christmas",
         ambient_scene_mode="holiday",
         has_ambient_scene=False,
+        holiday_ambient_slug="christmas",
     )
     assert a.scene_slug == "off_internal"
 
@@ -409,5 +422,6 @@ def test_off_with_holiday_ambient_mode_and_no_ambient_scene_returns_holiday_scen
         holiday_mode="christmas",
         ambient_scene_mode="holiday",
         has_ambient_scene=False,
+        holiday_ambient_slug="christmas",
     )
-    assert a.action == ActionType.ACTIVATE_HOLIDAY_SCENE
+    assert a.action == ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE

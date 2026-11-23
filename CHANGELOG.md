@@ -29,6 +29,28 @@ readable companion that highlights user-facing changes.
   brightness does not change, and lights that are on follow a new value
   at once. It defaults to 0 and survives restarts.
 
+- **Holiday ambient scenes.** An area can define `christmas_ambient` or
+  `halloween_ambient` next to its holiday scene. Ambience, holiday-mode
+  changes, and off with `input_select.ambient_scene` at `holiday` then
+  light the ambient scene. Motion, `on` and favorite still light
+  `christmas`, which becomes an ordinary scene that arms the occupancy
+  timer. Motion in `christmas_ambient` steps up to `christmas` when
+  `motion_override_ambient` is on. An area without the ambient scene uses
+  its holiday scene for both jobs, as before. `<holiday>_ambient` requires
+  `<holiday>` in the same area, and `buttons.on` may not list it.
+
+- **Circadian lights inside a scene.** A scene stanza of `circadian: true`
+  keeps that light on the circadian curve, with its own group and type,
+  while the scene's other lights keep their static targets. A Christmas
+  scene can keep red and green highlights and still give enough white light
+  to cook by. Such lights do not latch `manual` on a change, self-heal leaves
+  them alone, and they never animate. `snapshot_scene` refuses a scene with
+  them. Validation rejects the key on a cluster, an undeclared light, a
+  light without a circadian group, a kelvin-route light, and a light whose
+  cluster has its own stanza in the scene.
+  `sensor.area_lighting_diagnostics` reports the lights on the curve in
+  `per_area.<area>.circadian_lights`.
+
 ### Fixed
 
 - **Fades to or from white no longer latch `manual`.** Hue bulbs fade
@@ -39,11 +61,20 @@ readable companion that highlights user-facing changes.
   A person's color-only change during such a fade is usually overwritten
   by the next step instead of latching `manual`.
 
+- **Choosing a scene from `last_scene` drops the previous scene's targets.**
+  The select kept the old scene's targets and its pending post-fade check,
+  so self-heal could reassert the old scene's lights over the new one.
+
 - **The raise and lower service descriptions match what they do.** They
   described a fixed percentage step, and said lower does nothing in a
   dark area, where it lights the remembered scene at the step level.
 
 ### Changed
+
+- **The default-scene fallback skips holiday scenes.** An area with no
+  `circadian`, `daylight` or `evening` scene used to pick its first scene
+  alphabetically, which could be `christmas`. It now skips `ambient` and every
+  holiday scene.
 
 - **Raise and lower keep the lights in proportion.** A press used to move
   every lit bulb by 12 points, which took most of the light out of a dim

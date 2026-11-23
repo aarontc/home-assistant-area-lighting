@@ -264,3 +264,20 @@ async def test_unchanged_effective_animation_does_not_reactivate_area(
     assert not service_calls
     assert ctrl._animation_generation == generation
     assert ctrl._active_scene_targets is targets
+
+
+@pytest.mark.integration
+async def test_holiday_ambient_scene_gets_its_own_animation_select(
+    hass: HomeAssistant, helper_entities
+) -> None:
+    area = _area("den", ["red"])
+    ambient = copy.deepcopy(area["scenes"][0])
+    ambient.update(id="christmas_ambient", name="Christmas Ambient", animations=["green"])
+    area["scenes"].append(ambient)
+    await _setup(hass, _config(area))
+
+    assert hass.states.get(SELECT).attributes["options"] == ["off", "red"]
+    state = hass.states.get("select.area_lighting_christmas_ambient_animation")
+    assert state.state == "green"
+    assert state.attributes["options"] == ["off", "green"]
+    assert state.attributes["friendly_name"] == "Christmas Ambient Animation"

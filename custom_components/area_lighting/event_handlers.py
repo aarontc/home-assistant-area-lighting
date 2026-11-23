@@ -539,6 +539,13 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
             _skip("area state is circadian", entity_id)
             return
 
+        # The adjuster also drives a visual scene's circadian lights. The
+        # scene's static lights are still checked, and so is a shed circadian
+        # light, which drops out of the set.
+        if entity_id in ctrl._circadian_scene_light_ids():
+            _skip("circadian light in the active scene", entity_id)
+            return
+
         if ctrl._alert_active:
             _skip("alert pattern active", entity_id)
             return
@@ -706,11 +713,7 @@ def motion_may_light(hass: HomeAssistant, ctrl: AreaLightingController) -> bool:
     source_is_motion = ctrl._state.source == ActivationSource.MOTION
     if ctrl.motion_override_ambient:
         # Allow from off, motion-owned scenes, AND ambient-like
-        if not (
-            ctrl.current_scene == "off"
-            or source_is_motion
-            or ctrl.current_scene in ("ambient", "christmas", "halloween")
-        ):
+        if not (ctrl.current_scene == "off" or source_is_motion or ctrl.is_ambient_like):
             return False
     else:
         if not (ctrl.current_scene == "off" or source_is_motion):

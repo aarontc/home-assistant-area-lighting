@@ -15,6 +15,16 @@ SCENE_OFF_INTERNAL = "off_internal"
 SCENE_MANUAL = "manual"
 
 HOLIDAY_SCENES = frozenset({SCENE_CHRISTMAS, SCENE_HALLOWEEN})
+
+
+def holiday_ambient_scene(holiday: str) -> str:
+    """The slug of a holiday's ambient scene, such as christmas_ambient."""
+    return f"{holiday}_ambient"
+
+
+HOLIDAY_AMBIENT_SCENES = frozenset(holiday_ambient_scene(h) for h in HOLIDAY_SCENES)
+# Every scene ambience can light: ambient and both roles of each holiday.
+AMBIENCE_SCENES = frozenset({SCENE_AMBIENT}) | HOLIDAY_SCENES | HOLIDAY_AMBIENT_SCENES
 AMBIENT_SCENES = frozenset({SCENE_AMBIENT})
 OFF_SCENES = frozenset({SCENE_OFF, SCENE_OFF_INTERNAL})
 

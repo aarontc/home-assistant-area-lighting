@@ -56,7 +56,11 @@ def expand_slots(palette: list[dict]) -> list[dict]:
 
 
 def animated_light_ids(entities: dict[str, dict], cluster_ids: Collection[str] = ()) -> list[str]:
-    """Select coloured, on lights in the order the scene lists them."""
+    """Select coloured, on lights in the order the scene lists them.
+
+    A circadian target is left out: an rgb light's payload carries rgb_color,
+    but the curve drives it.
+    """
     return [
         entity_id
         for entity_id, target in entities.items()
@@ -64,6 +68,7 @@ def animated_light_ids(entities: dict[str, dict], cluster_ids: Collection[str] =
         and entity_id not in cluster_ids
         and target.get("state") == "on"
         and target.get("animate") is not False
+        and not target.get("circadian")
         and ANIMATED_COLOR_KEYS.intersection(target)
         and (
             "color_mode" not in target

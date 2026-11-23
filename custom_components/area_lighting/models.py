@@ -9,6 +9,10 @@ from .const import (
     DEFAULT_CIRCADIAN_MAX_COLORTEMP,
     DEFAULT_CIRCADIAN_MIN_COLORTEMP,
     DEFAULT_CIRCADIAN_TRANSITION_SECONDS,
+    HOLIDAY_AMBIENT_SCENES,
+    HOLIDAY_SCENES,
+    SCENE_AMBIENT,
+    holiday_ambient_scene,
 )
 
 
@@ -69,6 +73,15 @@ class SceneConfig:
     @property
     def entity_id(self) -> str:
         return f"scene.{self.area_id}_{self.slug}"
+
+    @property
+    def circadian_light_ids(self) -> frozenset[str]:
+        """Lights whose stanza is circadian: true."""
+        return frozenset(
+            entity_id
+            for entity_id, target in (self.entities or {}).items()
+            if target.get("circadian")
+        )
 
     @property
     def off_internal_entity_id(self) -> str:
@@ -243,6 +256,21 @@ class AreaConfig:
     @property
     def has_holiday_scenes(self) -> bool:
         return bool({"christmas", "halloween"} & self.scene_slugs)
+
+    @property
+    def ambient_like_slugs(self) -> frozenset[str]:
+        """Scenes that play the ambient role in this area.
+
+        A holiday plays it itself unless the area defines its ambient scene.
+        """
+        slugs = self.scene_slugs
+        unsplit = {h for h in HOLIDAY_SCENES if holiday_ambient_scene(h) not in slugs}
+        return frozenset({SCENE_AMBIENT} | (HOLIDAY_AMBIENT_SCENES & slugs) | unsplit)
+
+    def holiday_ambient_slug(self, holiday: str) -> str:
+        """The scene that plays a holiday's ambient role in this area."""
+        slug = holiday_ambient_scene(holiday)
+        return slug if slug in self.scene_slugs else holiday
 
     @property
     def has_ambient_scene(self) -> bool:

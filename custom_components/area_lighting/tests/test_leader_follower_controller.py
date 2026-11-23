@@ -69,6 +69,38 @@ def test_current_on_scene_slug_christmas_returns_none():
     assert c.current_on_scene_slug() is None
 
 
+SPLIT_SCENES = ("ambient", "christmas", "christmas_ambient", "evening", "off")
+
+
+@pytest.mark.parametrize(
+    ("scenes", "slug", "expected"),
+    [
+        (("ambient", "christmas", "evening", "off"), "ambient", True),
+        (("ambient", "christmas", "evening", "off"), "christmas", True),
+        (("ambient", "christmas", "evening", "off"), "evening", False),
+        (SPLIT_SCENES, "ambient", True),
+        (SPLIT_SCENES, "christmas_ambient", True),
+        (SPLIT_SCENES, "christmas", False),
+    ],
+)
+def test_is_ambient_like_reads_the_area_scenes(scenes, slug, expected):
+    c = _make_controller(scenes=scenes)
+    c._state.transition_to_scene(slug, ActivationSource.USER)
+    assert c.is_ambient_like is expected
+
+
+def test_current_on_scene_slug_split_christmas_returns_christmas():
+    c = _make_controller(scenes=SPLIT_SCENES)
+    c._state.transition_to_scene("christmas", ActivationSource.MOTION)
+    assert c.current_on_scene_slug() == "christmas"
+
+
+def test_current_on_scene_slug_christmas_ambient_returns_none():
+    c = _make_controller(scenes=SPLIT_SCENES)
+    c._state.transition_to_scene("christmas_ambient", ActivationSource.AMBIENCE)
+    assert c.current_on_scene_slug() is None
+
+
 def test_current_on_scene_slug_manual_returns_none():
     c = _make_controller()
     c._state.transition_to_manual()
@@ -155,10 +187,9 @@ class _RecordingLeader:
         self.area.id = area_id
 
 
-@pytest.fixture
-def follower_ctrl(monkeypatch):
+def _follower(monkeypatch, scenes=("ambient", "circadian", "evening", "off")):
     """Real controller with _activate_scene stubbed as an async spy."""
-    c = _make_controller(area_id="closet")
+    c = _make_controller(area_id="closet", scenes=scenes)
     c.leader = _RecordingLeader("bath")
 
     calls: list = []
@@ -169,6 +200,11 @@ def follower_ctrl(monkeypatch):
     monkeypatch.setattr(c, "_activate_scene", fake_activate_scene)
     c._calls = calls
     return c
+
+
+@pytest.fixture
+def follower_ctrl(monkeypatch):
+    return _follower(monkeypatch)
 
 
 async def test_handle_leader_scene_activated_follower_on_mirrors(follower_ctrl):
@@ -209,10 +245,37 @@ async def test_handle_leader_scene_not_on_follower_logs_warning(follower_ctrl, c
 
     caplog.set_level(logging.WARNING)
     await follower_ctrl.handle_leader_change(
+        follower_ctrl.leader, "movie", LeaderReason.SCENE_ACTIVATED
+    )
+    assert follower_ctrl._calls == []
+    assert any("leader bath activated scene movie" in rec.message for rec in caplog.records)
+
+
+async def test_handle_leader_holiday_not_on_follower_logs_debug(follower_ctrl, caplog):
+    follower_ctrl._state.transition_to_scene("circadian", ActivationSource.USER)
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    await follower_ctrl.handle_leader_change(
         follower_ctrl.leader, "christmas", LeaderReason.SCENE_ACTIVATED
     )
     assert follower_ctrl._calls == []
-    assert any("leader bath activated scene christmas" in rec.message for rec in caplog.records)
+    [record] = [r for r in caplog.records if "activated scene christmas" in r.message]
+    assert record.levelno == logging.DEBUG
+
+
+async def test_handle_leader_scene_activated_follower_in_split_christmas_mirrors(monkeypatch):
+    follower = _follower(monkeypatch, SPLIT_SCENES)
+    follower._state.transition_to_scene("christmas", ActivationSource.MOTION)
+    await follower.handle_leader_change(follower.leader, "evening", LeaderReason.SCENE_ACTIVATED)
+    assert follower._calls == [("activate_scene", "evening", ActivationSource.LEADER)]
+
+
+async def test_handle_leader_scene_activated_follower_in_christmas_ambient_noop(monkeypatch):
+    follower = _follower(monkeypatch, SPLIT_SCENES)
+    follower._state.transition_to_scene("christmas_ambient", ActivationSource.AMBIENCE)
+    await follower.handle_leader_change(follower.leader, "evening", LeaderReason.SCENE_ACTIVATED)
+    assert follower._calls == []
 
 
 async def test_handle_leader_off_default_is_noop(follower_ctrl):

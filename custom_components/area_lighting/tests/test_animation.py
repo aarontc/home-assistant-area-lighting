@@ -76,6 +76,20 @@ def test_light_selection_preserves_scene_order_and_excludes_static_targets():
     ]
 
 
+def test_light_selection_skips_a_resolved_circadian_target():
+    """An rgb light's circadian payload carries rgb_color, but the curve drives it."""
+    entities = {
+        "light.colour": {"state": "on", **RED},
+        "light.circadian": {
+            "state": "on",
+            "circadian": True,
+            "brightness": 255,
+            "rgb_color": (255, 206, 166),
+        },
+    }
+    assert animated_light_ids(entities) == ["light.colour"]
+
+
 def test_rotation_preserves_weight_counts_and_advances_every_light():
     animation = AnimationConfig(30, 20, [dict(RED, weight=2), dict(GREEN, weight=2), WHITE])
     entities = {f"light.bulb_{i}": {"state": "on", **RED} for i in range(10)}

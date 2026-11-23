@@ -161,8 +161,9 @@ stateDiagram-v2
     Manual --> Off: all lights externally off
 ```
 
-`AmbientLike` means either the literal `ambient` scene or a holiday scene that was activated because
-ambience was active.
+`AmbientLike` means the literal `ambient` scene, a holiday's ambient scene such as `christmas_ambient`,
+or a holiday scene in an area that defines no ambient scene for that holiday. `HolidayScene` is the
+holiday's own scene, such as `christmas`. See [Holiday scenes](#holiday-scenes).
 
 When a remote has `buttons.favorite` configured, the favorite edges above are
 replaced by `<any state> → <configured scene>: favorite / override set`.
@@ -192,7 +193,7 @@ Status: `Implemented`
 
 Default behavior:
 
-1. If a global holiday scene is enabled and the area has a matching scene, activate that holiday scene
+1. If a global holiday scene is enabled and the area has a matching scene, activate that holiday scene, such as `christmas`, never `christmas_ambient`
 2. Otherwise activate the virtual `circadian` scene
 
 After the default scene is active:
@@ -203,7 +204,7 @@ After the default scene is active:
 4. If the current scene is `evening`, `on` activates `daylight`
 5. If the current scene is `night`, `on` activates `evening`
 6. If the current scene is a holiday scene, `on` activates `circadian`
-7. From `ambient` or `manual`, `on` behaves the same as from `off`
+7. From `ambient`, a holiday's ambient scene or `manual`, `on` behaves the same as from `off`
 
 The intent is to surface the most appropriate default first, then let repeated `on` presses swap
 between useful working and relaxing scenes. `night` and holiday-special behavior are treated as
@@ -378,17 +379,19 @@ Ambience is considered active only when both are true:
 
 Holiday nuance:
 
-1. If `off` falls back into ambience from a normal scene, holiday ambience may be chosen if a matching holiday scene exists
-2. If `off` is pressed while already in a holiday scene, the fallback is the literal `ambient` scene without holiday logic
-3. If the area is already in an ambience-owned ambient state, the next `off` turns the lights off
+1. If `off` falls back into ambience from a normal scene, the holiday's ambient scene is chosen when `input_select.ambient_scene` is `holiday`: `christmas_ambient` if the area defines it, otherwise `christmas`
+2. If `off` is pressed while in a holiday scene that also plays the ambient role, the fallback is the literal `ambient` scene without holiday logic. An area with `christmas_ambient` treats `christmas` as a normal scene
+3. If the area is already in an ambient state, the next `off` turns the lights off
 4. If the fallback would be the literal `ambient` scene and the area has none, `off` turns the lights off
+
+[`CONFIGURATION.md`](CONFIGURATION.md#holiday-scenes) lists the off rules in order.
 
 Current code notes:
 
 1. Ambience gating via both area flag and ambient zone is implemented
 2. Falling back to ambience from normal scenes is implemented
 3. Turning off from already-ambient states is implemented
-4. The "holiday scene -> literal ambient" fallback is implemented in `determine_off_action` in `scene_machine.py` (user-owned holiday + ambience active → `ambient`)
+4. The "holiday scene -> literal ambient" fallback is implemented in `determine_off_action` in `scene_machine.py` (user-owned holiday without its own ambient scene + ambience active → `ambient`)
 
 ### Remote flow
 
@@ -444,14 +447,14 @@ When an area's ambient zone becomes active:
 
 When ambience activates:
 
-1. If a global holiday scene is currently selected and the area has a matching holiday scene, activate that holiday scene
+1. If a global holiday scene is currently selected and the area has a matching holiday scene, activate the holiday's ambient scene: `christmas_ambient` if the area defines it, otherwise `christmas`
 2. Otherwise activate the area's literal `ambient` scene, or stay off if the area has none
 3. Record that the source of the current lighting state is `ambience`
 
 When ambience deactivates:
 
 1. If the current lighting state was activated by ambience, turn the area off
-2. If the current scene merely happens to be `ambient` or a holiday scene for some other reason, do nothing
+2. If the current scene merely happens to be `ambient` or a holiday scene of either kind for some other reason, do nothing
 
 This ownership rule matters. A holiday scene triggered by the favorite button should remain on even if
 ambience later turns off.
@@ -462,7 +465,7 @@ Current code notes:
 2. Ambience ownership tracking is implemented through activation source
 3. Ambience deactivation only turns lights off when ambience originally activated them, which is implemented
 4. The README describes future in-component ambient-zone scheduling logic; that is still pending
-5. Holiday mode changes currently have extra side effects outside ambience alone: enabling holiday can turn on currently-off areas that define that holiday's scene, and disabling holiday can turn off holiday-owned states entered via the holiday-change path
+5. Holiday mode changes currently have extra side effects outside ambience alone: enabling holiday can turn on currently-off areas that define that holiday's scene, lighting its ambient scene, and disabling holiday can turn off holiday-owned states entered via the holiday-change path
 
 ### Ambient flow
 
@@ -478,7 +481,7 @@ flowchart TD
     B -->|Yes| F{Area currently off?}
     F -->|No| E
     F -->|Yes| G{Matching holiday scene available?}
-    G -->|Yes| H[Activate holiday scene with source=ambience]
+    G -->|Yes| H[Activate holiday's ambient scene with source=ambience]
     G -->|No| J{Area has an ambient scene?}
     J -->|Yes| I[Activate ambient scene with source=ambience]
     J -->|No| K[Stay off]
@@ -522,7 +525,7 @@ Motion while an area is already on:
 
 1. If the current state was triggered by motion, new motion resets the motion timer
 2. If the current state was not triggered by motion, motion does nothing
-3. Exception: if the area is in ambient mode and `motion_override_ambient` is true, motion may promote ambience into a normal active scene
+3. Exception: if the area is in `ambient` or a holiday's ambient scene and `motion_override_ambient` is true, motion may promote ambience into a normal active scene. From `christmas_ambient` that is `christmas`
 4. If `motion_override_ambient` is false, motion is ignored while ambient is active
 
 Night mode changes motion behavior:
@@ -534,7 +537,7 @@ Night mode changes motion behavior:
 Current code notes:
 
 1. Motion activation currently reuses the same `on` logic as remote `on`, which is implemented
-2. Motion override of ambient is implemented for literal `ambient`
+2. Motion override of ambient is implemented for literal `ambient` and the holiday ambient scenes
 3. Motion retrigger behavior is partially implemented through timer cancellation and re-entry into `lighting_on`
 4. The current code does not distinguish all target cases exactly by source ownership
 5. Night-mode-specific motion defaults are only partially reflected in current code
@@ -967,7 +970,7 @@ An area configuration generally needs to define:
 1. The area identity and light group
 2. The scene slugs available for that area
 3. The lights and their circadian groups
-4. Optional holiday scenes
+4. Optional holiday scenes, with optional separate ambient scenes such as `christmas_ambient`
 5. Optional ambient scene and ambient zone membership
 6. Optional motion and occupancy sensors
 7. Optional remote devices and their additional actions
@@ -1128,6 +1131,35 @@ made during the alert.
 resumes at startup. Its lights that are on get the current values with the
 configured `transition`, and lights that are off stay off.
 
+**Inside other scenes.** A scene stanza of `circadian: true` keeps that light
+on the curve while the area is in the scene, and the scene's other lights
+keep their static targets. Such a light gets the same values and updates as
+in `circadian`, and leaves them on the same events. Kelvin routes do not
+apply inside such a scene, and the light never animates. `snapshot_scene`
+refuses a scene with circadian lights. The diagnostics sensor lists the
+lights on the curve in `per_area.<area>.circadian_lights`. Rules and
+validation are in [`CONFIGURATION.md`](CONFIGURATION.md#circadian-lights-in-a-scene).
+
+## Holiday scenes
+
+Status: `Implemented`
+
+`input_select.holiday_mode` picks the active holiday. An area that defines
+the matching scene, such as `christmas`, uses it. One that does not treats
+the holiday as `none`.
+
+A holiday scene does two jobs: ambience while the zone's ambient lighting is
+on, and the scene people get from motion, `on` and favorite. An area can split
+them by also defining `<holiday>_ambient`, such as `christmas_ambient`.
+Ambience, holiday-mode changes and off then use `christmas_ambient`, and
+`christmas` becomes an ordinary scene for people, usually with some lights
+on the circadian curve. A split `christmas` arms the occupancy timer and
+`christmas_ambient` does not. Motion in `christmas_ambient` steps up to
+`christmas` when `motion_override_ambient` is on. An area without
+`christmas_ambient` uses `christmas` for both jobs, as before.
+[`CONFIGURATION.md`](CONFIGURATION.md#holiday-scenes) has the table of which
+scene each path lights, the off rules and the limits.
+
 ## Animated scenes
 
 Declare named `animations` at the top level, then list their names on a
@@ -1218,6 +1250,7 @@ Alerts and dimming pause the animation. It resumes when the alert ends or
 `lighting_on` clears dimming. Leaving the scene, turning the area off or a
 manual light change stops it. Demand response keeps shed bulbs off during
 every step. Reloading a running scene applies the updated animation.
+`circadian: true` lights never animate.
 `snapshot_scene` refuses scenes with animations, even with the select off,
 because a snapshot would capture only one step. Existing snapshots still
 receive the animation overlay.

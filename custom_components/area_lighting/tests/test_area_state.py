@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from custom_components.area_lighting.area_state import (
-    AMBIENT_LIKE_SCENES,
     ActivationSource,
     AreaState,
     LightingState,
@@ -156,23 +155,6 @@ def test_dimming_then_transitioning_clears_previous():
 
 
 # ── Ambient/holiday detection ────────────────────────────────────────────
-
-
-def test_is_ambient_like_for_ambient_christmas_halloween():
-    assert frozenset({"ambient", "christmas", "halloween"}) == AMBIENT_LIKE_SCENES
-
-    s = AreaState()
-    s.transition_to_scene("ambient", ActivationSource.AMBIENCE)
-    assert s.is_ambient_like is True
-
-    s.transition_to_scene("christmas", ActivationSource.HOLIDAY)
-    assert s.is_ambient_like is True
-
-    s.transition_to_scene("halloween", ActivationSource.HOLIDAY)
-    assert s.is_ambient_like is True
-
-    s.transition_to_scene("daylight", ActivationSource.USER)
-    assert s.is_ambient_like is False
 
 
 def test_was_ambient_activated_requires_ambience_source():

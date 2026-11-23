@@ -898,8 +898,15 @@ async def test_invalid_reload_raises_and_keeps_the_running_config(
     before = (data["config"], data["circadian_clock"], list(data["unsubs"]), ctrl.area)
     unknown_key = _config(_area(), not_a_key=True)
     unknown_group = _config(_area(lights=[_light(LIGHT_1, "Missing")]))
+    undeclared_circadian_light = _config(
+        _area(
+            scenes=[
+                {"id": "christmas", "name": "Christmas", "entities": {LIGHT_3: {"circadian": True}}}
+            ]
+        )
+    )
 
-    for cfg in (unknown_key, unknown_group, {}):
+    for cfg in (unknown_key, unknown_group, undeclared_circadian_light, {}):
         with pytest.raises(HomeAssistantError):
             await _reload(hass, cfg)
 

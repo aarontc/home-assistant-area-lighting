@@ -41,6 +41,7 @@ from .const import (
     CIRCADIAN_SETTLE_SECONDS,
     DEFAULT_ON_TRANSITION_SECONDS,
     DOMAIN,
+    HOLIDAY_AMBIENT_SCENES,
     HOLIDAY_MODE_ENTITY,
     HOLIDAY_MODE_NONE,
     HOLIDAY_SCENES,
@@ -246,7 +247,8 @@ class AreaLightingController:
         self.followers: list[AreaLightingController] = []
 
         # Circadian adjuster: connected to the clock's tick and to its lights'
-        # and sleep entities' state changes while the area is in circadian.
+        # and sleep entities' state changes while the area is in circadian, or
+        # in a visual scene with circadian lights.
         # Commanded-at times are monotonic, per light entity id. Stopping the
         # adjuster starts a new generation, and a tick left over from an
         # older one drops its work and does not hold off the new one's ticks.
@@ -486,7 +488,8 @@ class AreaLightingController:
     def _leave_removed_scene(self) -> bool:
         """Switch to manual if the area shows a scene its config no longer has.
 
-        The lights stay as they are. Tracking the missing slug would let a
+        The lights stay as they are, and the circadian adjuster stops driving
+        the scene's circadian lights. Tracking the missing slug would let a
         demand-response re-drive or self-heal apply it through the skeleton
         path. Bumping the activation sequence makes an in-flight re-drive of
         the slug yield instead of committing it. Returns whether it switched.
@@ -501,6 +504,7 @@ class AreaLightingController:
         self._activation_seq += 1
         self._active_scene_targets = {}
         self._dr_shed_ids = frozenset()
+        self._stop_circadian()
         self._state.transition_to_manual()
         return True
 
@@ -554,6 +558,7 @@ class AreaLightingController:
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
             "circadian_running": self.circadian_running,
+            "circadian_lights": sorted(self._circadian_scene_light_ids()),
             "animation": self._animation_diagnostic(),
             "demand_response_active": self._demand_response_active(),
             "demand_response_shed": sorted(self._dr_shed_ids),
@@ -618,12 +623,20 @@ class AreaLightingController:
     def current_scene(self, value: str) -> None:
         """Allow the select entity to manually set the scene.
 
-        State-only: no light is commanded. Entering circadian starts the
-        adjuster, so the lights follow at the next tick.
+        State-only: no light is commanded. Entering circadian, or a scene
+        with circadian lights, starts the adjuster, so the lights follow at
+        the next tick.
         """
         self._manual_takeover()
+        # The previous scene's targets and pending self-check no longer apply.
+        if self._heal_selfcheck_handle is not None:
+            self._heal_selfcheck_handle.cancel()
+            self._heal_selfcheck_handle = None
+        self._active_scene_targets = {}
+        self._dr_shed_ids = frozenset()
         if value == "circadian":
             self._state.transition_to_circadian(ActivationSource.USER)
+            self._dr_shed_ids = self._compute_circadian_shed_ids()
             self._start_circadian()
         else:
             self._stop_circadian()
@@ -633,14 +646,20 @@ class AreaLightingController:
                 self._state.transition_to_manual()
             else:
                 self._state.transition_to_scene(value, ActivationSource.USER)
+                # Unstamped: nothing was commanded, so a change from here on
+                # is a person's, not a fade settling.
+                self._active_scene_targets = self._effective_scene_targets(value)
+                self._dr_shed_ids = self._compute_scene_shed_ids(value)
                 self._start_animation()
+                if self._circadian_scene_light_ids():
+                    self._start_circadian()
         self._notify_state_change()
 
     def current_on_scene_slug(self) -> str | None:
         """Return the concrete on-scene slug the area is showing, or None.
 
         Returns None when the area is off, in an ambient-like scene
-        (ambient/christmas/halloween), or in manual mode. Otherwise returns
+        (see is_ambient_like), or in manual mode. Otherwise returns
         the active scene slug (e.g. "evening", "circadian").
 
         Consumed by follower areas to decide whether to mirror the leader.
@@ -649,9 +668,15 @@ class AreaLightingController:
             return None
         if self._state.is_manual:
             return None
-        if self._state.is_ambient_like:
+        if self.is_ambient_like:
             return None
         return self._state.scene_slug
+
+    @property
+    def is_ambient_like(self) -> bool:
+        """Whether the area shows a scene playing the ambient role: ambient,
+        a holiday's ambient scene, or a holiday with no ambient scene."""
+        return self._state.scene_slug in self.area.ambient_like_slugs
 
     def _resolve_leader_on_slug(self) -> str | None:
         """Return the scene slug the follower should mirror, or None.
@@ -825,6 +850,12 @@ class AreaLightingController:
     def _notify_state_change(self) -> None:
         if self._animation_name is not None and self._running_animation() is None:
             self._stop_animation()
+        if (
+            self.circadian_running
+            and not self._state.is_circadian
+            and not self._circadian_scene_light_ids()
+        ):
+            self._stop_circadian()
         self._log_state_snapshot_if_changed()
         for listener in self._state_listeners:
             listener()
@@ -1062,6 +1093,7 @@ class AreaLightingController:
 
         # Visual scene → stop the circadian adjuster first so its ticks stop
         # overriding the scene's color/brightness, then apply + transition.
+        # A scene with circadian lights starts it again once committed.
         self._stop_circadian()
         animation = self._selected_animation(scene_slug)
         applied_step = (
@@ -1074,6 +1106,7 @@ class AreaLightingController:
         self._active_scene_targets = self._effective_scene_targets(scene_slug)
         self._dr_shed_ids = self._compute_scene_shed_ids(scene_slug)
         self._stamp_targets_with_command_metadata(transition)
+        self._stamp_circadian_targets()
         try:
             await self._apply_scene_data(scene_slug, transition)
             if self._closed:
@@ -1096,12 +1129,14 @@ class AreaLightingController:
         finally:
             if my_activation == self._activation_seq and self.current_scene == scene_slug:
                 self._start_animation(applied_step)
+                if self._circadian_scene_light_ids():
+                    self._start_circadian()
         self._enforce_occupancy_timer()
         self._notify_state_change()
         await self._sync_kelvin_router()
 
         if propagate_to_followers and source != ActivationSource.LEADER:
-            if scene_slug in ("ambient", "christmas", "halloween"):
+            if scene_slug in self.area.ambient_like_slugs:
                 self._propagate_to_followers(scene_slug, LeaderReason.AMBIENT)
             else:
                 self._propagate_to_followers(
@@ -1253,8 +1288,13 @@ class AreaLightingController:
         Called by the kelvin router at the top of its reconcile (before it
         reads dr_shed_ids), so it must never call back into the router;
         route lights are the router's to drive.
+
+        Outside circadian the shed set belongs to the visual scene, which
+        computed it at activation, so it is left alone.
         """
-        if not self._state.is_circadian or not self._demand_response_active():
+        if not self._state.is_circadian:
+            return
+        if not self._demand_response_active():
             self._dr_shed_ids = frozenset()
             return
         generation = self._circadian_generation
@@ -1394,19 +1434,35 @@ class AreaLightingController:
         return None
 
     def _scene_entities(self, scene_slug: str) -> dict[str, dict]:
-        """Read snapshot or configured entities, retaining animation exclusions."""
+        """Read snapshot or configured entities, retaining animation exclusions.
+
+        Configured circadian stanzas replace or join a snapshot's entries, so
+        a snapshot never freezes a light that follows the curve.
+        """
         storage = self.hass.data.get(DOMAIN, {}).get("scene_storage")
         stored = storage.get_scene_data(self.area.id, scene_slug) if storage else None
         scene_cfg = self._get_scene_config(scene_slug)
         configured = scene_cfg.entities if scene_cfg and scene_cfg.entities else {}
-        entities = stored or configured
-        return {
+        entities = dict(stored or configured)
+        circadian = {
+            eid: dict(state) for eid, state in configured.items() if state.get("circadian")
+        }
+        # A stored cluster target would drive its circadian members too, so
+        # hand it to the cluster's other members instead.
+        for cluster in self.area.light_clusters:
+            if cluster.id in entities and circadian.keys() & set(cluster.members):
+                state = entities.pop(cluster.id)
+                for member in cluster.members:
+                    entities.setdefault(member, state)
+        merged = {
             eid: {
                 **state,
                 **({"animate": False} if configured.get(eid, {}).get("animate") is False else {}),
             }
             for eid, state in entities.items()
         }
+        merged.update(circadian)
+        return merged
 
     def _resolve_raw_scene_targets(self, scene_slug: str) -> dict[str, dict]:
         """Resolve the per-light target states for a scene.
@@ -1415,7 +1471,8 @@ class AreaLightingController:
         inline config entities → role-based skeleton. Returns a dict
         mapping entity_id → target state dict. In the skeleton fallback,
         lights in the active scene's group_exclude are intentionally
-        OMITTED (left untracked and untouched).
+        OMITTED (left untracked and untouched). A circadian stanza resolves
+        to an on target carrying what the circadian scene would send now.
         """
         scene_cfg = self._get_scene_config(scene_slug)
         entities = self._scene_entities(scene_slug)
@@ -1425,16 +1482,19 @@ class AreaLightingController:
             if animation is not None:
                 config = animation[1]
                 clusters = self._cluster_entity_ids()
-                return build_step_targets(
+                targets = build_step_targets(
                     {eid: target for eid, target in entities.items() if eid not in clusters},
                     config,
                     step_number(dt_util.utcnow().timestamp(), config.period),
                     clusters,
                 )
-            return {
-                eid: {key: value for key, value in state.items() if key != "animate"}
-                for eid, state in entities.items()
-            }
+            else:
+                targets = {
+                    eid: {key: value for key, value in state.items() if key != "animate"}
+                    for eid, state in entities.items()
+                }
+            self._resolve_circadian_targets(targets)
+            return targets
 
         # Skeleton fallback: role-based on/off, no attribute targets. Lights
         # in the scene's group_exclude are OMITTED entirely (matching
@@ -1450,6 +1510,25 @@ class AreaLightingController:
             for light in self.area.all_lights
             if light.id not in excluded
         }
+
+    def _resolve_circadian_targets(self, targets: dict[str, dict]) -> None:
+        """Add the circadian scene's current payload to each circadian target.
+
+        The targets are fresh copies, so they are updated in place. Before the
+        clock has values a target stays a bare on target. The circadian key
+        stays, and light_turn_on_data never sends it.
+        """
+        values = self._circadian_values()
+        if values is None:
+            return
+        lights = {light.id: light for light in self.area.lights}
+        for entity_id, target in targets.items():
+            if not target.get("circadian"):
+                continue
+            payload = self._circadian_payload(lights[entity_id], values)
+            if payload is not None:
+                del payload["entity_id"]
+                target.update(payload)
 
     def is_group_excluded(self, entity_id: str) -> bool:
         """Whether the active scene's group_exclude covers this light.
@@ -1670,6 +1749,16 @@ class AreaLightingController:
         if holiday != HOLIDAY_MODE_NONE:
             await self._activate_scene(holiday, source, transition)
 
+    async def _activate_holiday_ambient_scene(
+        self,
+        source: ActivationSource = ActivationSource.USER,
+        transition: float | None = None,
+    ) -> None:
+        holiday = self._get_holiday_mode()
+        if holiday != HOLIDAY_MODE_NONE:
+            slug = self.area.holiday_ambient_slug(holiday)
+            await self._activate_scene(slug, source, transition)
+
     async def _turn_off_all_lights(self, transition: float | None = None) -> None:
         tasks: list = []
         for light in self.area.all_lights:
@@ -1693,6 +1782,8 @@ class AreaLightingController:
                 await self._activate_scene(action.scene_slug, source, transition)
         elif action.action == ActionType.ACTIVATE_HOLIDAY_SCENE:
             await self._activate_holiday_scene(source, transition)
+        elif action.action == ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE:
+            await self._activate_holiday_ambient_scene(source, transition)
         elif action.action == ActionType.SET_SUN_POSITION:
             slug = resolve_sun_position(self._is_daylight_enabled())
             await self._activate_scene(slug, source, transition)
@@ -1859,6 +1950,42 @@ class AreaLightingController:
 
     # ── Circadian helpers ──────────────────────────────────────────────
 
+    def _circadian_scene_light_ids(self) -> frozenset[str]:
+        """The active visual scene's circadian: true lights, less the bulbs
+        shed for demand response, and less clusters while demand response is
+        active.
+
+        Empty unless the area is in a visual scene and not dimmed. Derived
+        from the configuration and the current slug rather than stored, so it
+        is right after a restart, a reload or a last_scene select change.
+        """
+        if not self._state.is_scene or self._state.dimmed:
+            return frozenset()
+        scene = self._get_scene_config(self._state.scene_slug)
+        if scene is None:
+            return frozenset()
+        ids = scene.circadian_light_ids - self._dr_shed_ids
+        if self._demand_response_active():
+            ids -= self._cluster_entity_ids()
+        return ids
+
+    def _circadian_driven_lights(self) -> list[LightConfig]:
+        """The lights the adjuster drives: all of them in the circadian
+        scene, the circadian: true lights in a visual scene, none otherwise."""
+        if self._state.is_circadian:
+            return self.area.all_lights
+        ids = self._circadian_scene_light_ids()
+        return [light for light in self.area.all_lights if light.id in ids]
+
+    def _stamp_circadian_targets(self) -> None:
+        """Mark the active scene's circadian targets as just commanded, so the
+        adjuster leaves the activation's own on-echo alone instead of cutting
+        its fade short."""
+        now = time.monotonic()
+        for entity_id, target in self._active_scene_targets.items():
+            if target.get("circadian"):
+                self._circadian_commanded_at[entity_id] = now
+
     def _start_circadian(self) -> None:
         """Connect the adjuster to the clock's tick, its grouped lights and
         its groups' sleep entities. Idempotent.
@@ -1943,21 +2070,28 @@ class AreaLightingController:
             await self.async_scene_animation_changed(self.current_scene)
 
     async def async_resume_circadian(self) -> None:
-        """Restart the adjuster of an area that is already in circadian and
-        bring its lights that are on to the current values, without turning
-        on lights that are off. Runs at startup and when an alert ends.
+        """Restart the adjuster of an area that is already in circadian, or
+        in a visual scene with circadian lights, and bring its lights that are
+        on to the current values, without turning on lights that are off.
+        Runs at startup, after a reload and when an alert ends.
 
-        The router adopts the route that is lit, so syncing it does not turn
-        on route lights that are off. The shed set is refreshed next, since
-        no router reconcile does that for an area without routes. The tick
-        then syncs the router and sends.
+        In circadian the router adopts the route that is lit, so syncing it
+        does not turn on route lights that are off. The shed set is refreshed
+        next, since no router reconcile does that for an area without routes.
+        A visual scene has no router, and its shed set comes from the scene.
+        The tick then sends.
         """
-        if self._closed or self._alert_active or not self._state.is_circadian or self._state.dimmed:
+        if self._closed or self._alert_active or self._state.dimmed:
             return
-        self._start_circadian()
-        if self._kelvin_router is not None:
-            self._kelvin_router.adopt_current_state()
-        await self.recompute_and_apply_circadian_dr()
+        if self._state.is_circadian:
+            self._start_circadian()
+            if self._kelvin_router is not None:
+                self._kelvin_router.adopt_current_state()
+            await self.recompute_and_apply_circadian_dr()
+        elif self._circadian_scene_light_ids():
+            self._start_circadian()
+        else:
+            return
         # An alert's steps and restore overwrote the lights since the
         # adjuster last commanded them, so no echo is pending.
         self._circadian_commanded_at.clear()
@@ -1967,7 +2101,7 @@ class AreaLightingController:
 
     @callback
     def _on_circadian_light_event(self, event: Event[EventStateChangedData]) -> None:
-        """A grouped light that comes on gets the current values at once."""
+        """A light the adjuster drives that comes on gets the current values at once."""
         new_state = event.data["new_state"]
         old_state = event.data["old_state"]
         if new_state is None or new_state.state != STATE_ON:
@@ -1976,8 +2110,10 @@ class AreaLightingController:
             return
         if self._closed or self._alert_active or self._recently_commanded(new_state.entity_id):
             return
-        light = next(light for light in self.area.all_lights if light.id == new_state.entity_id)
-        self._send_circadian_now([light], CIRCADIAN_INITIAL_TRANSITION_SECONDS)
+        lights = [
+            light for light in self._circadian_driven_lights() if light.id == new_state.entity_id
+        ]
+        self._send_circadian_now(lights, CIRCADIAN_INITIAL_TRANSITION_SECONDS)
 
     @callback
     def _on_circadian_sleep_event(self, event: Event[EventStateChangedData]) -> None:
@@ -1992,7 +2128,7 @@ class AreaLightingController:
             return
         lights = [
             light
-            for light in self.area.all_lights
+            for light in self._circadian_driven_lights()
             if (group := self.area.circadian_group_for_light(light)) is not None
             and group.sleep_entity == event.data["entity_id"]
         ]
@@ -2006,7 +2142,7 @@ class AreaLightingController:
         if not self.circadian_running or self._closed or self._alert_active:
             return
         self._send_circadian_now(
-            list(self.area.all_lights), self._global_config.circadian.transition
+            self._circadian_driven_lights(), self._global_config.circadian.transition
         )
 
     def _send_circadian_now(self, lights: list[LightConfig], transition: float) -> None:
@@ -2036,13 +2172,16 @@ class AreaLightingController:
         self._circadian_tick_generation = generation
         done = self._circadian_tick_done = self.hass.loop.create_future()
         try:
-            await self._sync_kelvin_router()
-            if not self.circadian_running or self._alert_active:
-                # The area left circadian, or an alert took it, while the
-                # router was reconciling.
-                return
+            if self._state.is_circadian:
+                await self._sync_kelvin_router()
+                if not self.circadian_running or self._alert_active:
+                    # The area left circadian, or an alert took it, while the
+                    # router was reconciling.
+                    return
             lights = [
-                light for light in self.area.all_lights if not self._recently_commanded(light.id)
+                light
+                for light in self._circadian_driven_lights()
+                if not self._recently_commanded(light.id)
             ]
             # Wait for every send before releasing the guard, so one failure
             # cannot let the next tick overlap the sends still in flight.
@@ -2096,9 +2235,9 @@ class AreaLightingController:
 
         False for a light without a group or type, a bulb shed for demand
         response, a cluster while demand response is active (its turn_on
-        would relight shed members through the aggregate), and a route light
-        outside the router's active route (an outgoing bulb still reports on
-        mid-crossfade).
+        would relight shed members through the aggregate), and in circadian a
+        route light outside the router's active route (an outgoing bulb still
+        reports on mid-crossfade). Routes run only in circadian.
         """
         if not light.circadian_group or not light.circadian_type:
             return False
@@ -2107,7 +2246,7 @@ class AreaLightingController:
         if light.is_cluster and self._demand_response_active():
             return False
         routes = self.area.circadian_kelvin_routes
-        if routes is None:
+        if routes is None or not self._state.is_circadian:
             return True
         ids = self._expand_cluster_ids([light.id])
         if not ids & self._expand_cluster_ids(routes.all_route_lights):
@@ -2454,7 +2593,7 @@ class AreaLightingController:
         # have a leader with a concrete on-scene we also define, mirror
         # the leader instead of running our own cycle logic. A remote's
         # own on sequence takes precedence over the leader.
-        if not on_sequence and (self._state.is_off or self._state.is_ambient_like):
+        if not on_sequence and (self._state.is_off or self.is_ambient_like):
             hint = self._resolve_leader_on_slug()
             if hint is not None:
                 _LOGGER.debug(
@@ -2523,14 +2662,16 @@ class AreaLightingController:
         )
         if source in MANUAL_SOURCES:
             self._manual_takeover()
+        holiday = self._get_holiday_mode()
         action = determine_off_action(
             current_scene=self._state.scene_slug,
             source=self._state.source.value,
             ambient_zone_enabled=self._is_ambient_zone_enabled(),
             area_ambience_enabled=self._ambience_enabled,
-            holiday_mode=self._get_holiday_mode(),
+            holiday_mode=holiday,
             ambient_scene_mode=self._get_ambient_scene_mode(),
             has_ambient_scene=self.area.has_ambient_scene,
+            holiday_ambient_slug=self.area.holiday_ambient_slug(holiday),
         )
         _LOGGER.debug(
             "Area %s: off_decision action=%s target_scene=%s",
@@ -2540,7 +2681,7 @@ class AreaLightingController:
         )
         ambient_fallback = (
             action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
-        ) or action.action == ActionType.ACTIVATE_HOLIDAY_SCENE
+        ) or action.action == ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE
         effective_source = ActivationSource.AMBIENCE if ambient_fallback else source
         await self._resolve_and_activate(
             action,
@@ -2564,14 +2705,16 @@ class AreaLightingController:
             self._manual_takeover()
         self._stop_circadian()
 
+        holiday = self._get_holiday_mode()
         action = determine_off_fade_action(
             current_scene=self._state.scene_slug,
             source=self._state.source.value,
             ambient_zone_enabled=self._is_ambient_zone_enabled(),
             area_ambience_enabled=self._ambience_enabled,
-            holiday_mode=self._get_holiday_mode(),
+            holiday_mode=holiday,
             ambient_scene_mode=self._get_ambient_scene_mode(),
             has_ambient_scene=self.area.has_ambient_scene,
+            holiday_ambient_slug=self.area.holiday_ambient_slug(holiday),
         )
         _LOGGER.debug(
             "Area %s: off_fade_decision action=%s target_scene=%s",
@@ -2581,7 +2724,7 @@ class AreaLightingController:
         )
         ambient_fallback = (
             action.action == ActionType.ACTIVATE_SCENE and action.scene_slug == "ambient"
-        ) or action.action == ActionType.ACTIVATE_HOLIDAY_SCENE
+        ) or action.action == ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE
         effective_source = ActivationSource.AMBIENCE if ambient_fallback else source
         await self._resolve_and_activate(
             action,
@@ -2756,7 +2899,7 @@ class AreaLightingController:
             await self._bring_dark_area_to_min(step)
             return
 
-        if self._state.is_circadian:
+        if self.circadian_running:
             self._stop_circadian()
 
         # Mark dimmed BEFORE stepping. The step's own state echoes can be
@@ -2791,12 +2934,13 @@ class AreaLightingController:
             await self.lighting_on()
         # Suspend circadian AFTER restoring scene context, mirroring what
         # _adjust_brightness does before stepping. It cannot be done earlier:
-        # the restore above re-arms the kelvin router whenever the remembered
-        # scene is itself circadian, and without this the area would end up
-        # dimmed with circadian live. The router's next reconcile would then
-        # drive route lights with no user action behind it, and circadian
-        # would re-push brightness over the dim just asked for.
-        if self._state.is_circadian:
+        # the restore above starts the adjuster whenever the remembered scene
+        # is circadian or has circadian lights, and in circadian re-arms the
+        # kelvin router. Without this the area would end up dimmed with
+        # circadian live. The router's next reconcile would then drive route
+        # lights with no user action behind it, and circadian would re-push
+        # brightness over the dim just asked for.
+        if self.circadian_running:
             self._stop_circadian()
         # Read the slug AFTER restoring: lighting_on picks the scene itself.
         # An empty set means the restored scene lights nothing here (an `off`
@@ -2861,6 +3005,9 @@ class AreaLightingController:
                 if animation is not None
                 else None
             )
+            self._stamp_circadian_targets()
+            if self._circadian_scene_light_ids():
+                self._start_circadian()
         self._notify_state_change()
         await self._sync_kelvin_router()
 
@@ -3035,7 +3182,8 @@ class AreaLightingController:
 
     def _run_post_settle_selfcheck(self) -> None:
         """Fire the scheduled check: re-assert any on-target bulb that
-        diverged from its scene target during the fade."""
+        diverged from its scene target during the fade. A circadian target is
+        skipped: the curve has moved on from its activation payload."""
         self._heal_selfcheck_handle = None
         if self._closed or self._state.is_off or self._state.is_manual:
             return
@@ -3047,7 +3195,7 @@ class AreaLightingController:
             )
             return
         for entity_id, target in list(self._active_scene_targets.items()):
-            if target.get("state") != "on":
+            if target.get("state") != "on" or target.get("circadian"):
                 continue
             commanded_at = target.get("commanded_at")
             if (
@@ -3074,10 +3222,11 @@ class AreaLightingController:
 
         Re-checks the suppressions here rather than trusting the caller: heals
         are dispatched as tasks, so an alert or a dim can begin between the
-        decision to heal and this coroutine actually running.
+        decision to heal and this coroutine actually running. A circadian
+        target is never re-asserted, since its payload would fight the curve.
         """
         target = self._active_scene_targets.get(entity_id)
-        if target is None or target.get("state") != "on":
+        if target is None or target.get("state") != "on" or target.get("circadian"):
             return
 
         if (suppressed := self._heal_suppressed()) is not None:
@@ -3339,7 +3488,7 @@ class AreaLightingController:
         it's not already running — scene-to-scene transitions don't
         reset the countdown. Called after every scene transition.
         """
-        if self._state.is_off or self._state.is_ambient_like:
+        if self._state.is_off or self.is_ambient_like:
             self._occupancy_timer.cancel()
             return
         if not self.area.occupancy_light_sensor_ids:
@@ -3386,7 +3535,7 @@ class AreaLightingController:
             self.area.id,
             self._state.scene_slug,
         )
-        if self._state.is_off or self._state.is_ambient_like:
+        if self._state.is_off or self.is_ambient_like:
             return
         # Restart timer with full duration (sensor cleared, countdown resets)
         self._start_occupancy_timer()
@@ -3433,7 +3582,7 @@ class AreaLightingController:
         holiday = self._get_holiday_mode()
         ambient_mode = self._get_ambient_scene_mode()
         if ambient_mode == "holiday" and holiday != HOLIDAY_MODE_NONE:
-            await self._activate_holiday_scene(ActivationSource.AMBIENCE)
+            await self._activate_holiday_ambient_scene(ActivationSource.AMBIENCE)
         elif self.area.has_ambient_scene:
             await self._activate_scene("ambient", ActivationSource.AMBIENCE)
 
@@ -3458,25 +3607,22 @@ class AreaLightingController:
             self._state.source.value,
         )
         mode = self._area_holiday(mode)
+        in_holiday = (
+            self._state.scene_slug in HOLIDAY_SCENES
+            or self._state.scene_slug in HOLIDAY_AMBIENT_SCENES
+        ) and self._state.source == ActivationSource.HOLIDAY
         if mode != HOLIDAY_MODE_NONE:
-            # Activate the new holiday scene if:
+            # Activate the holiday's ambient scene if:
             # - lights are off, OR
             # - we're already in a (different) holiday scene that was
             #   itself activated by the holiday handler (so we're tracking
             #   the active holiday rather than reverting a manual choice)
-            if self._state.is_off or (
-                self._state.scene_slug in HOLIDAY_SCENES
-                and self._state.scene_slug != mode
-                and self._state.source == ActivationSource.HOLIDAY
-            ):
-                await self._activate_scene(mode, ActivationSource.HOLIDAY)
-        else:
+            target = self.area.holiday_ambient_slug(mode)
+            if self._state.is_off or (in_holiday and self._state.scene_slug != target):
+                await self._activate_scene(target, ActivationSource.HOLIDAY)
+        elif in_holiday:
             # Holiday disabled - turn off only if it was holiday-activated
-            if (
-                self._state.scene_slug in HOLIDAY_SCENES
-                and self._state.source == ActivationSource.HOLIDAY
-            ):
-                await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.HOLIDAY)
+            await self._activate_scene(SCENE_OFF_INTERNAL, ActivationSource.HOLIDAY)
 
     async def handle_leader_change(
         self,
@@ -3512,14 +3658,16 @@ class AreaLightingController:
 
         if self._state.is_off:
             return
-        if self._state.is_ambient_like:
+        if self.is_ambient_like:
             return
         if self._state.is_manual:
             return
 
         if reason is LeaderReason.SCENE_ACTIVATED:
             if new_slug is None or new_slug not in self.area.scene_slugs:
-                _LOGGER.warning(
+                # Holiday scenes are defined area by area, so a missing one is expected
+                _LOGGER.log(
+                    logging.DEBUG if new_slug in HOLIDAY_SCENES else logging.WARNING,
                     "Area %s: leader %s activated scene %s but follower has "
                     "no such scene; skipping",
                     self.area.id,
@@ -3582,7 +3730,7 @@ class AreaLightingController:
 
     async def _on_occupancy_timer(self) -> None:
         _LOGGER.debug("Area %s: occupancy timer expired", self.area.id)
-        if self._state.is_off or self._state.is_ambient_like:
+        if self._state.is_off or self.is_ambient_like:
             return
         toggles = self.hass.data.get(DOMAIN, {}).get("global")
         if toggles is not None and not toggles.occupancy_timeout_enabled:

@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .const import AMBIENCE_SCENES
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -57,10 +59,6 @@ class LeaderReason(Enum):
     OFF = "off"  # Leader turned off
     AMBIENT = "ambient"  # Leader entered ambient/holiday scene
     MANUAL = "manual"  # Leader entered manual mode
-
-
-# Scene slugs that count as "ambient-style" (will be cleaned up when ambience disabled)
-AMBIENT_LIKE_SCENES = frozenset({"ambient", "christmas", "halloween"})
 
 
 @dataclass
@@ -103,14 +101,9 @@ class AreaState:
         return self.state == LightingState.SCENE
 
     @property
-    def is_ambient_like(self) -> bool:
-        """Whether the current scene is ambient/holiday."""
-        return self.scene_slug in AMBIENT_LIKE_SCENES
-
-    @property
     def was_ambient_activated(self) -> bool:
-        """True if currently in an ambient-like scene because of ambience mode."""
-        return self.is_ambient_like and self.source == ActivationSource.AMBIENCE
+        """True if ambience lit the current ambient or holiday scene."""
+        return self.scene_slug in AMBIENCE_SCENES and self.source == ActivationSource.AMBIENCE
 
     @property
     def was_motion_triggered(self) -> bool:

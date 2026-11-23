@@ -228,7 +228,8 @@ config that still sets `source` fails validation.
 
 - Routing is active **only while the area's scene is `circadian`.** Any
   other scene applies its `entities:` block exactly as today and
-  bypasses the router. Re-entering circadian re-evaluates from the
+  bypasses the router. A route light cannot be a
+  [`circadian: true`](#circadian-lights-in-a-scene) stanza. Re-entering circadian re-evaluates from the
   current color temperature.
 - The router checks the circadian color temperature at each `interval`
   update of the [circadian](#circadian) block. The first banded route
@@ -303,13 +304,71 @@ scenes:
 | `icon`          | MDI icon                  | no       | —       | Validated by `cv.icon`. |
 | `group_exclude` | list of entity_id         | no       | `[]`    | Lights that should **not** be affected when this scene activates. |
 | `cycle`         | list of scene slugs       | no       | —       | Defines a favorite-button cycle sequence. Parsed but not yet wired to the on-button cycler (tracked in `TODO.md`). |
-| `entities`      | free-form dict            | no       | —       | Per-light target state (`brightness`, `rgb_color`, `color_temp_kelvin`, …). Same shape HA uses for its own scene entities. |
+| `entities`      | free-form dict            | no       | —       | Per-light target state (`brightness`, `rgb_color`, `color_temp_kelvin`, …). Same shape HA uses for its own scene entities. A light's stanza may instead be `circadian: true`; see [circadian lights in a scene](#circadian-lights-in-a-scene). |
 | `animations`    | list of animation names   | no       | `[]`    | Names from the top-level `animations` map. Requires an `entities` map. Duplicate and unknown names fail validation. |
 
 An entity stanza may set `animate: false` only when its scene lists
 animations. This leaves that light at its static scene target. See
 [animation](#animation) for which lights animate and how colors replace
 their targets.
+
+#### Circadian lights in a scene
+
+A stanza of `circadian: true` keeps that light on the
+[circadian curve](#circadian) while the scene is active. The light gets
+exactly what the `circadian` scene would send it, from its own
+`circadian_group` and `circadian_type`, the group's bounds and sleep
+options, and `number.area_lighting_circadian_min_brightness_reduction`.
+The scene's other lights keep their static targets. For example, a
+Christmas scene for cooking keeps the overheads on the curve and the
+cabinet lights red and green:
+
+```yaml
+scenes:
+  - id: christmas
+    name: Christmas
+    entities:
+      light.kitchen_overhead_down: {circadian: true}
+      light.kitchen_overhead_up: {circadian: true}
+      light.kitchen_cabinet_fridge_up: {state: "on", brightness: 255, hs_color: [0, 100]}
+      light.kitchen_cabinet_sink_up: {state: "on", brightness: 255, hs_color: [128, 100]}
+```
+
+Validation rejects:
+
+- `circadian: false`. It is the default, so delete the key.
+- `circadian: true` together with `state: "off"`, `brightness`, `effect`,
+  `color_temp`, `color_temp_kelvin`, any color key, or `animate`. The schema
+  fills in `state: "on"` itself.
+- A light not declared in the area's `lights`, a `light_clusters` id, a light
+  without `circadian_group` and `circadian_type`, and a light listed in
+  `circadian_kelvin_routes`, directly or through a cluster.
+- A light whose cluster has its own stanza in the same scene.
+
+Errors name the area, the scene and the entity. A reload that fails these
+checks raises and keeps the running configuration.
+
+At runtime:
+
+- The lights follow each periodic update while the area is in the scene.
+  The updates stop when the area leaves the scene or goes `manual`, and
+  when raise or lower dims it. `on` restores the scene and starts them
+  again. Startup, reload and the end of an alert resume them.
+- As in the `circadian` scene, a change to one of these lights does not
+  latch `manual`, and self-heal does not reassert them. A change to a
+  static light in the same scene still latches `manual`, and so does
+  relighting a circadian light shed for demand response.
+- They never animate, and they count toward demand-response shedding in
+  declaration order like any scene light. A shed one stays off.
+- `snapshot_scene` refuses a scene with circadian lights, because a snapshot
+  would freeze one update's values. A snapshot stored earlier still gets the
+  configured circadian stanzas laid over it. A stored cluster target that
+  covers a circadian light passes to the cluster's other members instead.
+- Kelvin routes do not apply inside such a scene.
+
+`sensor.area_lighting_diagnostics` lists the lights currently on the curve
+in `per_area.<area>.circadian_lights`, sorted. It is empty in the
+`circadian` scene itself, which drives every grouped light.
 
 #### Reserved scene slugs
 
@@ -322,10 +381,95 @@ A handful of scene slugs have special semantics in the integration. Every enable
 | `night`                | Only if using night mode. | Selected automatically when night mode is active; targeted by lights with the `night` role. |
 | `ambient`              | Only if using ambient zones. | Activated by `ambient_lighting_zone` gating. |
 | `daylight` + `evening` | Only as an alternative to `circadian`. Must declare **both together**. | The scene-machine uses them as a sun-position-driven fallback when `circadian` is not declared (`scene_machine.py:71-72`). |
-| `christmas`, `halloween` | Only if using holiday mode. | Selected when `input_select.holiday_mode` is set to the matching value. An area without the matching scene treats that holiday as `none`. |
+| `christmas`, `halloween` | Only if using holiday mode. | Selected when `input_select.holiday_mode` is set to the matching value. An area without the matching scene treats that holiday as `none`. See [holiday scenes](#holiday-scenes). |
+| `christmas_ambient`, `halloween_ambient` | Optional. Requires the matching `christmas` or `halloween` scene. | Takes the holiday's ambient role, so `christmas` lights only for people. See [holiday scenes](#holiday-scenes). |
 | `off_internal`, `manual` | **Do not declare.** | Internal state slugs the controller uses to track non-user-activated states. Declaring them is ignored at best, confusing at worst. |
 
-The default-scene resolver cascade (from `scene_machine.py`) is: `night` (if night mode) → `circadian` → `daylight`+`evening` (sun-position) → first generic scene alphabetically → no-op. So an area without any of these still loads, it just doesn't have an obvious "home" scene.
+The default-scene resolver cascade (from `scene_machine.py`) is: `night` (if night mode) → `circadian` → `daylight`+`evening` (sun-position) → first generic scene alphabetically → no-op. So an area without any of these still loads, it just doesn't have an obvious "home" scene. The alphabetical fallback never picks `ambient` or a holiday scene.
+
+#### Holiday scenes
+
+A holiday scene has two jobs. It is the ambience an area shows while ambient
+lighting is on, and it is what someone gets who walks in or presses a remote.
+Red and green bulbs suit the first and are too dark for cooking. An area can
+split the jobs by defining `<holiday>_ambient`, such as `christmas_ambient`,
+next to `<holiday>`. The ambient scene then takes the ambience, and
+`christmas` is for people, often with some lights on the
+[circadian curve](#circadian-lights-in-a-scene):
+
+```yaml
+scenes:
+  - id: christmas_ambient     # the decorative scene
+    name: Christmas Ambient
+    entities:
+      light.kitchen_overhead_down: {state: "on", brightness: 255, hs_color: [128, 100]}
+      light.kitchen_cabinet_fridge_up: {state: "on", brightness: 255, hs_color: [0, 100]}
+  - id: christmas             # what people get
+    name: Christmas
+    entities:
+      light.kitchen_overhead_down: {circadian: true}
+      light.kitchen_cabinet_fridge_up: {state: "on", brightness: 255, hs_color: [0, 100]}
+```
+
+An area without `<holiday>_ambient` uses `<holiday>` for both jobs, as before.
+Areas can adopt the split one at a time.
+
+| What happens while Christmas is active | Split area | Unsplit area |
+| --- | --- | --- |
+| Motion from off; `on` from off, `manual` or an ambient scene; favorite | `christmas` | `christmas` |
+| `on` from `christmas` | `circadian` | `circadian` |
+| Ambience turns on with `input_select.ambient_scene` at `holiday` | `christmas_ambient` | `christmas` |
+| Off or a timer's fade with ambience on and `ambient_scene` at `holiday` | `christmas_ambient` | `christmas`, or `ambient` from `christmas` |
+| `input_select.holiday_mode` changes while the area is off | `christmas_ambient` | `christmas` |
+
+In a split area `christmas` behaves like any other lit scene, and
+`christmas_ambient` behaves like `ambient`:
+
+- Motion in `christmas_ambient` steps up to `christmas` when
+  `switch.<area>_motion_override_ambient` is on. Motion in `christmas` only
+  resets the motion timer, and only when motion lit the scene.
+- `christmas` arms the occupancy timer. `christmas_ambient` does not.
+- A leader's `christmas` reaches its followers as a scene. A follower without
+  that scene logs it at debug level. A leader's `christmas_ambient` reaches
+  them as ambience.
+
+Off follows these rules in order. Ambience is on when the area's ambience
+switch and its zone boolean are both on.
+
+1. A scene that ambience lit (`ambient`, `<holiday>` or `<holiday>_ambient`)
+   turns off.
+2. With ambience on:
+   1. In an unsplit area, a `christmas` that ambience did not light falls
+      back to `ambient`, or turns off without one, so off never relights the
+      scene it leaves.
+   2. A `christmas_ambient` that ambience did not light turns off, as such an
+      `ambient` does.
+   3. Any other scene, a split area's `christmas` included, goes to the
+      holiday's ambient scene when `ambient_scene` is `holiday` and a holiday
+      is active, and to `ambient` otherwise. Ambience then owns it, so it
+      turns off when ambience does.
+3. Otherwise the area turns off.
+
+A change to `input_select.holiday_mode` lights an off area's ambient scene
+for the new holiday. An area in a holiday scene that a holiday change lit
+moves to the new holiday's ambient scene, and turns off when the mode
+becomes `none`. A scene a person chose is left alone.
+
+Validation rejects `<holiday>_ambient` in an area without `<holiday>`. The
+scene gets the holiday's icon. A `christmas_ambient` that lists `animations`
+gets its own select, `select.area_lighting_christmas_ambient_animation`.
+
+Limits:
+
+- A follower mirrors a leader's `christmas_ambient` as its own `ambient`,
+  not as its own `christmas_ambient`.
+- A split area's `christmas` left on after `holiday_mode` moves to another
+  holiday or `none` falls back to `ambient` at off.
+- A holiday scene that ambience lit is not moved when `holiday_mode` changes,
+  and not turned off when it becomes `none`.
+- A reload that removes `circadian: true` from the active scene stops the
+  updates for that light. It keeps its last values until the scene is next
+  activated or self-heal applies the new target.
 
 ### `lutron_remotes`
 
@@ -377,7 +521,7 @@ buttons:
   "on": [study]   # holiday (when active) → study → circadian → sun position
 ```
 
-Each slug must be a scene the area defines, with no repeats. `off`, `circadian`, `daylight`, `evening`, `christmas` and `halloween` are rejected, because the cycle already places them. Night mode and a leader the area follows do not change where the sequence starts. Motion, dimmed restores and other remotes keep the default `on` behavior. The README's `on` section describes the full cycle.
+Each slug must be a scene the area defines, with no repeats. `off`, `circadian`, `daylight`, `evening`, `christmas` and `halloween` are rejected, because the cycle already places them. `christmas_ambient` and `halloween_ambient` are rejected too, because the `on` button never lights a holiday's ambient scene. Favorite cycles and `linked_motion` may name them. Night mode and a leader the area follows do not change where the sequence starts. Motion, dimmed restores and other remotes keep the default `on` behavior. The README's `on` section describes the full cycle.
 
 ### Motion lighting
 
@@ -560,7 +704,8 @@ The animated light at index `i` uses slot `(i + step) % slot_count`, where
 
 A light animates only when its scene stanza has `state: "on"` and one of
 `hs_color`, `rgb_color`, `rgbw_color`, `rgbww_color` or `xy_color`. Lights
-with `animate: false` and cluster entities are excluded. Color-temperature
+with `animate: false`, `circadian: true` lights and cluster entities are
+excluded. Color-temperature
 lights, dimmers and off lights keep their scene targets. For each animated
 light, the palette color replaces all scene color keys and `color_mode`.
 Other scene attributes, such as `effect`, stay in place.
@@ -599,7 +744,7 @@ tolerance of 10. Reports without xy use endpoint matching. Recovery from
 each light's current transition and grace period before reasserting it.
 
 `snapshot_scene` refuses scenes with animations, even when their select is
-`off`. A snapshot stored before animations were configured still receives
+`off`, and scenes with `circadian: true` lights. A snapshot stored before animations were configured still receives
 the overlay. Each area's diagnostic `animation` is the running animation's
 `name` and current `step`, or `null` while none is running.
 
@@ -767,7 +912,7 @@ area_lighting:
 ## Validation and error reporting
 
 - Schema errors surface at Home Assistant startup as `Invalid config for [area_lighting]` log entries with the specific field and rule that failed.
-- Post-parse semantic errors (unknown favorite slugs, leader/follower graph issues, circadian group and kelvin route rules) surface the same way, carrying the offending area id and the reason.
+- Post-parse semantic errors (unknown favorite slugs, leader/follower graph issues, circadian group and kelvin route rules, `circadian: true` stanzas) surface the same way, carrying the offending area id and the reason.
 - `area_lighting.reload` re-reads `configuration.yaml` and applies it to the running areas without a restart. The same validators run first. If any fails, the service call raises the error and nothing changes. See "Reload" in [`README.md`](README.md) for what a reload applies.
 
 ## What's *not* configured here

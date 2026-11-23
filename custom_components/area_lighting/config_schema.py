@@ -20,12 +20,14 @@ from .const import (
     DEFAULT_CIRCADIAN_MAX_COLORTEMP,
     DEFAULT_CIRCADIAN_MIN_COLORTEMP,
     DEFAULT_CIRCADIAN_TRANSITION_SECONDS,
+    HOLIDAY_AMBIENT_SCENES,
     HOLIDAY_SCENES,
     SCENE_CIRCADIAN,
     SCENE_DAYLIGHT,
     SCENE_EVENING,
     SCENE_LIGHT_ON_ATTRIBUTES,
     SCENE_OFF,
+    holiday_ambient_scene,
 )
 from .models import (
     AlertPattern,
@@ -132,6 +134,14 @@ LIGHT_SCHEMA = vol.Schema(
     }
 )
 
+
+def _fill_circadian_state(value: dict) -> dict:
+    # A stanza without a state reads as off to scene.turn_on.
+    if value.get("circadian"):
+        value.setdefault("state", "on")
+    return value
+
+
 # Per-entity target state inside a scene's `entities` block. Strict by design:
 # only the attributes Area Lighting actually applies are allowed, so an
 # unsupported key (e.g. `color_mode`, which is read-only on a light and was
@@ -139,17 +149,26 @@ LIGHT_SCHEMA = vol.Schema(
 # startup instead of failing silently at apply time. The allowed color/brightness
 # keys come from SCENE_LIGHT_ON_ATTRIBUTES so this allowlist and the apply paths
 # share one source of truth.
-SCENE_ENTITY_STATE_SCHEMA = vol.Schema(
-    {
-        vol.Optional("state"): vol.In(["on", "off"]),
-        **{
-            vol.Optional(attr): object for attr in SCENE_LIGHT_ON_ATTRIBUTES if attr != "color_temp"
-        },
-        # Mireds, converted to color_temp_kelvin when the scene is applied.
-        vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1)),
-        vol.Optional("animate"): cv.boolean,
-    }
+SCENE_ENTITY_STATE_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Optional("state"): vol.In(["on", "off"]),
+            **{
+                vol.Optional(attr): object
+                for attr in SCENE_LIGHT_ON_ATTRIBUTES
+                if attr != "color_temp"
+            },
+            # Mireds, converted to color_temp_kelvin when the scene is applied.
+            vol.Optional("color_temp"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional("animate"): cv.boolean,
+            vol.Optional("circadian"): vol.All(cv.boolean, vol.In([True])),
+        }
+    ),
+    _fill_circadian_state,
 )
+
+# Keys a circadian stanza cannot set: the curve decides the light's state.
+_CIRCADIAN_EXCLUSIVE_KEYS = frozenset({*SCENE_LIGHT_ON_ATTRIBUTES, "animate"})
 
 
 # Area and scene ids become part of entity ids (switch.<area>_night_mode,
@@ -250,7 +269,23 @@ ANIMATION_SCHEMA = vol.All(
 ANIMATIONS_SCHEMA = vol.Schema({_validate_animation_name: ANIMATION_SCHEMA})
 
 
-def _validate_scene_animation_options(value: dict, area_id: str | None = None) -> dict:
+def _validate_circadian_stanza(target: dict, context: str) -> None:
+    try:
+        circadian = cv.boolean(target["circadian"])
+    except vol.Invalid as err:
+        raise vol.Invalid(f"{context}: circadian: {err}") from err
+    if not circadian:
+        raise vol.Invalid(f"{context}: circadian: false is the default; delete the key")
+    if target.get("state") == "off":
+        raise vol.Invalid(f"{context}: circadian: true cannot be combined with state: off")
+    companions = sorted(_CIRCADIAN_EXCLUSIVE_KEYS.intersection(target))
+    if companions:
+        raise vol.Invalid(
+            f"{context}: circadian: true cannot be combined with {', '.join(companions)}"
+        )
+
+
+def _validate_scene_options(value: dict, area_id: str | None = None) -> dict:
     if not isinstance(value, dict):
         return value
     context = f"scene '{value.get('id', '?')}'"
@@ -273,7 +308,11 @@ def _validate_scene_animation_options(value: dict, area_id: str | None = None) -
     if not isinstance(entities, dict):
         return value
     for entity_id, target in entities.items():
-        if not isinstance(target, dict) or "animate" not in target:
+        if not isinstance(target, dict):
+            continue
+        if "circadian" in target:
+            _validate_circadian_stanza(target, f"{context}: entity '{entity_id}'")
+        if "animate" not in target:
             continue
         if not animations:
             raise vol.Invalid(f"{context}: entity '{entity_id}': animate requires animations")
@@ -285,7 +324,7 @@ def _validate_scene_animation_options(value: dict, area_id: str | None = None) -
 
 
 SCENE_SCHEMA = vol.All(
-    _validate_scene_animation_options,
+    _validate_scene_options,
     vol.Schema(
         {
             vol.Required("id"): vol.All(_validate_quoted_string, _validate_scene_id),
@@ -494,15 +533,31 @@ def _validate_area_id(value: str) -> str:
     return value
 
 
-def _validate_area_animation_options(value: dict) -> dict:
+def _validate_area_scene_options(value: dict) -> dict:
     if isinstance(value, dict) and isinstance(value.get("scenes", []), list):
         for scene in value.get("scenes", []):
-            _validate_scene_animation_options(scene, value.get("id", "?"))
+            _validate_scene_options(scene, value.get("id", "?"))
+    return value
+
+
+def _validate_holiday_ambient_scenes(value: dict) -> dict:
+    """Require each <holiday>_ambient scene's holiday scene in the same area.
+
+    Without it the area would read the holiday as none and never light either.
+    """
+    slugs = {scene["id"] for scene in value["scenes"]}
+    for holiday in sorted(HOLIDAY_SCENES):
+        ambient = holiday_ambient_scene(holiday)
+        if ambient in slugs and holiday not in slugs:
+            raise vol.Invalid(
+                f"area '{value['id']}': scene '{ambient}' requires a '{holiday}' scene "
+                f"in the same area"
+            )
     return value
 
 
 AREA_SCHEMA = vol.All(
-    _validate_area_animation_options,
+    _validate_area_scene_options,
     vol.Schema(
         {
             vol.Required("id"): vol.All(_validate_quoted_string, _validate_area_id),
@@ -545,6 +600,7 @@ AREA_SCHEMA = vol.All(
             vol.Optional("overview"): dict,
         }
     ),
+    _validate_holiday_ambient_scenes,
 )
 
 
@@ -648,6 +704,12 @@ def parse_config(raw: dict) -> AreaLightingConfig:
             on_raw = buttons.get("on", [])
             on_sequence: list[str] = [on_raw] if isinstance(on_raw, str) else list(on_raw)
             for slug in on_sequence:
+                if slug in HOLIDAY_AMBIENT_SCENES:
+                    raise vol.Invalid(
+                        f"remote '{r['name']}' in area '{area_id}': "
+                        f"buttons.on cannot list '{slug}'; the on button "
+                        f"never places a holiday's ambient scene"
+                    )
                 if slug in _ON_SEQUENCE_RESERVED:
                     raise vol.Invalid(
                         f"remote '{r['name']}' in area '{area_id}': "
@@ -934,3 +996,50 @@ def validate_circadian_groups(config: AreaLightingConfig) -> None:
                     f"area '{area.id}': light '{light.id}': circadian_group "
                     f"'{light.circadian_group}' is not declared in the area's circadian_groups"
                 )
+
+
+def validate_scene_circadian_lights(config: AreaLightingConfig) -> None:
+    """Require each circadian stanza to name a light the circadian scene drives.
+
+    Run after validate_circadian_groups, which checks the light's group and type.
+    """
+    for area in config.areas:
+        lights = {light.id: light for light in area.lights}
+        clusters = {light.id: light.members for light in area.light_clusters}
+        routed = {
+            member
+            for route in (
+                area.circadian_kelvin_routes.routes if area.circadian_kelvin_routes else []
+            )
+            for entity_id in route.lights
+            for member in (entity_id, *clusters.get(entity_id, ()))
+        }
+        for scene in area.scenes:
+            for entity_id, target in (scene.entities or {}).items():
+                if not target.get("circadian"):
+                    continue
+                context = f"area '{area.id}', scene '{scene.slug}': entity '{entity_id}'"
+                if entity_id in clusters:
+                    raise vol.Invalid(
+                        f"{context}: circadian: true cannot name a light in light_clusters"
+                    )
+                light = lights.get(entity_id)
+                if light is None:
+                    raise vol.Invalid(
+                        f"{context}: circadian: true names a light not declared in the area"
+                    )
+                if not light.circadian_group:
+                    raise vol.Invalid(
+                        f"{context}: circadian: true needs the light's circadian_group "
+                        f"and circadian_type"
+                    )
+                for cluster_id, members in clusters.items():
+                    if entity_id in members and cluster_id in (scene.entities or {}):
+                        raise vol.Invalid(
+                            f"{context}: circadian: true conflicts with the stanza for "
+                            f"its cluster '{cluster_id}' in the same scene"
+                        )
+                if entity_id in routed:
+                    raise vol.Invalid(
+                        f"{context}: circadian: true cannot name a light in circadian_kelvin_routes"
+                    )

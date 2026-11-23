@@ -28,6 +28,7 @@ from .config_schema import (
     validate_circadian_kelvin_routes,
     validate_leader_follower_graph,
     validate_scene_animations,
+    validate_scene_circadian_lights,
 )
 from .const import DOMAIN
 from .controller import AreaLightingController
@@ -112,6 +113,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         validate_circadian_groups(area_config)
     except vol.Invalid as err:
         _LOGGER.error("Area Lighting: invalid circadian_groups config: %s", err)
+        return False
+    try:
+        validate_scene_circadian_lights(area_config)
+    except vol.Invalid as err:
+        _LOGGER.error("Area Lighting: invalid scene circadian lights: %s", err)
         return False
 
     for area in area_config.areas:
@@ -285,6 +291,7 @@ async def _async_read_config(hass: HomeAssistant) -> AreaLightingConfig:
         validate_leader_follower_graph(config)
         validate_circadian_kelvin_routes(config)
         validate_circadian_groups(config)
+        validate_scene_circadian_lights(config)
         validate_scene_animations(config)
     except Exception as err:
         _LOGGER.error("area_lighting reload: invalid config: %s", err)

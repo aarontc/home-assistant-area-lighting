@@ -238,3 +238,33 @@ async def test_validator_flags_light_referenced_by_circadian_group_but_missing(
         "light.nonexistent_light  (light assigned to circadian group Test Area/Main (ct))" in m
         for m in error_messages
     )
+
+
+@pytest.mark.integration
+async def test_setup_rejects_a_circadian_stanza_on_a_light_without_a_group(
+    hass: HomeAssistant, helper_entities, caplog
+) -> None:
+    cfg = {
+        "area_lighting": {
+            "areas": [
+                {
+                    "id": "kitchen",
+                    "name": "Kitchen",
+                    "lights": [{"id": "light.kitchen_overhead"}],
+                    "scenes": [
+                        {
+                            "id": "christmas",
+                            "name": "Christmas",
+                            "entities": {"light.kitchen_overhead": {"circadian": True}},
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    caplog.set_level(logging.ERROR)
+    assert not await async_setup_component(hass, "area_lighting", cfg)
+    assert any(
+        "invalid scene circadian lights" in rec.message and "circadian_group" in rec.message
+        for rec in caplog.records
+    )

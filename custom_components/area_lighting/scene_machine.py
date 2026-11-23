@@ -9,12 +9,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from .const import (
+    AMBIENCE_SCENES,
+    HOLIDAY_AMBIENT_SCENES,
+    HOLIDAY_SCENES,
+    holiday_ambient_scene,
+)
+
 
 class ActionType(Enum):
     """What the controller should do after the scene machine decides."""
 
     ACTIVATE_SCENE = auto()
     ACTIVATE_HOLIDAY_SCENE = auto()
+    ACTIVATE_HOLIDAY_AMBIENT_SCENE = auto()
     SET_SUN_POSITION = auto()
     SET_SUN_POSITION_INVERTED = auto()
     NOOP = auto()
@@ -40,15 +48,16 @@ class SceneAction:
         return cls(action=ActionType.ACTIVATE_HOLIDAY_SCENE)
 
     @classmethod
+    def activate_holiday_ambient(cls) -> SceneAction:
+        return cls(action=ActionType.ACTIVATE_HOLIDAY_AMBIENT_SCENE)
+
+    @classmethod
     def sun_position(cls) -> SceneAction:
         return cls(action=ActionType.SET_SUN_POSITION)
 
     @classmethod
     def sun_position_inverted(cls) -> SceneAction:
         return cls(action=ActionType.SET_SUN_POSITION_INVERTED)
-
-
-HOLIDAY_SCENES = frozenset({"christmas", "halloween"})
 
 
 def _non_holiday_default(
@@ -70,8 +79,8 @@ def _non_night_default(scene_slugs: set[str]) -> SceneAction:
         return SceneAction.activate("circadian")
     if "daylight" in scene_slugs and "evening" in scene_slugs:
         return SceneAction.sun_position()
-    # Fall back to first generic scene (not off, not ambient)
-    generic = sorted(scene_slugs - {"off", "off_internal", "ambient"})
+    # Fall back to first generic scene (not off, ambient or a holiday)
+    generic = sorted(scene_slugs - {"off", "off_internal"} - AMBIENCE_SCENES)
     if generic:
         return SceneAction.activate(generic[0])
     return SceneAction.noop()
@@ -110,11 +119,13 @@ def determine_on_action(
         night_mode: Whether night mode is enabled for the area.
     """
     # 1. Motion-triggered + lights already on → no-op
-    #    Exception: motion_override_ambient when in ambient scene
+    #    Exception: motion_override_ambient when in ambient or a holiday's
+    #    ambient scene, which steps up to the holiday
+    in_ambient = current_scene == "ambient" or current_scene in HOLIDAY_AMBIENT_SCENES
     if (
         triggered_by_motion
         and current_scene != "off"
-        and (current_scene != "ambient" or not motion_override_ambient)
+        and (not in_ambient or not motion_override_ambient)
     ):
         return SceneAction.noop()
 
@@ -194,13 +205,16 @@ def determine_off_action(
     holiday_mode: str,
     ambient_scene_mode: str,
     has_ambient_scene: bool,
+    holiday_ambient_slug: str,
 ) -> SceneAction:
     """Determine what to do when 'off' is pressed.
 
-    Source-aware (D7): holiday/ambient scenes that are ambience-owned
-    go straight to off; user-owned holiday scenes with ambience active
-    fall back to literal ambient. An area with no ambient scene turns
-    off instead of falling back to it.
+    Source-aware (D7): ambient and holiday scenes that are ambience-owned
+    go straight to off. With ambience active, a user-owned unsplit
+    holiday scene falls back to literal ambient, a user-owned ambient
+    scene turns off, and any other scene goes to the holiday's ambient
+    scene or to ambient. An area with no ambient scene turns off instead
+    of falling back to it.
 
     Args:
         current_scene: The area's current scene slug.
@@ -212,25 +226,32 @@ def determine_off_action(
         holiday_mode: Current holiday mode.
         ambient_scene_mode: Value of input_select.ambient_scene.
         has_ambient_scene: Whether the area configures an ambient scene.
+        holiday_ambient_slug: The scene playing the current holiday's
+            ambient role in this area: ``<holiday>_ambient`` when the area
+            defines it, otherwise the holiday itself.
     """
     ambience_active = ambient_zone_enabled and area_ambience_enabled
-    in_holiday = current_scene in HOLIDAY_SCENES
-    in_ambient = current_scene == "ambient"
     ambient_fallback = "ambient" if has_ambient_scene else "off_internal"
 
     # Already in an ambience-owned ambient/holiday state → off for real
-    if (in_holiday or in_ambient) and source == "ambience":
+    if current_scene in AMBIENCE_SCENES and source == "ambience":
         return SceneAction.activate("off_internal")
 
     if ambience_active:
-        # In a user-owned holiday scene → fall back to literal ambient
-        if in_holiday:
+        # A user-owned holiday scene falls back to literal ambient, so off
+        # does not relight the scene it is leaving. The current holiday's
+        # scene in a split area goes on to its ambient scene below.
+        if (
+            current_scene in HOLIDAY_SCENES
+            and holiday_ambient_scene(current_scene) != holiday_ambient_slug
+        ):
             return SceneAction.activate(ambient_fallback)
-        # In a non-ambient-like scene → ambient or holiday-ambient
-        if not in_ambient:
-            if ambient_scene_mode == "holiday" and holiday_mode != "none":
-                return SceneAction.activate_holiday()
-            return SceneAction.activate(ambient_fallback)
+        # A user-owned ambient scene turns off
+        if current_scene == "ambient" or current_scene in HOLIDAY_AMBIENT_SCENES:
+            return SceneAction.activate("off_internal")
+        if ambient_scene_mode == "holiday" and holiday_mode != "none":
+            return SceneAction.activate_holiday_ambient()
+        return SceneAction.activate(ambient_fallback)
 
     return SceneAction.activate("off_internal")
 
@@ -243,6 +264,7 @@ def determine_off_fade_action(
     holiday_mode: str,
     ambient_scene_mode: str,
     has_ambient_scene: bool,
+    holiday_ambient_slug: str,
 ) -> SceneAction:
     """Determine what to do when fading off (motion/occupancy timer expired).
 
@@ -256,6 +278,7 @@ def determine_off_fade_action(
         holiday_mode,
         ambient_scene_mode,
         has_ambient_scene,
+        holiday_ambient_slug,
     )
 
 

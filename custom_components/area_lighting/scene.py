@@ -143,12 +143,20 @@ class AreaLightingScene(Scene):
         stored: dict[str, Any],
         transition: float | None,
     ) -> None:
-        """Apply stored snapshot data to lights."""
+        """Apply stored snapshot data to lights.
+
+        An animated scene, or one with circadian lights, takes its targets
+        from the controller. Without one, circadian lights are skipped, since
+        only the controller knows their values.
+        """
         controller = None
-        if self._scene_cfg.animations:
+        circadian_ids = self._scene_cfg.circadian_light_ids
+        if self._scene_cfg.animations or circadian_ids:
             controller = self.hass.data.get(DOMAIN, {}).get("controllers", {}).get(self._area.id)
             if controller is not None:
                 stored = controller._effective_scene_targets(self._scene_cfg.slug)
+        if controller is None and circadian_ids:
+            stored = {eid: st for eid, st in stored.items() if eid not in circadian_ids}
         if controller is None and self._demand_response_active():
             from .demand_response import apply_demand_response
 
@@ -263,7 +271,9 @@ def _scene_icon(slug: str) -> str:
     return {
         "ambient": "mdi:television-ambient-light",
         "christmas": "mdi:pine-tree",
+        "christmas_ambient": "mdi:pine-tree",
         "halloween": "mdi:ghost",
+        "halloween_ambient": "mdi:ghost",
         "daylight": "mdi:white-balance-sunny",
         "evening": "mdi:weather-sunset",
         "night": "mdi:weather-night",
