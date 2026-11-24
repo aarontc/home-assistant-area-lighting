@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, NamedTuple
 
 from homeassistant.components.light import DATA_COMPONENT as LIGHT_COMPONENT
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
@@ -240,6 +240,11 @@ class AreaLightingController:
         # entity (loop-cap window), and the pending post-settle self-check.
         self._heal_attempts: dict[str, list[float]] = {}
         self._heal_selfcheck_handle: asyncio.TimerHandle | None = None
+
+        # Pending re-drive after a light sync entity turns off. The area
+        # counts as synced until it runs, so the bridge's restore of the
+        # lights it streamed to is not read as a manual change.
+        self._light_sync_end_handle: asyncio.TimerHandle | None = None
 
         # Seed the manual-detection grace clock so the first 10s after
         # controller construction (including post-restart) are protected
@@ -566,6 +571,7 @@ class AreaLightingController:
             "motion_override_ambient": self._motion_override_ambient,
             "occupancy_timeout_enabled": self._occupancy_timeout_enabled,
             "alert_active": self._alert_active,
+            "light_sync_active": self.light_sync_active,
             "circadian_running": self.circadian_running,
             "circadian_lights": sorted(self._circadian_scene_light_ids()),
             "animation": self._animation_diagnostic(),
@@ -1659,6 +1665,14 @@ class AreaLightingController:
         # then instead.
         if not self._demand_response_active() and not self._alert_active:
             self._dr_shed_ids = frozenset()
+        await self._redrive()
+
+    async def _redrive(self) -> None:
+        """Re-apply the area's circadian or scene through its activation path.
+
+        Off, manual and dimmed areas and one an alert owns are left alone,
+        for the reasons reactivate_for_demand_response gives.
+        """
         if self._state.is_off or self._state.is_manual or self._state.dimmed or self._alert_active:
             return
         if self._state.is_circadian:
@@ -1671,11 +1685,21 @@ class AreaLightingController:
                 yield_if_superseded=True,
             )
 
-    def _light_gamut(self, entity_id: str) -> color_util.GamutType | None:
-        """Return the color gamut a Hue bridge reports for the bulb, if any."""
+    def _hue_resource(self, entity_id: str) -> Any:
+        """Return the Hue bridge's resource for the bulb, or None."""
         component = self.hass.data.get(LIGHT_COMPONENT)
         entity = component.get_entity(entity_id) if component is not None else None
-        color = getattr(getattr(entity, "resource", None), "color", None)
+        return getattr(entity, "resource", None)
+
+    def light_streaming(self, entity_id: str) -> bool:
+        """Whether the Hue bridge reports the bulb streaming to an entertainment
+        area. It updates with the bulb's own report, so it holds even before a
+        light_sync entity has turned on."""
+        return getattr(self._hue_resource(entity_id), "entertainment_active", False) is True
+
+    def _light_gamut(self, entity_id: str) -> color_util.GamutType | None:
+        """Return the color gamut a Hue bridge reports for the bulb, if any."""
+        color = getattr(self._hue_resource(entity_id), "color", None)
         if (gamut := getattr(color, "gamut", None)) is None:
             return None
         return color_util.GamutType(
@@ -3073,7 +3097,7 @@ class AreaLightingController:
 
     def _run_lights_off_recheck(self) -> None:
         self._lights_off_recheck_handle = None
-        if self._closed or self._alert_active or self._state.is_off:
+        if self._closed or self._alert_active or self._state.is_off or self.light_sync_active:
             return
         # An activation since then owns the area. Its own off reports
         # schedule a recheck if it needs one.
@@ -3181,6 +3205,72 @@ class AreaLightingController:
             delay, self._run_post_settle_selfcheck
         )
 
+    @property
+    def light_sync_active(self) -> bool:
+        """Whether a light sync entity owns the area's lights.
+
+        True while one is on, and after the last turns off until the scene
+        has been re-applied (handle_light_sync_ended).
+        """
+        return self._light_sync_end_handle is not None or self._any_on(
+            self.area.light_sync_entity_ids
+        )
+
+    @callback
+    def handle_light_sync_ended(self) -> None:
+        """Re-apply the area's scene once a light sync has stopped.
+
+        The Hue bridge puts back the state the lights had before the stream
+        started. That is not the scene if someone picked another one
+        mid-stream, so the scene is re-applied after
+        MANUAL_DETECTION_GRACE_SECONDS, which also covers the restore's own
+        reports arriving after the entity turned off.
+        """
+        if self._closed or self._any_on(self.area.light_sync_entity_ids):
+            return
+        self._hold_light_sync()
+
+    def _hold_light_sync(self) -> None:
+        if self._light_sync_end_handle is not None:
+            self._light_sync_end_handle.cancel()
+        self._light_sync_end_handle = self.hass.loop.call_later(
+            MANUAL_DETECTION_GRACE_SECONDS, self._end_light_sync
+        )
+
+    def _end_light_sync(self) -> None:
+        self._light_sync_end_handle = None
+        # A sync that started again in the meantime ends with its own off.
+        if self._closed or self._any_on(self.area.light_sync_entity_ids):
+            return
+        # Hold through an alert, which restores the streamed state when it
+        # ends. Hold while bulbs still stream, which covers an entity that went
+        # unavailable mid-stream, unless an entity reads off: then a bulb's
+        # streaming flag is stale.
+        sensors_off = any(self._get_state(e) == STATE_OFF for e in self.area.light_sync_entity_ids)
+        if self._alert_active or (
+            not sensors_off and any(self.light_streaming(light.id) for light in self.area.lights)
+        ):
+            self._hold_light_sync()
+            return
+        # The all-off check stood down during the sync. A re-applied scene
+        # lights the area again, but a skipped one would be left claiming
+        # lights the restore turned off. Hold while lights an activation just
+        # turned on have yet to report.
+        skipped = self._state.is_manual or self._state.dimmed
+        if skipped and not self._state.is_off and self.all_lights_off():
+            if self.lights_settling_until() is not None:
+                self._hold_light_sync()
+                return
+            _LOGGER.info("Area %s: light sync ended with the lights off", self.area.id)
+            self.hass.async_create_task(self.handle_lights_all_off())
+            return
+        _LOGGER.info("Area %s: light sync ended, re-applying %s", self.area.id, self.current_scene)
+        # The restore may have lit another route than the router last sent,
+        # so it derives the route again, as after an alert.
+        if self._kelvin_router is not None:
+            self._kelvin_router.deactivate()
+        self.hass.async_create_task(self._redrive())
+
     def _heal_suppressed(self) -> str | None:
         """Why scene self-heal must stand down right now, or None.
 
@@ -3194,6 +3284,8 @@ class AreaLightingController:
         - A dimmed area sits below its scene targets by definition, so every
           bulb reads as diverged. Healing that is precisely the dim not
           sticking.
+        - A light sync, such as a Hue Sync Box, streams colours to the lights.
+          Healing fights the stream, and the scene is re-applied once it ends.
 
         Returned as a reason string so the caller can log which one applied.
         """
@@ -3203,6 +3295,8 @@ class AreaLightingController:
             return "alert active"
         if self._state.dimmed:
             return "area dimmed"
+        if self.light_sync_active:
+            return "light sync active"
         return None
 
     def _run_post_settle_selfcheck(self) -> None:
@@ -3254,7 +3348,10 @@ class AreaLightingController:
         if target is None or target.get("state") != "on" or target.get("circadian"):
             return
 
-        if (suppressed := self._heal_suppressed()) is not None:
+        suppressed = self._heal_suppressed()
+        if suppressed is None and self.light_streaming(entity_id):
+            suppressed = "light streaming"
+        if suppressed is not None:
             _LOGGER.debug(
                 "Area %s: scene-heal of %s skipped (%s)",
                 self.area.id,
@@ -3787,6 +3884,9 @@ class AreaLightingController:
         if self._heal_selfcheck_handle is not None:
             self._heal_selfcheck_handle.cancel()
             self._heal_selfcheck_handle = None
+        if self._light_sync_end_handle is not None:
+            self._light_sync_end_handle.cancel()
+            self._light_sync_end_handle = None
         if self._lights_off_recheck_handle is not None:
             self._lights_off_recheck_handle.cancel()
             self._lights_off_recheck_handle = None

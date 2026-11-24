@@ -314,6 +314,15 @@ async def async_setup_event_handlers(hass: HomeAssistant, config: AreaLightingCo
                     )
                 )
 
+        if area.light_sync_entity_ids:
+            unsubs.append(
+                async_track_state_change_event(
+                    hass,
+                    area.light_sync_entity_ids,
+                    _make_light_sync_handler(ctrl),
+                )
+            )
+
         # Motion sensors
         if area.has_motion_lighting and area.motion_light_motion_sensor_ids:
             unsubs.append(
@@ -446,7 +455,9 @@ def _make_lights_off_handler(hass: HomeAssistant, ctrl: AreaLightingController):
         new_state = event.data.get("new_state")
         if not new_state or new_state.state != STATE_OFF:
             return
-        if ctrl._alert_active:
+        # The Hue bridge restores a light sync's lights to their state from
+        # before the stream, which is not the scene picked since.
+        if ctrl._alert_active or ctrl.light_sync_active:
             return
         # Any light turning off → check if all lights are now off.
         if not ctrl.all_lights_off():
@@ -506,6 +517,10 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
 
         if ctrl.current_scene == "manual":
             _skip("already manual", entity_id)
+            return
+
+        if ctrl.light_sync_active or ctrl.light_streaming(entity_id):
+            _skip("light sync active", entity_id)
             return
 
         # While the area is dimmed, brightness divergence is expected
@@ -684,6 +699,20 @@ def _make_manual_detection_handler(hass: HomeAssistant, ctrl: AreaLightingContro
         hass.async_create_task(
             ctrl.handle_manual_light_change(force_when_dimmed=dimmed_off_target_override)
         )
+
+    return _handler
+
+
+def _make_light_sync_handler(ctrl: AreaLightingController):
+    """Tell the controller when a light sync entity stops being on."""
+
+    @callback
+    def _handler(event: Event) -> None:
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
+        was_on = old_state is not None and old_state.state == STATE_ON
+        if was_on and (new_state is None or new_state.state != STATE_ON):
+            ctrl.handle_light_sync_ended()
 
     return _handler
 

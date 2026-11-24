@@ -592,6 +592,9 @@ AREA_SCHEMA = vol.All(
             vol.Optional("motion_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
             vol.Optional("occupancy_light_sensor_ids"): vol.All(cv.ensure_list, [cv.entity_id]),
             vol.Optional("occupancy_light_timer_durations", default={}): TIMER_DURATION_SCHEMA,
+            vol.Optional("light_sync_entity_ids", default=[]): vol.All(
+                cv.ensure_list, [cv.entity_id]
+            ),
             vol.Optional("linked_motion", default=[]): vol.All(
                 cv.ensure_list, [LINKED_MOTION_ENTRY_SCHEMA]
             ),
@@ -801,6 +804,7 @@ def parse_config(raw: dict) -> AreaLightingConfig:
                 motion_light_timer_durations=area_raw.get("motion_light_timer_durations", {}),
                 occupancy_light_sensor_ids=area_raw.get("occupancy_light_sensor_ids"),
                 occupancy_light_timer_durations=area_raw.get("occupancy_light_timer_durations", {}),
+                light_sync_entity_ids=area_raw.get("light_sync_entity_ids", []),
                 linked_motion=linked_motion,
                 leader_area_id=area_raw.get("leader_area_id"),
                 follow_leader_deactivation=area_raw.get("follow_leader_deactivation", False),

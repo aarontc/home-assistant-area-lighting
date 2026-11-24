@@ -9,6 +9,13 @@ readable companion that highlights user-facing changes.
 
 ### Added
 
+- **Light sync.** An area's `light_sync_entity_ids` lists entities that are
+  on while something else drives its lights, such as the Hue entertainment
+  area a Sync Box streams to. While any is on, changes to the area's lights
+  never latch `manual` and self-heal stands down. Four seconds after the last
+  turns off, the area re-applies its scene, so a scene picked mid-stream
+  replaces the state the Hue bridge restores.
+
 - **Animated scenes.** A top-level `animations:` block defines palettes
   with a `period` and a `transition`, and a scene lists the animations it
   may run. Each step rotates the scene's colored lights one palette slot,

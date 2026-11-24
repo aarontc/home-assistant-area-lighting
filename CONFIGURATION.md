@@ -57,6 +57,7 @@ area_lighting:
       motion_light_timer_durations:      { off, night_off }
       occupancy_light_sensor_ids:        [entity_id, ...]
       occupancy_light_timer_durations:   { off, night_off }
+      light_sync_entity_ids:             [entity_id, ...]
       # inter-area:
       linked_motion: [...]
   alert_patterns:
@@ -584,6 +585,17 @@ in the area" timer. No conditions list — occupancy is simpler.
 
 The `switch.{area_id}_occupancy_timeout_enabled` entity created by the
 integration gates whether this timer starts at all.
+
+### `light_sync_entity_ids`
+
+| Key                     | Type              | Required | Default | Notes |
+|-------------------------|-------------------|----------|---------|-------|
+| `light_sync_entity_ids` | list of entity_id | no       | `[]`    | While any is `on`, outside changes to the area's lights never latch `manual`, heal or turn the area off. |
+
+Use it for a Hue entertainment area that a Sync Box streams to, such as
+`binary_sensor.media_room_tv_entertainment_configuration`. Four seconds after
+the last one stops being `on`, the area re-applies its scene. See "Light sync"
+in the README.
 
 ### `linked_motion`
 

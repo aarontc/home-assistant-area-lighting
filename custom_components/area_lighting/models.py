@@ -241,6 +241,10 @@ class AreaConfig:
     occupancy_light_sensor_ids: list[str] | None = None
     occupancy_light_timer_durations: dict[str, str] = field(default_factory=dict)
 
+    # While one of these is on, something else drives the lights, such as a
+    # Hue entertainment area streaming from a Sync Box.
+    light_sync_entity_ids: list[str] = field(default_factory=list)
+
     linked_motion: list[LinkedMotionConfig] = field(default_factory=list)
     circadian_kelvin_routes: CircadianKelvinRoutesConfig | None = None
 

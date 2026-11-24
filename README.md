@@ -661,6 +661,40 @@ Current code notes:
    [design spec](docs/superpowers/specs/2026-10-10-internalize-circadian-design.md#7-manual-change-detection-during-circadian)
    records what that would take.
 
+#### Light sync
+
+Status: `Implemented`
+
+A Hue Play HDMI Sync Box, or any app that streams to a Hue entertainment area,
+drives the lights itself. Its changes would latch the area `manual`. List the
+entities that are on while that happens in the area's `light_sync_entity_ids`.
+The Hue integration's entertainment area sensor is one:
+
+```yaml
+- id: media_room
+  light_sync_entity_ids:
+    - binary_sensor.media_room_tv_entertainment_configuration
+```
+
+While any of them is on, manual detection, scene self-healing and the
+all-lights-off check skip the area's lights. A Hue bulb that its bridge reports
+as streaming is skipped too, whatever the entities say. That covers a bulb
+whose report arrives before the entertainment area sensor turns on, and a
+sensor that goes `unavailable` mid-stream.
+
+When the last entity stops being `on`, the Hue bridge puts the lights back as
+they were before the stream. Four seconds later the area re-applies its scene
+or circadian, the way a demand response change does, and a kelvin route is
+worked out again from scratch. A scene picked during the stream therefore takes
+effect when the stream ends. The four seconds start again while an alert runs
+in the area, and while any of its Hue bulbs still reports streaming unless an
+entity reads `off`. An area that is off, `manual` or
+dimmed then is not re-applied, and a `manual` or dimmed one whose lights the
+restore left dark turns off.
+
+Animations and circadian updates keep sending during the stream. The stream
+overrides them, and the re-apply sets the lights right afterwards.
+
 #### Scene self-healing
 
 Status: `Implemented`
@@ -683,7 +717,7 @@ A one-shot post-settle self-check is scheduled at scene activation to catch
 a glitch that lands *during* a fade (which the event path ignores as still
 settling).
 
-Self-healing stands down entirely in two situations, because in both the
+Self-healing stands down entirely in three situations, because in all three the
 lights are meant to differ from the scene:
 
 - **While an alert pattern is running.** The alert owns the area's lights and
@@ -691,6 +725,7 @@ lights are meant to differ from the scene:
   scene that activated part-way through the pattern.
 - **While the area is `dimmed`.** A dimmed area sits below its scene targets by
   definition, so healing it would simply undo the dim.
+- **During a light sync** (see above), and for the four seconds after it ends.
 
 A stood-down heal does not count against the 3-heals-in-5-minutes budget
 below.
