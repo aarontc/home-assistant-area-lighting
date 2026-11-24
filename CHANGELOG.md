@@ -53,6 +53,13 @@ readable companion that highlights user-facing changes.
 
 ### Fixed
 
+- **Out-of-gamut colors no longer latch `manual`.** A Hue bulb asked for
+  hs `[120, 100]` green shows its gamut's green corner, xy (0.17, 0.70),
+  0.047 from the target and past the 0.025 tolerance. The bulb's next
+  report after the heal window latched the area `manual`. A reported color
+  now also matches the target clamped to the gamut the Hue bridge reports
+  for that bulb. A light with no reported gamut compares as before.
+
 - **Fades to or from white no longer latch `manual`.** Hue bulbs fade
   through white along curved color paths, up to 0.12 off the straight
   line the check expected. While an animated light fades to or from a

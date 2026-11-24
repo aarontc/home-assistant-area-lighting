@@ -138,6 +138,13 @@ def target_is_desaturated(target: dict) -> bool:
     return color_util.color_RGB_to_hs(*rgb)[1] < 90
 
 
+def clamp_to_gamut(point: tuple[float, float], gamut: color_util.GamutType) -> tuple[float, float]:
+    """Return the closest color the gamut can show."""
+    if color_util.check_point_in_lamps_reach(point, gamut):
+        return point
+    return color_util.get_closest_point_to_point(point, gamut)
+
+
 def point_segment_distance(
     point: tuple[float, float], start: tuple[float, float], end: tuple[float, float]
 ) -> float:
@@ -158,16 +165,8 @@ def point_on_animation_segment(
     if point_segment_distance(point, start, end) <= 0.03:
         return True
     for gamut in (HUE_GAMUT_A, HUE_GAMUT_B, HUE_GAMUT_C):
-        clamped_start = (
-            start
-            if color_util.check_point_in_lamps_reach(start, gamut)
-            else color_util.get_closest_point_to_point(start, gamut)
-        )
-        clamped_end = (
-            end
-            if color_util.check_point_in_lamps_reach(end, gamut)
-            else color_util.get_closest_point_to_point(end, gamut)
-        )
+        clamped_start = clamp_to_gamut(start, gamut)
+        clamped_end = clamp_to_gamut(end, gamut)
         if point_segment_distance(point, clamped_start, clamped_end) <= 0.03:
             return True
     return False

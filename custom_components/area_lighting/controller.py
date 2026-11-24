@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime
 from typing import Any, NamedTuple
 
+from homeassistant.components.light import DATA_COMPONENT as LIGHT_COMPONENT
 from homeassistant.const import STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -16,10 +18,17 @@ from homeassistant.helpers.event import (
     async_track_point_in_utc_time,
     async_track_state_change_event,
 )
+from homeassistant.util import color as color_util
 from homeassistant.util import dt as dt_util
 
 from . import circadian
-from .animation import COLOR_KEYS, animated_light_ids, build_step_targets, step_number
+from .animation import (
+    COLOR_KEYS,
+    animated_light_ids,
+    build_step_targets,
+    clamp_to_gamut,
+    step_number,
+)
 from .area_state import (
     ActivationSource,
     AreaState,
@@ -1662,6 +1671,17 @@ class AreaLightingController:
                 yield_if_superseded=True,
             )
 
+    def _light_gamut(self, entity_id: str) -> color_util.GamutType | None:
+        """Return the color gamut a Hue bridge reports for the bulb, if any."""
+        component = self.hass.data.get(LIGHT_COMPONENT)
+        entity = component.get_entity(entity_id) if component is not None else None
+        color = getattr(getattr(entity, "resource", None), "color", None)
+        if (gamut := getattr(color, "gamut", None)) is None:
+            return None
+        return color_util.GamutType(
+            *(color_util.XYPoint(p.x, p.y) for p in (gamut.red, gamut.green, gamut.blue))
+        )
+
     def state_matches_scene_target(
         self, entity_id: str, ha_state, target: dict | None = None
     ) -> bool:
@@ -1727,9 +1747,14 @@ class AreaLightingController:
                 effective_target_xy = color_hs_to_xy(float(target_hs[0]), float(target_hs[1]))
 
         if effective_target_xy is not None and actual_xy is not None:
-            dx = effective_target_xy[0] - float(actual_xy[0])
-            dy = effective_target_xy[1] - float(actual_xy[1])
-            if (dx * dx + dy * dy) ** 0.5 > 0.025:
+            # A target outside the bulb's gamut reads back as the gamut's
+            # nearest point: hs (120, 100) green lands 0.047 from gamut C's
+            # green corner, so compare against the bulb's own clamp too.
+            expected = [effective_target_xy]
+            if (gamut := self._light_gamut(entity_id)) is not None:
+                expected.append(clamp_to_gamut(effective_target_xy, gamut))
+            actual = (float(actual_xy[0]), float(actual_xy[1]))
+            if all(math.dist(actual, point) > 0.025 for point in expected):
                 return False
         elif target_hs is not None and actual_hs is not None:
             hue_diff = abs(float(target_hs[0]) - float(actual_hs[0]))

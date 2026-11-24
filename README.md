@@ -644,6 +644,10 @@ Manual changes include visible attribute changes such as:
 This detection should use a hysteresis threshold so tiny changes or immediate writebacks do not
 incorrectly force `manual`.
 
+A light in xy color mode matches its target within 0.025 in xy. When the Hue bridge reports the
+bulb's gamut, the target clamped to that gamut matches too, so hs `[120, 100]` green matches a
+gamut C bulb's green corner, (0.17, 0.70). Other lights compare against the target alone.
+
 Current code notes:
 
 1. External per-light changes can move the area into `manual`, which is implemented

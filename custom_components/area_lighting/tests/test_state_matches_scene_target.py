@@ -19,6 +19,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+from homeassistant.components.light import DATA_COMPONENT as LIGHT_COMPONENT
+
 from custom_components.area_lighting.controller import AreaLightingController
 from custom_components.area_lighting.models import AreaConfig, AreaLightingConfig, SceneConfig
 
@@ -112,6 +115,85 @@ def test_xy_target_matches_xy_actual_within_tolerance():
     )
 
     assert ctrl.state_matches_scene_target("light.bedroom_bedside", actual)
+
+
+GAMUT_B = ((0.675, 0.322), (0.409, 0.518), (0.167, 0.04))
+GAMUT_C = ((0.692, 0.308), (0.17, 0.7), (0.153, 0.048))
+
+
+def _with_hue_gamut(ctrl: AreaLightingController, entity_id: str, corners) -> None:
+    """Register a Hue v2 light entity whose resource reports a color gamut."""
+    red, green, blue = (SimpleNamespace(x=x, y=y) for x, y in corners)
+    entity = SimpleNamespace(
+        resource=SimpleNamespace(
+            color=SimpleNamespace(gamut=SimpleNamespace(red=red, green=green, blue=blue))
+        )
+    )
+    component = SimpleNamespace(get_entity={entity_id: entity}.get)
+    ctrl.hass.data[LIGHT_COMPONENT] = component
+
+
+def _green_target(ctrl: AreaLightingController, hue: float = 120) -> None:
+    ctrl._active_scene_targets = {
+        "light.bedroom_bedside": {"state": "on", "brightness": 255, "hs_color": [hue, 100]}
+    }
+
+
+def _xy_state(xy: tuple[float, float]) -> SimpleNamespace:
+    return _state("on", brightness=255, color_mode="xy", xy_color=xy, hs_color=(0.0, 100.0))
+
+
+@pytest.mark.parametrize("hue", [120, 128])
+def test_hs_target_matches_the_bulbs_clamped_green(hue):
+    """Green targets outside gamut C must match the bulb's clamped green corner.
+
+    hs=[120,100] converts to xy (0.1724, 0.7468) and hs=[128,100] to
+    (0.1716, 0.7320). A gamut C Hue bulb clamps both to its green corner
+    (0.17, 0.70), 0.047 and 0.032 away, past the 0.025 tolerance. The office
+    and upstairs bathroom latched `manual` on 2026-11-23 from exactly this
+    report.
+    """
+    ctrl = _make_controller()
+    _with_hue_gamut(ctrl, "light.bedroom_bedside", GAMUT_C)
+    _green_target(ctrl, hue)
+
+    assert ctrl.state_matches_scene_target("light.bedroom_bedside", _xy_state((0.17, 0.7)))
+
+
+def test_gamut_b_bulb_matches_its_own_green_corner():
+    ctrl = _make_controller()
+    _with_hue_gamut(ctrl, "light.bedroom_bedside", GAMUT_B)
+    _green_target(ctrl)
+
+    assert ctrl.state_matches_scene_target("light.bedroom_bedside", _xy_state((0.409, 0.518)))
+
+
+def test_gamut_c_bulb_rejects_another_gamuts_green_corner():
+    """A gamut C bulb set to hs [65, 100] sits by gamut B's green corner.
+
+    Only the bulb's own gamut counts, so that is a person's change.
+    """
+    ctrl = _make_controller()
+    _with_hue_gamut(ctrl, "light.bedroom_bedside", GAMUT_C)
+    _green_target(ctrl)
+
+    assert not ctrl.state_matches_scene_target("light.bedroom_bedside", _xy_state((0.4064, 0.5225)))
+
+
+def test_unknown_gamut_compares_against_the_target_alone():
+    ctrl = _make_controller()
+    _green_target(ctrl)
+
+    assert not ctrl.state_matches_scene_target("light.bedroom_bedside", _xy_state((0.17, 0.7)))
+
+
+def test_hs_green_target_rejects_a_different_in_gamut_color():
+    """Clamping must not accept a color the bulb could show and was not asked for."""
+    ctrl = _make_controller()
+    _with_hue_gamut(ctrl, "light.bedroom_bedside", GAMUT_C)
+    _green_target(ctrl)
+
+    assert not ctrl.state_matches_scene_target("light.bedroom_bedside", _xy_state((0.3, 0.5)))
 
 
 # ── hs-mode bulbs: existing tolerance behavior preserved ─────────────────
